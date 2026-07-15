@@ -4,10 +4,13 @@ A full send/receive email web app: add a domain, it auto-configures on Resend +
 Cloudflare DNS, inbound mail arrives via a Resend webhook into Supabase, and a
 three-panel web UI reads/sends it. **Resend-only** (no IMAP, no mailboxes).
 
-This was carved out of **Mission Control** on **2026-07-08** to live and iterate
-on its own. It still points at the **same Supabase project** (`YOUR_PROJECT_REF`)
-as MC, so mail already in `email_messages` shows up here immediately. The email
-module will be deleted from Mission Control once this app is standing on its own.
+**Live:** https://email-app-7rp.pages.dev  
+**Repo:** https://github.com/johnatfreecoffee/email
+
+This was carved out of **Mission Control** on **2026-07-08**. It still points at
+the **same Supabase project** (`YOUR_PROJECT_REF`) as MC, so mail already in
+`email_messages` shows up here immediately. The email module will be deleted from
+Mission Control once this app is proven and the Resend webhook is re-pointed.
 
 ## Read these first
 

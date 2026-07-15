@@ -3,7 +3,9 @@
 **Code:** `EM` (standalone email client forked from Mission Control / `MT`)
 **Path:** `/Users/johnromano/Documents/email`
 **Forked:** 2026-07-08 from `~/Projects/mission-control`
-**Status:** Booted locally; shared-secret auth wired; real inbox loading. Iterate next. Do not delete email from MC until this is proven.
+**Status:** Live on Cloudflare Pages. Do not delete email from MC until this is proven.
+**Live URL:** https://email-app-7rp.pages.dev
+**GitHub:** https://github.com/johnatfreecoffee/email
 
 ## Stack
 - Next.js 16 App Router, `output: "export"` → static `out/`
@@ -22,10 +24,12 @@
 - Client auto-seeds from `NEXT_PUBLIC_MC_API_SECRET`. No `/api/auth/*`.
 - Local API: `npm run build` + `npm run dev:api` (wrangler :8788) + `npm run dev` (Next proxies `/api/*`)
 
-## Deploy target (not created yet)
-- CF Pages project name: `email-app`
-- Workflow: `.github/workflows/deploy-cloudflare.yml`
-- Must re-point Resend webhook away from `mission-control-806.pages.dev`
+## Deploy
+- CF Pages project: **`email-app`** → https://email-app-7rp.pages.dev
+- Workflow: `.github/workflows/deploy-cloudflare.yml` (push to `main`)
+- Runtime secrets set on CF Pages (production + preview)
+- Build secrets set on GitHub Actions
+- Still shared with MC until cutover: Resend inbound webhook still points at `mission-control-806.pages.dev`
 
 ## Canonical docs
 1. `EMAIL-SYSTEM.md` — full system brain (source of truth)
