@@ -1,0 +1,1015 @@
+"use client";
+
+/**
+ * MessageTable — Apple Mail-style column view for the message list.
+ *
+ * Features:
+ *  - Row-based table with sortable/resizable columns: ●, From, Subject, Date
+ *  - Column widths persisted to localStorage ("mc.email.columnWidths")
+ *  - Sort state persisted ("mc.email.sort")
+ *  - Virtualized via @tanstack/react-virtual (handles 40k+ rows)
+ *  - Multi-select: Cmd/Ctrl+Click toggles, Shift+Click ranges, Shift+Up/Down extends
+ *  - Arrow keys / j / k to navigate; Enter opens; Delete/Backspace trashes
+ *  - Aria grid roles for accessibility
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  memo,
+} from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { Star, Paperclip, ChevronUp, ChevronDown, CheckSquare, Square, MinusSquare } from "lucide-react";
+import type { EmailMessage } from "./email-layout";
+
+// -------------------- Types --------------------
+
+type SortColumn = "unread" | "from" | "subject" | "date";
+type SortDirection = "asc" | "desc";
+
+interface SortState {
+  column: SortColumn;
+  direction: SortDirection;
+}
+
+interface ColumnWidths {
+  select: number;
+  unread: number;
+  from: number;
+  // subject is flex (takes remaining space)
+  date: number;
+}
+
+const DEFAULT_WIDTHS: ColumnWidths = {
+  select: 32,
+  unread: 28,
+  from: 200,
+  date: 96,
+};
+
+const SELECT_COL_WIDTH = 32;
+
+const DEFAULT_SORT: SortState = { column: "date", direction: "desc" };
+
+const COLUMN_WIDTHS_KEY = "mc.email.columnWidths";
+const SORT_KEY = "mc.email.sort";
+
+const ROW_HEIGHT = 32; // compact, Apple-Mail-ish
+
+// -------------------- Date formatting --------------------
+
+function formatDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "";
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.floor(
+    (todayStart.getTime() - msgStart.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  if (diffDays === 0) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays > 1 && diffDays < 7) {
+    return date.toLocaleDateString([], { weekday: "long" });
+  }
+  // Same year: "Apr 12"; different year: "3/15/24"
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  return date.toLocaleDateString([], {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  });
+}
+
+// -------------------- localStorage helpers --------------------
+
+function loadWidths(): ColumnWidths {
+  if (typeof window === "undefined") return DEFAULT_WIDTHS;
+  try {
+    const raw = localStorage.getItem(COLUMN_WIDTHS_KEY);
+    if (!raw) return DEFAULT_WIDTHS;
+    const parsed = JSON.parse(raw) as Partial<ColumnWidths>;
+    return {
+      select: SELECT_COL_WIDTH,
+      unread: clampNum(parsed.unread ?? DEFAULT_WIDTHS.unread, 20, 60),
+      from: clampNum(parsed.from ?? DEFAULT_WIDTHS.from, 80, 500),
+      date: clampNum(parsed.date ?? DEFAULT_WIDTHS.date, 60, 200),
+    };
+  } catch {
+    return DEFAULT_WIDTHS;
+  }
+}
+
+function saveWidths(w: ColumnWidths) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(COLUMN_WIDTHS_KEY, JSON.stringify(w));
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadSort(): SortState {
+  if (typeof window === "undefined") return DEFAULT_SORT;
+  try {
+    const raw = localStorage.getItem(SORT_KEY);
+    if (!raw) return DEFAULT_SORT;
+    const parsed = JSON.parse(raw) as Partial<SortState>;
+    const col: SortColumn = (
+      ["unread", "from", "subject", "date"] as const
+    ).includes(parsed.column as SortColumn)
+      ? (parsed.column as SortColumn)
+      : "date";
+    const dir: SortDirection = parsed.direction === "asc" ? "asc" : "desc";
+    return { column: col, direction: dir };
+  } catch {
+    return DEFAULT_SORT;
+  }
+}
+
+function saveSort(s: SortState) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(SORT_KEY, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+}
+
+function clampNum(n: number, min: number, max: number): number {
+  if (typeof n !== "number" || isNaN(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+// -------------------- Props --------------------
+
+export interface MessageTableProps {
+  messages: EmailMessage[];
+  selectedId: string | null;
+  focusedIndex: number;
+  onFocusedIndexChange?: (index: number) => void;
+  onSelectMessage: (msg: EmailMessage) => void;
+  onToggleStar: (id: string, starred: boolean) => void;
+  onToggleRead?: (id: string, isRead: boolean) => void;
+  onTrash?: (id: string) => void;
+  // Multi-select (checkbox-like semantics)
+  selectedIds: Set<string>;
+  onSelectionChange: (ids: Set<string>) => void;
+  // Bulk ops triggered via keyboard
+  onBulkTrash?: (ids: string[]) => void;
+  // Monotonically-incrementing signal from the parent to scroll the virtualized
+  // list back to top (e.g. on page-turn).
+  scrollResetSignal?: number;
+}
+
+// -------------------- Component --------------------
+
+export function MessageTable({
+  messages,
+  selectedId,
+  focusedIndex,
+  onFocusedIndexChange,
+  onSelectMessage,
+  onToggleStar,
+  onToggleRead,
+  onTrash,
+  selectedIds,
+  onSelectionChange,
+  onBulkTrash,
+  scrollResetSignal = 0,
+}: MessageTableProps) {
+  // --- Sort state ---
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const [sortLoaded, setSortLoaded] = useState(false);
+
+  useEffect(() => {
+    setSort(loadSort());
+    setSortLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (sortLoaded) saveSort(sort);
+  }, [sort, sortLoaded]);
+
+  // --- Column widths ---
+  const [widths, setWidths] = useState<ColumnWidths>(DEFAULT_WIDTHS);
+  useEffect(() => {
+    setWidths(loadWidths());
+  }, []);
+
+  const updateWidth = useCallback((key: keyof ColumnWidths, value: number) => {
+    setWidths((prev) => {
+      const next = { ...prev, [key]: value };
+      saveWidths(next);
+      return next;
+    });
+  }, []);
+
+  // --- Sort order — recomputed only when the SET of message IDs changes or
+  // sort settings change. Intentionally NOT recomputed on per-message field
+  // updates like is_read/is_starred — that would shuffle rows underneath
+  // the user while they're navigating (Apple Mail keeps rows in place when
+  // marking read).
+  const messageIdsKey = useMemo(
+    () => messages.map((m) => m.id).join(""),
+    [messages]
+  );
+
+  const sortedIds = useMemo(() => {
+    const arr = [...messages];
+    const dir = sort.direction === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (sort.column) {
+        case "unread": {
+          const au = a.is_read ? 1 : 0;
+          const bu = b.is_read ? 1 : 0;
+          cmp = au - bu;
+          break;
+        }
+        case "from": {
+          const an = (a.from_name || a.from_address || "").toLowerCase();
+          const bn = (b.from_name || b.from_address || "").toLowerCase();
+          cmp = an.localeCompare(bn);
+          break;
+        }
+        case "subject": {
+          const as = (a.subject || "").toLowerCase();
+          const bs = (b.subject || "").toLowerCase();
+          cmp = as.localeCompare(bs);
+          break;
+        }
+        case "date":
+        default: {
+          const ad = new Date(a.received_at).getTime() || 0;
+          const bd = new Date(b.received_at).getTime() || 0;
+          cmp = ad - bd;
+          break;
+        }
+      }
+      return cmp * dir;
+    });
+    return arr.map((m) => m.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messageIdsKey, sort]);
+
+  // Map the stable ID order back to fresh message objects on every render —
+  // so the rows reflect up-to-date is_read / is_starred state without
+  // changing position.
+  const sortedMessages = useMemo(() => {
+    const byId = new Map<string, EmailMessage>();
+    for (const m of messages) byId.set(m.id, m);
+    const out: EmailMessage[] = [];
+    for (const id of sortedIds) {
+      const m = byId.get(id);
+      if (m) out.push(m);
+    }
+    return out;
+  }, [sortedIds, messages]);
+
+  // --- Sort handler ---
+  const toggleSort = useCallback((col: SortColumn) => {
+    setSort((prev) => {
+      if (prev.column === col) {
+        return { column: col, direction: prev.direction === "asc" ? "desc" : "asc" };
+      }
+      // New column: default to desc for date, asc for text
+      return {
+        column: col,
+        direction: col === "date" || col === "unread" ? "desc" : "asc",
+      };
+    });
+  }, []);
+
+  // --- Scroll container for virtualization ---
+  const parentRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: sortedMessages.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 10,
+  });
+
+  // --- Ensure focused row is in view ---
+  useEffect(() => {
+    if (focusedIndex >= 0 && focusedIndex < sortedMessages.length) {
+      rowVirtualizer.scrollToIndex(focusedIndex, { align: "auto" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedIndex, sortedMessages.length]);
+
+  // --- Scroll to top on page change (scrollResetSignal increments) ---
+  useEffect(() => {
+    if (scrollResetSignal === 0) return; // skip initial mount
+    if (parentRef.current) {
+      parentRef.current.scrollTop = 0;
+    }
+    try {
+      rowVirtualizer.scrollToIndex(0, { align: "start" });
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollResetSignal]);
+
+  // --- Anchor for shift-range selection (last single-click row) ---
+  const anchorIndex = useRef<number>(-1);
+
+  const applyRangeSelection = useCallback(
+    (fromIdx: number, toIdx: number, keepExisting: boolean) => {
+      if (fromIdx < 0 || toIdx < 0) return;
+      const lo = Math.min(fromIdx, toIdx);
+      const hi = Math.max(fromIdx, toIdx);
+      const next = keepExisting ? new Set(selectedIds) : new Set<string>();
+      for (let i = lo; i <= hi; i++) {
+        const m = sortedMessages[i];
+        if (m) next.add(m.id);
+      }
+      onSelectionChange(next);
+    },
+    [selectedIds, sortedMessages, onSelectionChange]
+  );
+
+  // --- Checkbox toggle (does NOT open the message) ---
+  const handleToggleSelect = useCallback(
+    (idx: number, e: React.MouseEvent) => {
+      const msg = sortedMessages[idx];
+      if (!msg) return;
+      if (containerRef.current) containerRef.current.focus();
+
+      // Shift+click on checkbox → range from anchor
+      if (e.shiftKey && anchorIndex.current >= 0) {
+        applyRangeSelection(anchorIndex.current, idx, true);
+        onFocusedIndexChange?.(idx);
+        return;
+      }
+
+      const next = new Set(selectedIds);
+      if (next.has(msg.id)) next.delete(msg.id);
+      else next.add(msg.id);
+      onSelectionChange(next);
+      onFocusedIndexChange?.(idx);
+      anchorIndex.current = idx;
+    },
+    [sortedMessages, selectedIds, onSelectionChange, onFocusedIndexChange, applyRangeSelection]
+  );
+
+  // --- Row click ---
+  const handleRowClick = useCallback(
+    (idx: number, e: React.MouseEvent) => {
+      const msg = sortedMessages[idx];
+      if (!msg) return;
+
+      // Keep focus on the grid container so keyboard nav keeps working
+      if (containerRef.current) containerRef.current.focus();
+
+      const cmdCtrl = e.metaKey || e.ctrlKey;
+      const shift = e.shiftKey;
+
+      if (cmdCtrl) {
+        // Toggle individual in selection
+        const next = new Set(selectedIds);
+        if (next.has(msg.id)) next.delete(msg.id);
+        else next.add(msg.id);
+        onSelectionChange(next);
+        onFocusedIndexChange?.(idx);
+        anchorIndex.current = idx;
+        return;
+      }
+
+      if (shift && anchorIndex.current >= 0) {
+        // Range select
+        applyRangeSelection(anchorIndex.current, idx, false);
+        onFocusedIndexChange?.(idx);
+        return;
+      }
+
+      // Plain click → focus, clear multi-select, open
+      onSelectionChange(new Set());
+      onFocusedIndexChange?.(idx);
+      anchorIndex.current = idx;
+      onSelectMessage(msg);
+    },
+    [
+      sortedMessages,
+      selectedIds,
+      onSelectionChange,
+      onFocusedIndexChange,
+      onSelectMessage,
+      applyRangeSelection,
+    ]
+  );
+
+  // --- Keyboard navigation attached to the table container ---
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const handler = (e: KeyboardEvent) => {
+      // Don't intercept when typing in an input / textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (sortedMessages.length === 0) return;
+
+      const curr = focusedIndex >= 0 ? focusedIndex : 0;
+
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+        case "j": {
+          consume();
+          const next = Math.min(curr + 1, sortedMessages.length - 1);
+          if (e.shiftKey) {
+            // extend selection
+            applyRangeSelection(
+              anchorIndex.current >= 0 ? anchorIndex.current : curr,
+              next,
+              false
+            );
+          } else {
+            onSelectionChange(new Set());
+            anchorIndex.current = next;
+            const msg = sortedMessages[next];
+            if (msg) onSelectMessage(msg);
+          }
+          onFocusedIndexChange?.(next);
+          break;
+        }
+        case "ArrowUp":
+        case "k": {
+          consume();
+          const next = Math.max(curr - 1, 0);
+          if (e.shiftKey) {
+            applyRangeSelection(
+              anchorIndex.current >= 0 ? anchorIndex.current : curr,
+              next,
+              false
+            );
+          } else {
+            onSelectionChange(new Set());
+            anchorIndex.current = next;
+            const msg = sortedMessages[next];
+            if (msg) onSelectMessage(msg);
+          }
+          onFocusedIndexChange?.(next);
+          break;
+        }
+        case "Enter": {
+          if (focusedIndex >= 0 && focusedIndex < sortedMessages.length) {
+            consume();
+            const msg = sortedMessages[focusedIndex];
+            if (msg) onSelectMessage(msg);
+          }
+          break;
+        }
+        case "Delete":
+        case "Backspace": {
+          consume();
+          if (selectedIds.size > 0 && onBulkTrash) {
+            onBulkTrash(Array.from(selectedIds));
+            onSelectionChange(new Set());
+          } else if (focusedIndex >= 0 && onTrash) {
+            const msg = sortedMessages[focusedIndex];
+            if (msg) {
+              onTrash(msg.id);
+              // Keep focus at same index (the next row will take that slot)
+              const nextIdx = Math.min(
+                focusedIndex,
+                sortedMessages.length - 2
+              );
+              onFocusedIndexChange?.(Math.max(0, nextIdx));
+            }
+          }
+          break;
+        }
+      }
+    };
+
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [
+    sortedMessages,
+    focusedIndex,
+    onFocusedIndexChange,
+    onSelectMessage,
+    onSelectionChange,
+    selectedIds,
+    onBulkTrash,
+    onTrash,
+    applyRangeSelection,
+  ]);
+
+  // --- Column resizing ---
+  const resizingCol = useRef<keyof ColumnWidths | null>(null);
+  const resizeStartX = useRef<number>(0);
+  const resizeStartWidth = useRef<number>(0);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizingCol.current) return;
+      const dx = e.clientX - resizeStartX.current;
+      const key = resizingCol.current;
+      const min = key === "unread" ? 20 : key === "date" ? 60 : 80;
+      const max = key === "unread" ? 60 : key === "date" ? 200 : 500;
+      const next = clampNum(resizeStartWidth.current + dx, min, max);
+      updateWidth(key, next);
+    };
+    const onUp = () => {
+      resizingCol.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [updateWidth]);
+
+  const startResize = useCallback(
+    (key: keyof ColumnWidths, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      resizingCol.current = key;
+      resizeStartX.current = e.clientX;
+      resizeStartWidth.current = widths[key];
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+    },
+    [widths]
+  );
+
+  // --- Auto-focus container when messages first load so keyboard works ---
+  useLayoutEffect(() => {
+    // Don't steal focus if user is typing elsewhere
+    if (typeof document === "undefined") return;
+    const active = document.activeElement as HTMLElement | null;
+    const isTextInput =
+      active &&
+      (active.tagName === "INPUT" ||
+        active.tagName === "TEXTAREA" ||
+        active.isContentEditable);
+    if (!isTextInput && containerRef.current) {
+      containerRef.current.focus();
+    }
+  }, []);
+
+  const virtualItems = rowVirtualizer.getVirtualItems();
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex flex-col h-full outline-none"
+      tabIndex={0}
+      role="grid"
+      aria-rowcount={sortedMessages.length}
+    >
+      {/* Column header row */}
+      <div
+        className="flex items-center text-[10px] font-semibold uppercase tracking-wider select-none"
+        style={{
+          borderBottom: "1px solid var(--mc-border)",
+          backgroundColor: "var(--mc-bg-secondary)",
+          color: "var(--mc-text-faint)",
+          height: "28px",
+          flexShrink: 0,
+        }}
+        role="row"
+      >
+        {/* Select-all checkbox column */}
+        <div
+          className="flex items-center justify-center h-full"
+          style={{ width: `${widths.select}px`, flex: "0 0 auto" }}
+          role="columnheader"
+        >
+          {(() => {
+            const total = sortedMessages.length;
+            const selCount = selectedIds.size;
+            const allSelected = total > 0 && selCount === total;
+            const someSelected = selCount > 0 && selCount < total;
+            const Icon = allSelected ? CheckSquare : someSelected ? MinusSquare : Square;
+            return (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (selCount > 0) {
+                    onSelectionChange(new Set());
+                  } else {
+                    onSelectionChange(new Set(sortedMessages.map((m) => m.id)));
+                  }
+                }}
+                className="p-1 rounded transition-colors"
+                style={{ color: selCount > 0 ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-faint)" }}
+                title={allSelected ? "Deselect all" : someSelected ? "Clear selection" : "Select all"}
+                aria-label={allSelected ? "Deselect all" : "Select all"}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            );
+          })()}
+        </div>
+        <HeaderCell
+          label=""
+          icon="●"
+          width={widths.unread}
+          active={sort.column === "unread"}
+          direction={sort.direction}
+          onSort={() => toggleSort("unread")}
+          onResize={(e) => startResize("unread", e)}
+          center
+        />
+        <HeaderCell
+          label="From"
+          width={widths.from}
+          active={sort.column === "from"}
+          direction={sort.direction}
+          onSort={() => toggleSort("from")}
+          onResize={(e) => startResize("from", e)}
+        />
+        <HeaderCell
+          label="Subject"
+          flex
+          active={sort.column === "subject"}
+          direction={sort.direction}
+          onSort={() => toggleSort("subject")}
+          // Subject has a resize handle on its right too — resizes the Date column from its left
+          // But we keep it simpler: only Date has no resize handle (it's the last column)
+          onResize={undefined}
+        />
+        <HeaderCell
+          label="Date"
+          width={widths.date}
+          active={sort.column === "date"}
+          direction={sort.direction}
+          onSort={() => toggleSort("date")}
+          onResize={(e) => startResize("date", e)}
+          align="right"
+        />
+      </div>
+
+      {/* Virtualized rows */}
+      <div
+        ref={parentRef}
+        className="flex-1 overflow-y-auto"
+        style={{ backgroundColor: "var(--mc-bg-secondary)" }}
+      >
+        <div
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualItems.map((vItem) => {
+            const msg = sortedMessages[vItem.index];
+            if (!msg) return null;
+            const isFocused = vItem.index === focusedIndex;
+            const isInSelection = selectedIds.has(msg.id);
+            const isActive = selectedId === msg.id;
+            return (
+              <TableRow
+                key={msg.id}
+                msg={msg}
+                rowIndex={vItem.index}
+                top={vItem.start}
+                height={ROW_HEIGHT}
+                widths={widths}
+                isFocused={isFocused}
+                isInSelection={isInSelection}
+                isActive={isActive}
+                onClick={handleRowClick}
+                onToggleSelect={handleToggleSelect}
+                onToggleStar={onToggleStar}
+                onToggleRead={onToggleRead}
+              />
+            );
+          })}
+        </div>
+
+        {sortedMessages.length === 0 && (
+          <div className="flex items-center justify-center py-12 text-[13px]" style={{ color: "var(--mc-text-faint)" }}>
+            No emails.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -------------------- Header cell --------------------
+
+interface HeaderCellProps {
+  label: string;
+  icon?: string;
+  width?: number;
+  flex?: boolean;
+  active: boolean;
+  direction: SortDirection;
+  onSort: () => void;
+  onResize?: (e: React.MouseEvent) => void;
+  align?: "left" | "right";
+  center?: boolean;
+}
+
+function HeaderCell({
+  label,
+  icon,
+  width,
+  flex,
+  active,
+  direction,
+  onSort,
+  onResize,
+  align = "left",
+  center,
+}: HeaderCellProps) {
+  return (
+    <div
+      className="relative flex items-center h-full"
+      style={{
+        width: flex ? undefined : `${width}px`,
+        flex: flex ? "1 1 auto" : "0 0 auto",
+        minWidth: flex ? 0 : undefined,
+      }}
+      role="columnheader"
+      aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={onSort}
+        className="flex items-center gap-1 h-full w-full px-2 transition-colors"
+        style={{
+          color: active ? "var(--mc-text-muted)" : "var(--mc-text-faint)",
+          justifyContent: center ? "center" : align === "right" ? "flex-end" : "flex-start",
+        }}
+        title={`Sort by ${label || "unread"}`}
+      >
+        {icon ? (
+          <span style={{ fontSize: "10px", lineHeight: 1 }}>{icon}</span>
+        ) : (
+          <span className="truncate">{label}</span>
+        )}
+        {active && (
+          direction === "asc" ? (
+            <ChevronUp className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3" />
+          )
+        )}
+      </button>
+      {onResize && (
+        <div
+          onMouseDown={onResize}
+          className="absolute top-0 right-0 h-full cursor-col-resize"
+          style={{
+            width: "5px",
+            // Show a subtle divider line
+            borderRight: "1px solid var(--mc-border)",
+          }}
+          onDoubleClick={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
+    </div>
+  );
+}
+
+// -------------------- Table row --------------------
+
+interface TableRowProps {
+  msg: EmailMessage;
+  rowIndex: number;
+  top: number;
+  height: number;
+  widths: ColumnWidths;
+  isFocused: boolean;
+  isInSelection: boolean;
+  isActive: boolean;
+  onClick: (idx: number, e: React.MouseEvent) => void;
+  onToggleSelect: (idx: number, e: React.MouseEvent) => void;
+  onToggleStar: (id: string, starred: boolean) => void;
+  onToggleRead?: (id: string, isRead: boolean) => void;
+}
+
+const TableRow = memo(function TableRow({
+  msg,
+  rowIndex,
+  top,
+  height,
+  widths,
+  isFocused,
+  isInSelection,
+  isActive,
+  onClick,
+  onToggleSelect,
+  onToggleStar,
+  onToggleRead,
+}: TableRowProps) {
+  const isUnread = !msg.is_read;
+  const hasAttachments = msg.attachments && msg.attachments.length > 0;
+
+  // Row background:
+  //  - Active (in reader): accent background
+  //  - In multi-selection: accent-lite
+  //  - Focused (keyboard): subtle hover
+  //  - default: transparent (alternating row striping would be nice but keep minimal)
+  const bg = isActive
+    ? "rgba(6,182,212,0.18)"
+    : isInSelection
+    ? "rgba(6,182,212,0.08)"
+    : isFocused
+    ? "rgba(255,255,255,0.04)"
+    : "transparent";
+
+  return (
+    <div
+      role="row"
+      aria-rowindex={rowIndex + 1}
+      aria-selected={isActive || isInSelection}
+      onClick={(e) => onClick(rowIndex, e)}
+      className="absolute left-0 right-0 flex items-center cursor-pointer"
+      style={{
+        top: `${top}px`,
+        height: `${height}px`,
+        backgroundColor: bg,
+        borderBottom: "1px solid var(--mc-border)",
+        // Darker strip on the left for active row
+        boxShadow: isActive
+          ? "inset 3px 0 0 0 var(--mc-accent, #06B6D4)"
+          : undefined,
+      }}
+    >
+      {/* Select checkbox */}
+      <div
+        className="flex items-center justify-center h-full"
+        style={{ width: `${widths.select}px`, flex: "0 0 auto" }}
+        role="gridcell"
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect(rowIndex, e);
+          }}
+          className="p-1 rounded transition-colors"
+          style={{ color: isInSelection ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-faint)" }}
+          title={isInSelection ? "Deselect" : "Select"}
+          aria-label={isInSelection ? "Deselect" : "Select"}
+        >
+          {isInSelection ? (
+            <CheckSquare className="h-3.5 w-3.5" />
+          ) : (
+            <Square className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+
+      {/* Unread dot */}
+      <div
+        className="flex items-center justify-center h-full"
+        style={{ width: `${widths.unread}px`, flex: "0 0 auto" }}
+        role="gridcell"
+      >
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleRead?.(msg.id, msg.is_read);
+          }}
+          className="p-0.5 rounded-full"
+          title={isUnread ? "Mark as read" : "Mark as unread"}
+          aria-label={isUnread ? "Unread" : "Read"}
+        >
+          {isUnread ? (
+            <div
+              className="h-2 w-2 rounded-full"
+              style={{ backgroundColor: "var(--mc-accent, #06B6D4)" }}
+            />
+          ) : (
+            <div className="h-2 w-2 rounded-full" style={{ backgroundColor: "transparent" }} />
+          )}
+        </button>
+      </div>
+
+      {/* From */}
+      <div
+        className="flex items-center h-full min-w-0 px-2 text-[12px]"
+        style={{ width: `${widths.from}px`, flex: "0 0 auto" }}
+        role="gridcell"
+      >
+        <span
+          className="truncate"
+          style={{
+            color: isUnread ? "var(--mc-text)" : "var(--mc-text-secondary)",
+            fontWeight: isUnread ? 600 : 400,
+          }}
+          title={msg.from_name || msg.from_address}
+        >
+          {msg.from_name || msg.from_address || "(unknown)"}
+        </span>
+      </div>
+
+      {/* Subject (flex) */}
+      <div
+        className="flex items-center h-full min-w-0 px-2 text-[12px] gap-1.5"
+        style={{ flex: "1 1 auto" }}
+        role="gridcell"
+      >
+        {msg.is_catch_all && (
+          <span
+            className="text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0"
+            style={{
+              backgroundColor: "rgba(251,191,36,0.15)",
+              color: "#FBBF24",
+            }}
+          >
+            C-A
+          </span>
+        )}
+        {msg.direction === "outbound" && (
+          <span
+            className="text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0"
+            style={{
+              backgroundColor: "rgba(6,182,212,0.15)",
+              color: "var(--mc-accent, #06B6D4)",
+            }}
+          >
+            SENT
+          </span>
+        )}
+        <span
+          className="truncate"
+          style={{
+            color: isUnread ? "var(--mc-text)" : "var(--mc-text-muted)",
+            fontWeight: isUnread ? 500 : 400,
+          }}
+          title={msg.subject || "(no subject)"}
+        >
+          {msg.subject || "(no subject)"}
+        </span>
+        {msg.preview && (
+          <span
+            className="truncate"
+            style={{
+              color: "var(--mc-text-faint)",
+              fontWeight: 400,
+            }}
+          >
+            — {msg.preview}
+          </span>
+        )}
+        {hasAttachments && (
+          <Paperclip
+            className="h-3 w-3 flex-shrink-0"
+            style={{ color: "var(--mc-text-faint)" }}
+          />
+        )}
+        {msg.is_starred && (
+          <Star
+            className="h-3 w-3 flex-shrink-0"
+            style={{ fill: "#EAB308", color: "#EAB308" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStar(msg.id, msg.is_starred);
+            }}
+          />
+        )}
+      </div>
+
+      {/* Date */}
+      <div
+        className="flex items-center justify-end h-full px-2 text-[11px]"
+        style={{
+          width: `${widths.date}px`,
+          flex: "0 0 auto",
+          color: "var(--mc-text-faint)",
+        }}
+        role="gridcell"
+      >
+        <span className="truncate">{formatDate(msg.received_at)}</span>
+      </div>
+    </div>
+  );
+});

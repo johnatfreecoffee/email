@@ -1,0 +1,362 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "../styles/theme.css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-montserrat);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --color-mc-teal: #06B6D4;
+  --color-mc-green: #34D399;
+  --color-mc-red: #F87171;
+  --color-mc-amber: #FBBF24;
+  --color-mc-teal-dim: rgba(6, 182, 212, 0.15);
+  --color-mc-teal-glow: rgba(6, 182, 212, 0.08);
+  --color-mc-card: #161A22;
+  --color-mc-card-border: rgba(56, 189, 230, 0.15);
+  --color-mc-body: #7B8494;
+  --color-mc-label: #6B7280;
+  --color-mc-sidebar-text: #9CA3AF;
+}
+
+:root {
+  --background: #0D0F13;
+  --foreground: #E8ECF4;
+  --card: #161A22;
+  --card-foreground: #E8ECF4;
+  --popover: #161A22;
+  --popover-foreground: #E8ECF4;
+  --primary: #06B6D4;
+  --primary-foreground: #FFFFFF;
+  --secondary: #1E2330;
+  --secondary-foreground: #E8ECF4;
+  --muted: #1E2330;
+  --muted-foreground: #7B8494;
+  --accent: #1E2330;
+  --accent-foreground: #E8ECF4;
+  --destructive: #F87171;
+  --border: rgba(56, 189, 230, 0.15);
+  --input: rgba(56, 189, 230, 0.2);
+  --ring: #06B6D4;
+  --chart-1: #06B6D4;
+  --chart-2: #34D399;
+  --chart-3: #FBBF24;
+  --chart-4: #818CF8;
+  --chart-5: #F87171;
+  --radius: 1rem;
+  --sidebar: transparent;
+  --sidebar-foreground: #9CA3AF;
+  --sidebar-primary: #06B6D4;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(6, 182, 212, 0.1);
+  --sidebar-accent-foreground: #06B6D4;
+  --sidebar-border: transparent;
+  --sidebar-ring: #06B6D4;
+}
+
+.dark {
+  --background: #0D0F13;
+  --foreground: #E8ECF4;
+  --card: #161A22;
+  --card-foreground: #E8ECF4;
+  --popover: #161A22;
+  --popover-foreground: #E8ECF4;
+  --primary: #06B6D4;
+  --primary-foreground: #FFFFFF;
+  --secondary: #1E2330;
+  --secondary-foreground: #E8ECF4;
+  --muted: #1E2330;
+  --muted-foreground: #7B8494;
+  --accent: #1E2330;
+  --accent-foreground: #E8ECF4;
+  --destructive: #F87171;
+  --border: rgba(56, 189, 230, 0.15);
+  --input: rgba(56, 189, 230, 0.2);
+  --ring: #06B6D4;
+  --chart-1: #06B6D4;
+  --chart-2: #34D399;
+  --chart-3: #FBBF24;
+  --chart-4: #818CF8;
+  --chart-5: #F87171;
+  --sidebar: transparent;
+  --sidebar-foreground: #9CA3AF;
+  --sidebar-primary: #06B6D4;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(6, 182, 212, 0.1);
+  --sidebar-accent-foreground: #06B6D4;
+  --sidebar-border: transparent;
+  --sidebar-ring: #06B6D4;
+}
+
+.light {
+  --background: #F8FAFC;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  --primary: #0891B2;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #334155;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent: #F1F5F9;
+  --accent-foreground: #334155;
+  --destructive: #DC2626;
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.1);
+  --ring: #0891B2;
+  --chart-1: #0891B2;
+  --chart-2: #059669;
+  --chart-3: #D97706;
+  --chart-4: #6366F1;
+  --chart-5: #DC2626;
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #64748B;
+  --sidebar-primary: #0891B2;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(8, 145, 178, 0.08);
+  --sidebar-accent-foreground: #0891B2;
+  --sidebar-border: rgba(0, 0, 0, 0.06);
+  --sidebar-ring: #0891B2;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html, body {
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+.mc-card {
+  background: var(--mc-card);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--mc-card-border);
+  border-radius: 16px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mc-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--mc-accent);
+  box-shadow: var(--mc-shadow);
+}
+
+.mc-glow {
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.06), 0 0 30px rgba(6, 182, 212, 0.03);
+}
+
+.light .mc-glow {
+  box-shadow: 0 0 15px rgba(8, 145, 178, 0.08), 0 0 30px rgba(8, 145, 178, 0.04);
+}
+
+.mc-glow-strong {
+  box-shadow: 0 0 20px rgba(6, 182, 212, 0.12), 0 0 40px rgba(6, 182, 212, 0.06);
+}
+
+.light .mc-glow-strong {
+  box-shadow: 0 0 20px rgba(8, 145, 178, 0.1), 0 0 40px rgba(8, 145, 178, 0.05);
+}
+
+.mc-hero-border {
+  position: relative;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.mc-hero-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 17px;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.5), rgba(52, 211, 153, 0.3), rgba(6, 182, 212, 0.1));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.mc-bg-glow::before {
+  content: '';
+  position: fixed;
+  top: -20%;
+  left: 20%;
+  width: 60%;
+  height: 50%;
+  background: radial-gradient(ellipse at center, rgba(6, 182, 212, 0.06) 0%, rgba(6, 182, 212, 0.02) 40%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.light .mc-bg-glow::before {
+  background: radial-gradient(ellipse at center, rgba(8, 145, 178, 0.04) 0%, rgba(8, 145, 178, 0.01) 40%, transparent 70%);
+}
+
+.mc-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--mc-text-faint);
+}
+
+/* App shell content offset — applies sidebar width margin at desktop breakpoint.
+   Pairs with --mc-sidebar-w set by <Sidebar />, so collapsed/expanded states
+   automatically reflow page content (and the fixed TopNav) without manual overrides. */
+.mc-content-offset {
+  margin-left: 0;
+}
+@media (min-width: 768px) {
+  .mc-content-offset {
+    margin-left: var(--mc-sidebar-w, 170px);
+  }
+}
+
+/* Scroll-containment: when .mc-content-offset is applied to a <main>, the
+   main itself becomes the scroll container. Body doesn't scroll, so page
+   content physically cannot render behind the fixed TopNav/Sidebar. Flush-mode
+   containers (<div class="mc-content-offset">) are not affected because they
+   manage their own internal scroll. */
+main.mc-content-offset {
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.mc-pill {
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 9999px;
+  padding: 2px 10px;
+}
+
+/* Mobile touch & input fixes */
+input, textarea, select {
+  font-size: 16px !important;
+}
+
+button, a, [role="button"] {
+  min-height: 44px;
+}
+
+/* Exceptions for inline/tiny elements */
+.mc-pill, kbd, .mc-label, .animate-pulse {
+  min-height: unset;
+  min-width: unset;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 230, 0.2);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 230, 0.35);
+}
+
+.light::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.light::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.font-display {
+  font-family: var(--font-montserrat), 'Gotham', ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Mobile bottom nav safe area */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Add bottom padding on mobile for bottom nav clearance */
+@media (max-width: 767px) {
+  main {
+    padding-bottom: 4rem;
+  }
+}
+
+/* Deploy toast slide-down animation */
+@keyframes slide-down {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.animate-slide-down {
+  animation: slide-down 0.3s ease-out;
+}
+
+/* Settlement slide-up animation */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}

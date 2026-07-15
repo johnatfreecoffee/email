@@ -1,0 +1,39 @@
+# Email app — project memory
+
+**Code:** `EM` (standalone email client forked from Mission Control / `MT`)
+**Path:** `/Users/johnromano/Documents/email`
+**Forked:** 2026-07-08 from `~/Projects/mission-control`
+**Status:** Booted locally; shared-secret auth wired; real inbox loading. Iterate next. Do not delete email from MC until this is proven.
+
+## Stack
+- Next.js 16 App Router, `output: "export"` → static `out/`
+- React 19, Tailwind v4, Tiptap
+- Backend: Cloudflare Pages Functions under `functions/api/email/*` (no Next API routes)
+- Supabase project `YOUR_PROJECT_REF` (shared with MC/noknok) — tables `email_*`, `mc_sessions`, `mc_push_subscriptions`, storage bucket `email-attachments`
+- Resend (inbound webhook + outbound send + domain DNS records)
+- Cloudflare DNS auto-config for domains
+- OpenRouter optional spam assist
+- VAPID web push (self-implemented in `_web-push.ts`)
+
+## Auth
+- Header: `X-MC-Auth` (contract unchanged)
+- Primary: shared-secret gate `token === env.MC_API_SECRET`
+- Also accepts: valid `mc_sessions` rows + legacy hash `[redacted]`
+- Client auto-seeds from `NEXT_PUBLIC_MC_API_SECRET`. No `/api/auth/*`.
+- Local API: `npm run build` + `npm run dev:api` (wrangler :8788) + `npm run dev` (Next proxies `/api/*`)
+
+## Deploy target (not created yet)
+- CF Pages project name: `email-app`
+- Workflow: `.github/workflows/deploy-cloudflare.yml`
+- Must re-point Resend webhook away from `mission-control-806.pages.dev`
+
+## Canonical docs
+1. `EMAIL-SYSTEM.md` — full system brain (source of truth)
+2. `KICKSTART.md` — paste-in prompt for a new chat
+3. `docs/EMAIL-SPEC.md` — original design (may be stale vs code)
+4. `.env.example` / `.env.local` (gitignored, real keys)
+
+## Do not revive
+- Migadu / IMAP / mailbox provisioning (cut over 2026-05-16)
+- MC issues `/inbox` module
+- `email-sync-cron` / `/api/email/sync`

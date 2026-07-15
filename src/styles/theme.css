@@ -1,0 +1,68 @@
+/* Mission Control Theme System */
+:root {
+  --mc-bg: #0D0F13;
+  --mc-bg-secondary: #161A22;
+  --mc-bg-tertiary: #1A1F28;
+  --mc-bg-hover: rgba(255, 255, 255, 0.03);
+  --mc-bg-active: rgba(255, 255, 255, 0.06);
+  --mc-card: #161A22;
+  --mc-card-border: rgba(56, 189, 230, 0.15);
+
+  --mc-text: #FFFFFF;
+  --mc-text-secondary: #D1D5DB;
+  --mc-text-muted: #9CA3AF;
+  --mc-text-faint: #6B7280;
+  --mc-text-ghost: #4B5563;
+
+  --mc-border: rgba(255, 255, 255, 0.06);
+  --mc-border-subtle: rgba(255, 255, 255, 0.04);
+
+  --mc-accent: #06B6D4;
+  --mc-accent-bg: rgba(6, 182, 212, 0.1);
+  --mc-accent-bg-hover: rgba(6, 182, 212, 0.15);
+
+  --mc-success: #34D399;
+  --mc-warning: #FBBF24;
+  --mc-danger: #F87171;
+  --mc-star: #EAB308;
+
+  --mc-header-bg: #0D0F13;
+  --mc-sidebar-bg: #0D0F13;
+
+  --mc-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.6);
+}
+
+:root[data-theme="light"] {
+  --mc-bg: #F8FAFC;
+  --mc-bg-secondary: #FFFFFF;
+  --mc-bg-tertiary: #F1F5F9;
+  --mc-bg-hover: rgba(0, 0, 0, 0.03);
+  --mc-bg-active: rgba(0, 0, 0, 0.06);
+  --mc-card: #FFFFFF;
+  --mc-card-border: rgba(6, 182, 212, 0.2);
+
+  --mc-text: #0F172A;
+  --mc-text-secondary: #334155;
+  --mc-text-muted: #64748B;
+  --mc-text-faint: #94A3B8;
+  --mc-text-ghost: #CBD5E1;
+
+  --mc-border: rgba(0, 0, 0, 0.08);
+  --mc-border-subtle: rgba(0, 0, 0, 0.04);
+
+  --mc-accent: #0891B2;
+  --mc-accent-bg: rgba(8, 145, 178, 0.08);
+  --mc-accent-bg-hover: rgba(8, 145, 178, 0.12);
+
+  --mc-success: #059669;
+  --mc-warning: #D97706;
+  --mc-danger: #DC2626;
+  --mc-star: #CA8A04;
+
+  --mc-header-bg: #F8FAFC;
+  --mc-sidebar-bg: #FFFFFF;
+
+  --mc-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.3);
+}
