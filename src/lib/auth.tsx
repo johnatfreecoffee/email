@@ -12,6 +12,9 @@ export function isPublicRoute(pathname: string): boolean {
 
 const AUTH_KEY = "mc-auth-token";
 const USER_KEY = "mc-auth-user";
+/** Bump to invalidate older auto-login sessions and force the password form. */
+const AUTH_SESSION_VERSION = "v2-password";
+const AUTH_VERSION_KEY = "mc-auth-version";
 
 /** Build-time shared secret sent as X-MC-Auth after a successful login. */
 const SHARED_SECRET =
@@ -91,6 +94,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Restore prior session only — no auto-login.
   useEffect(() => {
+    // Wipe sessions created before password login shipped (auto-seeded secret).
+    if (localStorage.getItem(AUTH_VERSION_KEY) !== AUTH_SESSION_VERSION) {
+      localStorage.removeItem(AUTH_KEY);
+      localStorage.removeItem(USER_KEY);
+      localStorage.setItem(AUTH_VERSION_KEY, AUTH_SESSION_VERSION);
+    }
+
     const stored = localStorage.getItem(AUTH_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
 
