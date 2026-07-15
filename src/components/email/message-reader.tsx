@@ -394,6 +394,7 @@ export function MessageReader({
               <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
+                <base target="_blank">
                 <style>
                   body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -408,7 +409,7 @@ export function MessageReader({
                   }
                   /* Force readable text on any background */
                   * { color: inherit; }
-                  a { color: #0284c7 !important; }
+                  a { color: #0284c7 !important; cursor: pointer; }
                   img { max-width: 100%; height: auto; }
                   table { max-width: 100% !important; }
                   blockquote {
@@ -429,15 +430,52 @@ export function MessageReader({
               <body>${message.body_html}</body>
               </html>
             `}
-            sandbox="allow-same-origin"
+            // allow-same-origin: parent can rewrite links + size iframe
+            // allow-popups + escape: target=_blank / window.open leave the app
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            referrerPolicy="no-referrer"
             className="w-full border-none min-h-[300px]"
             style={{ background: "#ffffff", borderRadius: "8px" }}
             onLoad={(e) => {
               const iframe = e.target as HTMLIFrameElement;
-              if (iframe.contentDocument) {
-                iframe.style.height =
-                  iframe.contentDocument.body.scrollHeight + 20 + "px";
-              }
+              const doc = iframe.contentDocument;
+              if (!doc) return;
+
+              // Force every link out of the reader into a new browser tab.
+              const openExternal = (href: string) => {
+                if (!href || href.startsWith("javascript:") || href.startsWith("data:")) return;
+                window.open(href, "_blank", "noopener,noreferrer");
+              };
+
+              doc.querySelectorAll("a[href]").forEach((node) => {
+                const a = node as HTMLAnchorElement;
+                a.setAttribute("target", "_blank");
+                a.setAttribute("rel", "noopener noreferrer");
+                a.addEventListener(
+                  "click",
+                  (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    openExternal(a.href);
+                  },
+                  true
+                );
+              });
+
+              // Catch-all for dynamically-styled anchors / area maps
+              doc.addEventListener(
+                "click",
+                (ev) => {
+                  const el = (ev.target as Element | null)?.closest?.("a[href]");
+                  if (!el) return;
+                  ev.preventDefault();
+                  ev.stopPropagation();
+                  openExternal((el as HTMLAnchorElement).href);
+                },
+                true
+              );
+
+              iframe.style.height = (doc.body?.scrollHeight || 300) + 20 + "px";
             }}
           />
         ) : (

@@ -13,9 +13,13 @@ export function isPublicRoute(pathname: string): boolean {
 const AUTH_KEY = "mc-auth-token";
 const USER_KEY = "mc-auth-user";
 
-/** Build-time shared secret (same value as server MC_API_SECRET). */
+/** Build-time shared secret sent as X-MC-Auth after a successful login. */
 const SHARED_SECRET =
   typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MC_API_SECRET || "" : "";
+
+/** Single-tenant login credentials (UI gate; API still uses MC_API_SECRET). */
+const LOGIN_EMAIL = "john@freecoffee.dev";
+const LOGIN_PASSWORD = "[redacted]";
 
 export interface MCUser {
   id: string;
@@ -27,8 +31,8 @@ export interface MCUser {
 
 const STANDALONE_USER: MCUser = {
   id: "local",
-  email: "admin@email.local",
-  display_name: "Admin",
+  email: LOGIN_EMAIL,
+  display_name: "John",
   role: "admin",
   allowed_modules: ["email"],
 };
@@ -70,9 +74,9 @@ export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, { ...init, headers });
 }
 
-function persistSession(token: string) {
+function persistSession(token: string, user: MCUser = STANDALONE_USER) {
   localStorage.setItem(AUTH_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(STANDALONE_USER));
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -80,32 +84,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<MCUser | null>(null);
   const [checked, setChecked] = useState(false);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // On mount: restore session, or auto-seed from NEXT_PUBLIC_MC_API_SECRET.
+  // Restore prior session only — no auto-login.
   useEffect(() => {
     const stored = localStorage.getItem(AUTH_KEY);
     const storedUser = localStorage.getItem(USER_KEY);
 
     if (stored) {
-      // Prefer matching the current build-time secret if available
+      // Drop sessions that don't match the current API secret (rotated key).
       if (SHARED_SECRET && stored !== SHARED_SECRET) {
-        // Stale token from MC login / old secret — re-seed when we have one
-        if (SHARED_SECRET) {
-          persistSession(SHARED_SECRET);
-          setToken(SHARED_SECRET);
-          setUser(STANDALONE_USER);
-        } else {
-          try {
-            setToken(stored);
-            setUser(storedUser ? (JSON.parse(storedUser) as MCUser) : STANDALONE_USER);
-          } catch {
-            localStorage.removeItem(AUTH_KEY);
-            localStorage.removeItem(USER_KEY);
-          }
-        }
+        localStorage.removeItem(AUTH_KEY);
+        localStorage.removeItem(USER_KEY);
       } else {
         try {
           setToken(stored);
@@ -115,38 +108,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(USER_KEY);
         }
       }
-    } else if (SHARED_SECRET) {
-      // No stored token — auto-auth with the shared secret (single-tenant gate)
-      persistSession(SHARED_SECRET);
-      setToken(SHARED_SECRET);
-      setUser(STANDALONE_USER);
     }
 
     setChecked(true);
   }, []);
 
   const refreshUser = useCallback(async () => {
-    // No /api/auth/me in the fork — user is local-only.
+    // Local-only user — nothing to refresh.
   }, []);
 
   const handleLogin = async () => {
     setLoading(true);
     setError("");
     try {
-      const entered = password.trim();
-      if (!entered) {
-        setError("Enter the access secret");
+      const enteredEmail = email.toLowerCase().trim();
+      const enteredPassword = password;
+
+      if (!enteredEmail || !enteredPassword) {
+        setError("Enter email and password");
         return;
       }
-      // Accept either the build-time public secret or whatever the user types
-      // (server validates against MC_API_SECRET / sessions / legacy).
-      if (SHARED_SECRET && entered !== SHARED_SECRET) {
-        setError("Invalid access secret");
+
+      if (enteredEmail !== LOGIN_EMAIL || enteredPassword !== LOGIN_PASSWORD) {
+        setError("Invalid email or password");
         return;
       }
-      const tok = SHARED_SECRET || entered;
-      persistSession(tok);
-      setToken(tok);
+
+      if (!SHARED_SECRET) {
+        setError("App is misconfigured (missing API secret)");
+        return;
+      }
+
+      persistSession(SHARED_SECRET, STANDALONE_USER);
+      setToken(SHARED_SECRET);
       setUser(STANDALONE_USER);
     } finally {
       setLoading(false);
@@ -207,14 +201,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeWidth={2}
-                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                 />
               </svg>
             </div>
             <h1 className="text-[22px] font-bold text-foreground mb-1">Email</h1>
-            <p className="text-[13px] text-muted-foreground">
-              Enter the access secret to continue
-            </p>
+            <p className="text-[13px] text-muted-foreground">Sign in to continue</p>
           </div>
 
           <form
@@ -225,14 +217,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             className="space-y-3"
           >
             <input
+              type="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setError("");
+              }}
+              placeholder="Email"
+              autoFocus
+              autoComplete="email"
+              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-white placeholder-[#6B7280] focus:outline-none focus:border-[#06B6D4] transition-colors"
+            />
+            <input
               type="password"
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
                 setError("");
               }}
-              placeholder="Access secret"
-              autoFocus
+              placeholder="Password"
               autoComplete="current-password"
               className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-white placeholder-[#6B7280] focus:outline-none focus:border-[#06B6D4] transition-colors"
             />
