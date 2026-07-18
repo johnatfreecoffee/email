@@ -230,6 +230,27 @@ interface ListResponse {
 
 const PAGE_SIZE = 50;
 
+// Flags that decide which unread-count buckets a message contributes to.
+type CountMsg = Pick<EmailMessage, "domain_id" | "folder"> & {
+  is_starred?: boolean;
+  is_archived?: boolean;
+  is_trash?: boolean;
+  is_catch_all?: boolean;
+  is_spam?: boolean;
+};
+
+// EXACT mirror of the bucket priority in functions/api/email/unread-counts.ts:
+// archive → spam → sent → inbox (catch-all split) → catchall. Starred is
+// additive on top, trash is its own world — both handled by the applier.
+function primaryBucket(m: CountMsg): "archive" | "spam" | "sent" | "catchall" | "inbox" | null {
+  if (m.is_archived) return "archive";
+  if (m.folder === "spam" || m.is_spam) return "spam";
+  if (m.folder === "sent") return "sent";
+  if (m.folder === "inbox") return m.is_catch_all ? "catchall" : "inbox";
+  if (m.is_catch_all) return "catchall";
+  return null;
+}
+
 export function EmailLayout() {
   const [domains, setDomains] = useState<EmailDomain[]>([]);
   const [selectedDomain, setSelectedDomain] = useState<EmailDomain | null>(null);
@@ -253,7 +274,6 @@ export function EmailLayout() {
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileView, setMobileView] = useState<"folders" | "list" | "reader">("list");
-  const [domainFolderCounts, setDomainFolderCounts] = useState<Record<string, Record<string, number>>>({});
   const [unreadCounts, setUnreadCounts] = useState<UnreadCounts>({ domains: {}, folders: {}, totals: {} });
 
   // Resizable column widths — start with defaults, hydrate from localStorage post-mount to avoid SSR mismatch
@@ -549,31 +569,17 @@ export function EmailLayout() {
     }
   }, []);
 
-  const fetchDomainFolderCounts = useCallback(async () => {
-    if (domains.length === 0) return;
-    const counts: Record<string, Record<string, number>> = {};
-    await Promise.all(domains.map(async (d) => {
-      try {
-        const res = await apiFetch(`${API_BASE}/messages?domain_id=${d.id}&folder=inbox&is_read=false&count_only=true`);
-        if (res.ok) {
-          const data = await res.json();
-          counts[d.id] = { inbox: data.count || 0 };
-        } else {
-          counts[d.id] = { inbox: 0 };
-        }
-      } catch {
-        counts[d.id] = { inbox: 0 };
-      }
-    }));
-    setDomainFolderCounts(counts);
-  }, [domains]);
-
   // --- Unread counts (domain + per-folder) ---
+  // Seq guard: only the newest in-flight fetch may write, so a slow 60s-poll
+  // response can't overwrite a fresher post-mutation reconcile.
+  const countsSeq = useRef(0);
   const fetchUnreadCounts = useCallback(async () => {
+    const seq = ++countsSeq.current;
     try {
       const res = await apiFetch(`${API_BASE}/unread-counts`);
       if (res.ok) {
         const data: UnreadCounts = await res.json();
+        if (seq !== countsSeq.current) return;
         setUnreadCounts({
           domains: data.domains || {},
           folders: data.folders || {},
@@ -585,40 +591,60 @@ export function EmailLayout() {
     }
   }, []);
 
-  // Optimistically adjust unread counts for a message transitioning read state.
-  // delta = -1 when marking read, +1 when marking unread.
-  const adjustUnreadCounts = useCallback((msg: { domain_id: string; folder?: string; is_starred?: boolean; is_archived?: boolean; is_trash?: boolean }, delta: -1 | 1) => {
-    if (!msg?.domain_id) return;
-    // Skip trashed (they are excluded from all scopes)
-    if (msg.is_trash) return;
+  // Trailing-edge debounce: reconcile optimistic counts against the server
+  // shortly after a burst of mutations settles (PATCHes commit in ~100-300ms).
+  const countsReconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleCountsReconcile = useCallback(() => {
+    if (countsReconcileTimer.current) clearTimeout(countsReconcileTimer.current);
+    countsReconcileTimer.current = setTimeout(() => fetchUnreadCounts(), 1500);
+  }, [fetchUnreadCounts]);
 
+  // Optimistic count engine. Every mutation reports each affected message as
+  // a (before, after) pair of its flags *while counting as unread* — null on
+  // a side where it doesn't count (e.g. read → after: null). The applier
+  // subtracts before's contribution and adds after's, batching a whole bulk
+  // operation into one state update, then schedules the reconcile.
+  const applyUnreadTransitions = useCallback((pairs: Array<[CountMsg | null, CountMsg | null]>) => {
+    const real = pairs.filter(([b, a]) => b || a);
+    if (real.length === 0) return;
     setUnreadCounts((prev) => {
       const next: UnreadCounts = {
         domains: { ...prev.domains },
-        folders: { ...prev.folders, [msg.domain_id]: { ...(prev.folders[msg.domain_id] || {}) } },
+        folders: Object.fromEntries(Object.entries(prev.folders).map(([k, v]) => [k, { ...v }])),
         totals: { ...prev.totals },
       };
-      const bump = (obj: Record<string, number>, key: string) => {
+      const bump = (obj: Record<string, number>, key: string, delta: number) => {
         obj[key] = Math.max(0, (obj[key] || 0) + delta);
       };
-      // Domain total
-      bump(next.domains, msg.domain_id);
-      // Folder-scoped count
-      const folderKey =
-        msg.is_archived ? "archive"
-        : msg.is_starred ? "starred"
-        : msg.folder || "inbox";
-      bump(next.folders[msg.domain_id], folderKey);
-      // Totals
-      bump(next.totals, folderKey);
-      // If starred AND in a primary folder, also bump starred totals
-      if (msg.is_starred && folderKey !== "starred") {
-        bump(next.folders[msg.domain_id], "starred");
-        bump(next.totals, "starred");
+      const apply = (m: CountMsg, delta: 1 | -1) => {
+        if (!m.domain_id) return;
+        if (!next.folders[m.domain_id]) next.folders[m.domain_id] = {};
+        const f = next.folders[m.domain_id];
+        if (m.is_trash) {
+          // Unread trash counts only toward the trash badge (server parity)
+          bump(f, "trash", delta);
+          bump(next.totals, "trash", delta);
+          return;
+        }
+        bump(next.domains, m.domain_id, delta);
+        const bucket = primaryBucket(m);
+        if (bucket) {
+          bump(f, bucket, delta);
+          bump(next.totals, bucket, delta);
+        }
+        if (m.is_starred) {
+          bump(f, "starred", delta);
+          bump(next.totals, "starred", delta);
+        }
+      };
+      for (const [before, after] of real) {
+        if (before) apply(before, -1);
+        if (after) apply(after, 1);
       }
       return next;
     });
-  }, []);
+    scheduleCountsReconcile();
+  }, [scheduleCountsReconcile]);
 
   const fetchFullMessage = useCallback(async (id: string) => {
     try {
@@ -636,15 +662,20 @@ export function EmailLayout() {
             prev.map((m) => (m.id === id ? { ...m, is_read: true } : m))
           );
           // Optimistic unread count update: message went unread -> read
-          adjustUnreadCounts(data, -1);
+          applyUnreadTransitions([[data, null]]);
         }
       }
     } catch (e) {
       console.error("Failed to fetch message:", e);
     }
-  }, [adjustUnreadCounts]);
+  }, [applyUnreadTransitions]);
 
   const handleToggleStar = useCallback(async (id: string, starred: boolean) => {
+    const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
+    if (msg && !msg.is_read) {
+      // Unread star flip nets ±1 on the starred badge only
+      applyUnreadTransitions([[msg, { ...msg, is_starred: !starred }]]);
+    }
     // Optimistic update
     setMessages((prev) =>
       prev.map((m) => (m.id === id ? { ...m, is_starred: !starred } : m))
@@ -657,177 +688,144 @@ export function EmailLayout() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_starred: !starred }),
     });
-  }, [selectedMessage]);
+  }, [selectedMessage, messages, applyUnreadTransitions]);
 
   const handleTrash = useCallback(async (id: string) => {
-    // Optimistic: if the trashed message was unread, it leaves the domain/folder unread pool
+    // Optimistic: an unread trashed message leaves its buckets, joins trash
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
     if (msg && !msg.is_read) {
-      adjustUnreadCounts(msg, -1);
+      applyUnreadTransitions([[msg, { ...msg, is_trash: true }]]);
     }
     setMessages((prev) => prev.filter((m) => m.id !== id));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
     await apiFetch(`${API_BASE}/messages`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_trash: true }),
     });
-  }, [selectedMessage, messages, adjustUnreadCounts]);
+  }, [selectedMessage, messages, applyUnreadTransitions]);
 
   const handleToggleSpam = useCallback(async (id: string, isSpamNow: boolean) => {
     const next = !isSpamNow;
+    const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
+    if (msg && !msg.is_read) {
+      // Server moves folder spam <-> inbox alongside the flag
+      applyUnreadTransitions([[msg, { ...msg, is_spam: next, folder: next ? "spam" : "inbox" }]]);
+    }
     setMessages((prev) => prev.filter((m) => m.id !== id));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
     await apiFetch(`${API_BASE}/messages`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_spam: next }),
     });
-    fetchUnreadCounts();
-  }, [selectedMessage, fetchUnreadCounts]);
+  }, [selectedMessage, messages, applyUnreadTransitions]);
 
   const handleArchive = useCallback(async (id: string) => {
-    // Archiving does NOT remove from domain unread total (still not trash),
-    // but moves it out of inbox scope into archive scope.
+    // Archive moves the unread contribution inbox→archive; domain total nets 0
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
     if (msg && !msg.is_read) {
-      // Subtract from current folder scope
-      adjustUnreadCounts(msg, -1);
-      // Add into archive scope
-      adjustUnreadCounts({ ...msg, is_archived: true, folder: "archive" }, 1);
-      // Net on domain total = 0 (already canceled)
-      // but adjustUnreadCounts bumps domain both times; manually counterbalance:
-      setUnreadCounts((prev) => ({
-        ...prev,
-        domains: { ...prev.domains, [msg.domain_id]: Math.max(0, (prev.domains[msg.domain_id] || 0)) },
-      }));
+      applyUnreadTransitions([[msg, { ...msg, is_archived: true }]]);
     }
     setMessages((prev) => prev.filter((m) => m.id !== id));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
     await apiFetch(`${API_BASE}/messages`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_archived: true }),
     });
-  }, [selectedMessage, messages, adjustUnreadCounts]);
+  }, [selectedMessage, messages, applyUnreadTransitions]);
 
-  // Bulk actions
+  // Bulk actions — one ids[] PATCH per operation, one batched count update
+  const bulkPatch = useCallback((ids: string[], updates: Record<string, unknown>) =>
+    apiFetch(`${API_BASE}/messages`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, ...updates }),
+    }), []);
+
   const handleBulkMarkRead = useCallback(async (ids: string[]) => {
-    // Adjust unread counts for each message that was previously unread
     const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
-    for (const m of toAdjust) adjustUnreadCounts(m, -1);
+    applyUnreadTransitions(toAdjust.map((m) => [m, null]));
     setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_read: true } : m));
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_read: true }),
-      })
-    ));
-  }, [messages, adjustUnreadCounts]);
+    await bulkPatch(ids, { is_read: true });
+  }, [messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkMarkUnread = useCallback(async (ids: string[]) => {
     const toAdjust = messages.filter((m) => ids.includes(m.id) && m.is_read);
-    for (const m of toAdjust) adjustUnreadCounts(m, 1);
+    applyUnreadTransitions(toAdjust.map((m) => [null, m]));
     setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_read: false } : m));
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_read: false }),
-      })
-    ));
-  }, [messages, adjustUnreadCounts]);
+    await bulkPatch(ids, { is_read: false });
+  }, [messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkTrash = useCallback(async (ids: string[]) => {
     const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
-    for (const m of toAdjust) adjustUnreadCounts(m, -1);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_trash: true }]));
     setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - ids.length)));
     if (selectedMessage && ids.includes(selectedMessage.id)) setSelectedMessage(null);
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_trash: true }),
-      })
-    ));
-  }, [selectedMessage, messages, adjustUnreadCounts]);
+    await bulkPatch(ids, { is_trash: true });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkArchive = useCallback(async (ids: string[]) => {
+    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_archived: true }]));
     setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - ids.length)));
     if (selectedMessage && ids.includes(selectedMessage.id)) setSelectedMessage(null);
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_archived: true }),
-      })
-    ));
-  }, [selectedMessage]);
+    await bulkPatch(ids, { is_archived: true });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkStar = useCallback(async (ids: string[]) => {
+    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read && !m.is_starred);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_starred: true }]));
     setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_starred: true } : m));
     if (selectedMessage && ids.includes(selectedMessage.id)) {
       setSelectedMessage((prev) => prev ? { ...prev, is_starred: true } : null);
     }
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_starred: true }),
-      })
-    ));
-  }, [selectedMessage]);
+    await bulkPatch(ids, { is_starred: true });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkUnstar = useCallback(async (ids: string[]) => {
+    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read && m.is_starred);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_starred: false }]));
     setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_starred: false } : m));
     if (selectedMessage && ids.includes(selectedMessage.id)) {
       setSelectedMessage((prev) => prev ? { ...prev, is_starred: false } : null);
     }
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_starred: false }),
-      })
-    ));
-  }, [selectedMessage]);
+    await bulkPatch(ids, { is_starred: false });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   // Spam: marking moves to spam folder server-side; unmarking restores to inbox.
   // Either way, the message leaves the current list view (current view is never
   // both inbox and spam simultaneously).
   const handleBulkMarkSpam = useCallback(async (ids: string[]) => {
+    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_spam: true, folder: "spam" }]));
     setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - ids.length)));
     if (selectedMessage && ids.includes(selectedMessage.id)) setSelectedMessage(null);
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_spam: true }),
-      })
-    ));
-    fetchUnreadCounts();
-  }, [selectedMessage, fetchUnreadCounts]);
+    await bulkPatch(ids, { is_spam: true });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   const handleBulkMarkNotSpam = useCallback(async (ids: string[]) => {
+    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
+    applyUnreadTransitions(toAdjust.map((m) => [m, { ...m, is_spam: false, folder: "inbox" }]));
     setMessages((prev) => prev.filter((m) => !ids.includes(m.id)));
+    setTotalCount((c) => (c === null ? c : Math.max(0, c - ids.length)));
     if (selectedMessage && ids.includes(selectedMessage.id)) setSelectedMessage(null);
-    await Promise.all(ids.map((id) =>
-      apiFetch(`${API_BASE}/messages`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_spam: false }),
-      })
-    ));
-    fetchUnreadCounts();
-  }, [selectedMessage, fetchUnreadCounts]);
+    await bulkPatch(ids, { is_spam: false });
+  }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
   const handleToggleRead = useCallback(async (id: string, isRead: boolean) => {
-    // isRead is the CURRENT state; we flip it. If it was unread -> now read, delta=-1. Else +1.
+    // isRead is the CURRENT state; we flip it.
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
     if (msg) {
-      // Flipping from unread (isRead=false) to read: -1. Flipping from read to unread: +1.
-      adjustUnreadCounts(msg, isRead ? 1 : -1);
+      // unread -> read: leaves the pool. read -> unread: joins it.
+      applyUnreadTransitions([isRead ? [null, msg] : [msg, null]]);
     }
     // Optimistic update
     setMessages((prev) =>
@@ -841,7 +839,7 @@ export function EmailLayout() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, is_read: !isRead }),
     });
-  }, [selectedMessage, messages, adjustUnreadCounts]);
+  }, [selectedMessage, messages, applyUnreadTransitions]);
 
   // Compose modes
   const [composeMode, setComposeMode] = useState<"new" | "reply" | "reply-all" | "forward">("new");
@@ -915,10 +913,6 @@ export function EmailLayout() {
     if (activeFolder === "drafts") fetchDrafts();
   }, [loadPage, activeFolder, fetchDrafts]);
 
-  useEffect(() => {
-    fetchDomainFolderCounts();
-  }, [fetchDomainFolderCounts]);
-
   // Fetch unread counts on mount + whenever domains change
   useEffect(() => {
     if (domains.length > 0) fetchUnreadCounts();
@@ -947,7 +941,6 @@ export function EmailLayout() {
     const handleVisibility = () => {
       if (!document.hidden && !isMobileReaderOpen.current) {
         loadPage("poll");
-        fetchDomainFolderCounts();
         fetchUnreadCounts();
       }
     };
@@ -958,7 +951,7 @@ export function EmailLayout() {
       clearInterval(unreadInterval);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [loadPage, fetchDomainFolderCounts, fetchUnreadCounts]);
+  }, [loadPage, fetchUnreadCounts]);
 
   const unreadCount = messages.filter((m) => !m.is_read).length;
 
@@ -1277,10 +1270,8 @@ export function EmailLayout() {
           onCompose={() => { setComposeDraft(null); setShowCompose(true); }}
           onRefreshDomains={() => {
             fetchDomains();
-            fetchDomainFolderCounts();
             fetchUnreadCounts();
           }}
-          domainFolderCounts={domainFolderCounts}
           unreadCounts={unreadCounts}
         />
       </div>

@@ -54,7 +54,6 @@ interface FolderListProps {
   onAddDomain: () => void;
   onCompose: () => void;
   onRefreshDomains: () => void;
-  domainFolderCounts?: Record<string, Record<string, number>>;
   unreadCounts?: UnreadCountsShape;
 }
 
@@ -156,7 +155,6 @@ export function FolderList({
   onAddDomain,
   onCompose,
   onRefreshDomains,
-  domainFolderCounts = {},
   unreadCounts = { domains: {}, folders: {}, totals: {} },
 }: FolderListProps) {
   const [settingsDomain, setSettingsDomain] = useState<EmailDomain | null>(null);
@@ -240,8 +238,7 @@ export function FolderList({
 
   const isAllSelected = selectedDomain === null;
 
-  // Aggregate counts across all domains.
-  // Prefer live unreadCounts.totals when available; fall back to the legacy domainFolderCounts for any keys not provided.
+  // Aggregate counts across all domains (live unread counts).
   const allCounts: Record<string, number> = {
     inbox: unreadCounts.totals.inbox ?? 0,
     sent: unreadCounts.totals.sent ?? 0,
@@ -250,12 +247,6 @@ export function FolderList({
     spam: unreadCounts.totals.spam ?? 0,
     trash: unreadCounts.totals.trash ?? 0,
   };
-  // Fallback merge from legacy counts for anything missing (e.g. fresh page load before fetch)
-  for (const counts of Object.values(domainFolderCounts)) {
-    for (const [key, val] of Object.entries(counts)) {
-      if (!allCounts[key]) allCounts[key] = (allCounts[key] || 0) + val;
-    }
-  }
 
   const activeFavorites = allFavoriteDefs.filter((f) => favoriteItems.includes(f.id));
 
@@ -377,7 +368,7 @@ export function FolderList({
                         const domainCount =
                           f.countKey === "drafts"
                             ? 0
-                            : (unreadCounts.folders[d.id]?.[f.countKey] ?? domainFolderCounts[d.id]?.[f.countKey] ?? 0);
+                            : (unreadCounts.folders[d.id]?.[f.countKey] ?? 0);
                         const isSubActive =
                           selectedDomain?.id === d.id && activeFolder === f.id && !selectedAddress;
 
@@ -498,9 +489,9 @@ export function FolderList({
             // Per-folder unread counts (live)
             const liveFolderCounts = unreadCounts.folders[d.id] || {};
             const counts: Record<string, number> = {
-              inbox: liveFolderCounts.inbox ?? domainFolderCounts[d.id]?.inbox ?? 0,
+              inbox: liveFolderCounts.inbox ?? 0,
               sent: liveFolderCounts.sent ?? 0,
-              drafts: domainFolderCounts[d.id]?.drafts ?? 0,
+              drafts: 0,
               starred: liveFolderCounts.starred ?? 0,
               archive: liveFolderCounts.archive ?? 0,
               spam: liveFolderCounts.spam ?? 0,
