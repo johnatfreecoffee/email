@@ -160,14 +160,19 @@ Resend's single webhook for all events; multiplexes on `payload.type`.
   | `is_spam` | — | `"true"/"false"` |
   | `is_catch_all` | — | `"true"/"false"` |
   | `show_catchall` | `false` | `"true"` blends catch-alls into inbox |
-  | `search` | — | ILIKE over subject/from_address/body_text (**interpolated unescaped into `or=(…ilike…)` at messages.ts:99/145 — injection risk**) |
+  | `search` | — | ILIKE over subject/from_address/body_text (value sanitized: `,()"'\` stripped + URL-encoded before interpolation) |
   | `limit` | `50` | capped at **500** |
-  | `offset` | `0` | pagination |
-  | `count_only` | `false` | `"true"` → `{count}` via `Prefer: count=exact`, `Range: 0-0`, `content-range` header |
+  | `offset` | `0` | offset pagination (ignored when `cursor` present) |
+  | `count_only` | `false` | `"true"` → `{count}` via `Prefer: count=exact`, `Range: 0-0`, `content-range` header (legacy; app no longer calls it) |
+  | `cursor` | — | **keyset cursor** (opaque base64url of last row's `{ts: received_at, id}`); switches response to the envelope |
+  | `with_total` | `false` | `"true"` → envelope response with `total` for the filter set (rides the list query via `Prefer: count=exact`; **always `null` when `search` present** — counting an ilike scan trips the statement timeout) |
+  | `has_attachments` | `false` | `"true"` → only messages with ≥1 attachment (`email_attachments!inner` embed; rows arrive with a populated `attachments` array) |
+  - Sort is `received_at.desc,id.desc` (stable tiebreak for bulk-imported rows sharing timestamps).
+  - **Envelope mode** (when `cursor` or `with_total` sent): `{ messages, total: number|null, next_cursor: string|null, has_more: boolean }`. Without those params the response stays the legacy bare array — old clients/open tabs unaffected. `next_cursor` is built server-side from the last row; echo it back verbatim for the next page. Malformed cursors → `400`.
   - Folder→filter: `starred`→`is_starred=eq.true&is_trash=eq.false`; `trash`→`is_trash=eq.true`; `all`→`is_trash=eq.false`; else→`folder=eq.<f>&is_trash=eq.false&is_archived=eq.false`.
   - Catch-all default: if `is_catch_all` param absent, defaults to `"false"` **only when** `folder==="inbox"` and `show_catchall!=="true"`; otherwise no filter. So plain inbox hides catch-alls.
-  - Address + show_catchall + inbox → OR filter `or=(address_id.eq.<id>,is_catch_all.eq.true)`.
-- **PATCH**: body `{ id(req), is_read?, is_starred?, is_archived?, is_trash?, is_spam?, folder? }`. `is_spam=true` forces `folder="spam"`; `is_spam=false` with no explicit folder forces `folder="inbox"`. **Side effect** when `is_spam` present: upserts `email_sender_reputation` (`from_address` key, PATCH-then-POST) with `verdict=spam|trusted`, `spam_score=1.0|0.0`, `user_override=true`. This is the mark-read mechanism (`{id, is_read:true}`); no bulk endpoint. Returns updated row.
+  - Address + show_catchall + inbox → OR filter `or=(address_id.eq.<id>,is_catch_all.eq.true)`. The keyset filter uses a top-level `and=(or(received_at.lt.…,and(received_at.eq.…,id.lt.…)))` wrapper so it can't collide with these `or=` params; the timestamp is percent-encoded (timestamptz contains `+`).
+- **PATCH**: body `{ id? | ids?: string[], is_read?, is_starred?, is_archived?, is_trash?, is_spam?, folder? }`. One of `id`/`ids` required; `ids` (bulk, ≤500 UUID-validated entries) updates every row via `id=in.(…)` and returns the updated **array** (single `id` keeps returning the object). `is_spam=true` forces `folder="spam"`; `is_spam=false` with no explicit folder forces `folder="inbox"`. **Side effect** when `is_spam` present: upserts `email_sender_reputation` once per **distinct** sender in the result (PATCH-then-POST) with `verdict=spam|trusted`, `spam_score=1.0|0.0`, `user_override=true`. This is the mark-read mechanism (`{id, is_read:true}`).
 - **DELETE** (`?id=`): **hard permanent delete** (`DELETE email_messages?id=eq.`; cascades attachments). Soft-delete = PATCH `is_trash:true`. Any other method → `405`.
 
 #### `GET|POST|PATCH|DELETE /api/email/drafts` (`drafts.ts`) — auth-gated
@@ -416,16 +421,16 @@ Framework: Next.js **16.1.6** App Router, React **19.2.3**, Tailwind **v4**, sha
 - **`/email`** (`src/app/email/page.tsx`) — the real client. Trivial shell: `<Sidebar/>` + `<TopNav/>` + `<main className="pt-14 mc-content-offset"><EmailLayout/></main>`. Owns no state.
 - **`/inbox`** (`src/app/inbox/page.tsx`) — **NOT email.** A Linear-style unified activity feed reading Supabase directly (`mc_issues`, `mc_issue_read_states`, `mc_issue_comments`, `mc_approvals`, `mc_notifications`, `mc_agent_runs`+`mc_agents`). Shares no components with email. Do not port.
 
-### Component tree (email)
+### Component tree (email) — post Apple Mail revamp (2026-07-18)
 ```
 /email (page.tsx)
-└─ EmailLayout (email-layout.tsx)          ← owns ALL data + state (~1550 lines, ~40 props down)
+└─ EmailLayout (email-layout.tsx)          ← owns ALL data + state
    ├─ [push banner]                        ← inline JSX
-   ├─ FolderList (folder-list.tsx)         ← domains, folders, favorites, push toggle
+   ├─ FolderList (folder-list.tsx)         ← SidebarRow-based; Favorites v2 (favorites.ts), ThemeMenu, push, refresh
    │   └─ DomainSettingsPanel (domain-settings-panel.tsx)  ← addresses / catch-all / danger
-   ├─ MessageList (message-list.tsx)       ← search, filters, pagination, bulk bar
-   │   ├─ MessageTable (message-table.tsx) ← DESKTOP (md+): virtualized grid
-   │   └─ MessageRow (inline in message-list.tsx) ← MOBILE: swipeable cards
+   ├─ MessageList (message-list.tsx)       ← search, filter chips, bulk bar, "N new" chip
+   │   ├─ MessageListVirtual (message-list-virtual.tsx) ← DESKTOP (md+): stacked 84px preview rows, virtualized
+   │   └─ MessageRow (inline in message-list.tsx) ← MOBILE: swipeable cards + IntersectionObserver load-more
    ├─ MessageReader (message-reader.tsx)   ← right column / mobile bottom sheet
    │   └─ MobileReaderSheet (inline in email-layout.tsx)
    ├─ ComposeModal (compose-modal.tsx)     ← new/reply/reply-all/forward + drafts
@@ -434,37 +439,47 @@ Framework: Next.js **16.1.6** App Router, React **19.2.3**, Tailwind **v4**, sha
    ├─ DomainSetup (domain-setup.tsx)       ← add-domain wizard (MX-conflict flow)
    └─ [keyboard shortcuts help modal]      ← inline JSX
 ```
-Shared interfaces `EmailDomain`, `EmailAddress`, `EmailMessage` are **exported from `email-layout.tsx`** and imported everywhere — keep them there.
+Shared interfaces `EmailDomain`, `EmailAddress`, `EmailMessage` are **exported from `email-layout.tsx`**; date helpers live in `format.ts`. `message-table.tsx` (old column grid) is deleted.
 
 ### Who owns what
-- **EmailLayout** — single source of truth: all `/api/email/*` fetching + mutation, pagination, polling, keyboard shortcuts, optimistic unread accounting, resizable columns, mobile view switching, deep-link handling.
-- **MessageTable** — owns sort/column-width localStorage + virtualization.
-- **FolderList / AddressAutocomplete / RichEditor / ComposeModal / DomainSettingsPanel / DomainSetup** — make their own `/api/email/*` calls for local concerns.
-- Others are presentational.
+- **EmailLayout** — single source of truth: the `loadPage("reset"|"more"|"poll")` fetch pipeline, request guards (generation counter + AbortController), optimistic unread accounting (`applyUnreadTransitions` + `primaryBucket`, an exact mirror of unread-counts.ts bucket rules), debounced 1.5s count reconcile (seq-guarded), polling, keyboard shortcuts, resizable panes, mobile view switching.
+- **FolderList** — Favorites v2 (typed refs in `localStorage["email.favorites.v2"]`, dnd reorder via @hello-pangea/dnd in Edit mode, legacy `email-favorite-items` migrates on first load), theme menu (`useTheme`), push toggle/test, refresh.
+- **MessageListVirtual** — virtualization + multi-select/keyboard; renders in server order (no client sort).
+- **AddressAutocomplete / RichEditor / ComposeModal / DomainSettingsPanel / DomainSetup** — make their own `/api/email/*` calls for local concerns.
+
+### Theme system
+- Tokens: `src/styles/theme.css` (`--mc-*`) + shadcn block in `globals.css` — `:root` = light, `.dark` = dark. Apple palette (accent `#007AFF`/`#0A84FF`; success/warning/danger/star = Apple system colors). System font stack; `--radius: 0.5rem`; touch rules (44px/16px) scoped to `@media (pointer: coarse)`.
+- `src/lib/theme.tsx`: pref `system|light|dark` in `localStorage["mc-theme"]` (legacy values parse); matchMedia tracking while `system`; applied class = `.dark` + `data-theme`. **No-flash inline script in `layout.tsx` head** (static export) sets the class pre-paint. Never remove a `--mc-*` name — inline styles depend on them.
 
 ### Auth surface (`src/lib/auth.tsx`)
-- `apiFetch(url, init?)` — the ONLY way email talks to the backend; merges `authHeaders()` = `{ "X-MC-Auth": localStorage["mc-auth-token"] }`. No cookie. Token from `POST /api/auth/login` → `{token, user}`; validated via `GET /api/auth/me`.
-- `AuthProvider` gates the app; `/email` is NOT public (only `/deals/view`, `/deals/snapshot` are). For the fork you can stub `apiFetch` to plain `fetch` or a static token.
+- `apiFetch(url, init?)` — the ONLY way email talks to the backend; merges `authHeaders()` = `{ "X-MC-Auth": localStorage["mc-auth-token"] }`; `init.signal` passes through (list resets abort in-flight requests). Single-tenant login gate (hardcoded email/password) seeds the token from `NEXT_PUBLIC_MC_API_SECRET`.
 
-### EmailLayout endpoints (all via `apiFetch`, `API_BASE="/api/email"`)
-`fetchDomains` (GET domains), `fetchTotalCount` (GET messages count_only), `fetchMessages` (GET messages paged), `fetchDomainFolderCounts` (per-domain count_only via Promise.all), `fetchUnreadCounts` (GET unread-counts), `fetchFullMessage` (GET messages?id → PATCH is_read:true if unread), star/trash/archive/spam/read toggles (PATCH messages), bulk ops (N× PATCH via Promise.all), `fetchDrafts` (GET drafts when folder=drafts), new-mail notify (`POST /api/notifications`). `buildFilterParams()` is the shared query builder for count+list.
+### EmailLayout data flow (all via `apiFetch`, `API_BASE="/api/email"`)
+- **`loadPage(kind)`** is the single list pipeline consuming the envelope API:
+  - `reset` — any filter/folder/domain/address/search change or manual refresh: `limit=50&with_total=true`, bumps a generation counter and aborts in-flight; replaces the accumulated list; stores `next_cursor`/`has_more`. Stale responses (older generation) are dropped.
+  - `more` — infinite scroll: `cursor=<next_cursor>`, appends with id-dedup.
+  - `poll` — 30s/visibility: first page + total, **merged in place** (flag-field refresh only; tail rows never removed). New arrivals prepend when scrolled to top, else buffer into `pendingNew` → "N new messages" chip.
+- `totalCount` is `null` during search (server skips the count); the list header shows `N+ results` instead.
+- Search input debounces 300ms before committing to the fetch-driving query.
+- **Counts**: every mutation reports `(before, after)` unread-flag pairs to `applyUnreadTransitions` — correct buckets incl. catch-all, starred-additive, trash; bulk ops = one `ids[]` PATCH + one batched count update; then a debounced 1.5s `fetchUnreadCounts()` reconciles (seq guard prevents older responses clobbering newer).
+- Other calls: `fetchDomains`, `fetchUnreadCounts`, `fetchFullMessage` (GET ?id → PATCH is_read), `fetchDrafts`, `bulkPatch(ids, updates)`.
 
 ### Polling & lifecycle
-- On mount: `fetchDomains()` + a `navigator.serviceWorker` `"message"` listener (SW posts `{type:"notification-click", data:{type:"email", messageId}}` → refetch + open message).
-- **30s poll** of `fetchMessages` + **60s poll** of `fetchUnreadCounts`, both gated on `!document.hidden && !isMobileReaderOpen`. `visibilitychange` refetches on refocus.
-- Smart re-render guard (fingerprint `id:is_read:is_starred`) skips flicker; only first fetch shows spinner. Optimistic `adjustUnreadCounts(±1)`.
+- On mount: `fetchDomains()` + SW `"message"` listener (notification-click → `loadPage("poll")` + open message via `loadPageRef`).
+- **30s** `loadPage("poll")` + **60s** `fetchUnreadCounts`, both gated on `!document.hidden && !isMobileReaderOpen`; `visibilitychange` runs both.
+- List-header refresh = `loadPage("reset")` + `fetchUnreadCounts` (+drafts in drafts); sidebar refresh = `fetchDomains` + `fetchUnreadCounts`.
 
 ### Keyboard shortcuts (global keydown, ignored in inputs)
-`j/↓`,`k/↑` navigate; `Enter` open; `u` read; `s` star; `c` compose; `r` reply; `Shift+R` reply-all; `f` forward; `a` archive; `Delete/Backspace` trash; `Space`/`Shift+Space` scroll reader; `Esc` close; `?` help; `]`/`Cmd+→` next page, `[`/`Cmd+←` prev. Auto-mark-read after 1500ms focus.
+`j/↓`,`k/↑` navigate; `Enter` open; `u` read; `s` star; `c` compose; `r` reply; `Shift+R` reply-all; `f` forward; `a` archive; `Delete/Backspace` trash; `Space`/`Shift+Space` scroll reader; `Esc` close; `?` help. Auto-mark-read after 1500ms focus. (Page-turn shortcuts removed with the pager.)
 
 ### MessageList / MessageRow
-Responsive via `useIsDesktop()` (`matchMedia("(min-width:768px)")`). Desktop → MessageTable; mobile → date-grouped swipeable MessageRow (`Today/Yesterday/This Week/Earlier`). Owns `selectedIds:Set`, `selectMode`, recipient-filter dropdown. Quick-filter pills All/Unread/Starred/Files (attachments client-side). Catch-all toggle pill (inbox only). Pagination + page-size (20/30/50/100). Bulk action bar. MessageRow swipe: native `touchmove passive:false`, thresholds `SWIPE_THRESHOLD=80`, `SWIPE_SHOW=40`; right→toggle read, left→archive/star/trash panel.
+Responsive via `useIsDesktop()` (`matchMedia("(min-width:768px)")`). Desktop → MessageListVirtual; mobile → date-grouped swipeable MessageRow (`Today/Yesterday/This Week/Earlier`) with an IntersectionObserver sentinel (`rootMargin: 400px`) for load-more. Owns `selectedIds:Set` (cleared on `scrollResetSignal` only — NOT on every messages change), `selectMode`, recipient dropdown. Quick filters All/Unread/Starred/Files are all server-side (`is_read`/`is_starred`/`has_attachments`). Catch-all toggle is icon-only (Shield + Eye/EyeOff). MessageRow swipe: right→toggle read, left→archive/star/trash panel.
 
-### MessageTable (virtualization)
-`@tanstack/react-virtual` v3 `useVirtualizer`, `estimateSize=32` (`ROW_HEIGHT=32`), `overscan:10`, absolute rows in a `getTotalSize()` spacer (claims 40k+ rows). Columns: select(32) / unread(28) / From(200) / Subject(flex) / Date(96); widths persisted `localStorage["mc.email.columnWidths"]`. Sort persisted `localStorage["mc.email.sort"]`, default `{date,desc}`. **Stable-order trick:** `sortedIds` memoized on `messageIdsKey`+`sort` (not per-message fields) so rows don't jump when marking read/star. Multi-select: click/Cmd+click/Shift+click/checkbox; Shift+↑/↓. Grid `tabIndex=0 role="grid"` auto-focused.
+### MessageListVirtual (desktop list)
+`@tanstack/react-virtual` with per-index sizes (28px date-group headers / 84px rows), `overscan: 8`. Row = sender (semibold when unread) + flag/clip/date, subject, two-line preview, 9px blue unread dot in a 24px gutter (click toggles read). **Active row = solid `--mc-selected-bg` with white text**; multi-selected = accent tint; keyboard-focused = hover gray. Renders in parent (server) order; keyboard order always matches visual order. Multi-select: Cmd/Ctrl+click toggle, Shift+click/Shift+↑↓ range, Delete trashes. Load-more fires from the scroll handler (<800px from bottom) and a virtual-items tail effect.
 
 ### MessageReader
-Presentational. Toolbar Reply/ReplyAll/Forward | Read/Star | Archive/Spam/Trash. Gradient avatar, click-to-copy email. Attachments link to `${supabaseUrl}/storage/v1/object/public/email-attachments/${storage_path}` (`supabaseUrl` from `<meta name="supabase-url">` or fallback `https://YOUR_PROJECT_REF.supabase.co`); images thumbnail. **Body HTML rendered in a sandboxed `<iframe srcDoc sandbox="allow-same-origin">`** with injected CSS + onLoad resize — the security boundary for untrusted email HTML; **preserve it**. Else `body_text` in `<pre>`. Mobile → `MobileReaderSheet` (swipe-down dismiss from top 48px, >120px).
+Toolbar (monochrome, Mail order): Reply/ReplyAll/Forward | Archive/Junk/Trash | Flag/Read. Flat gray monogram avatar; collapsed `To: … Details` line expands to full To/Cc with click-to-copy. Attachments link to `${supabaseUrl}/storage/v1/object/public/email-attachments/${storage_path}`; images thumbnail. **Body HTML rendered in a sandboxed `<iframe srcDoc>`** on a forced-white sheet (`color-scheme: light`, Apple-blue links, hairline border in dark mode) with the link-hijack that opens everything in a new tab — the security boundary for untrusted email HTML; **preserve it**. Plain text renders themed in `<pre>`. Mobile → `MobileReaderSheet` (swipe-down dismiss).
 
 ### ComposeModal / RichEditor / AddressAutocomplete
 - **ComposeModal**: `fromOptions` from `domains×addresses`; fallback `John Romano <john@{domain}>`. reply-all strips own addresses; forward builds quoted block. Send → `POST /api/email/send` `{from,to[],cc?,bcc?,subject,text,html,in_reply_to?(=replyTo.resend_email_id),domain_id,address_id,attachments?}`; attachments via `FileReader.readAsDataURL` → base64. Drafts: `POST/PATCH/DELETE /api/email/drafts`; ⌘S + 30s autosave. Requires from+to+subject.
@@ -472,7 +487,7 @@ Presentational. Toolbar Reply/ReplyAll/Forward | Read/Star | Archive/Spam/Trash.
 - **AddressAutocomplete**: chip input, debounced 150ms → `GET /api/email/contacts?limit=5` (empty) / `?q=&limit=8`. Enter/Tab/`,` commit (needs `@`).
 
 ### FolderList (localStorage-heavy)
-Keys: `email-collapsed-domains`, `email-favorites-visible/collapsed`, `email-favorite-items` (default `["inbox","sent","drafts","starred"]`), per-domain address stickiness `mc.email.address.{domainId}`. Favorites section (cross-domain rollups from `unreadCounts.totals`/`.folders`). Domain accounts with health dot (red failed/error, amber pending, green active/verified), Settings gear → DomainSettingsPanel, Catch-All virtual folder (Shield) when `catch_all_enabled`. `folderDefs`: `inbox, sent, drafts, starred, archive, spam, trash`. Bottom: push toggle, "🧪 Test Push" (`POST /api/email/push-test`), Refresh.
+Keys: `email-collapsed-domains`, `email-favorites-visible`, **`email.favorites.v2`** (`{v:2, items: FavoriteRef[]}` — kinds `folder | domain-folder | address | catchall`; legacy `email-favorite-items` migrates on first load; stale refs prune once domains load), per-domain address stickiness `mc.email.address.{domainId}`, theme `mc-theme`. Rows via shared `SidebarRow` (28px, blue icon, plain right-aligned unread number, gray-pill selection). Favorites Edit mode: dnd reorder (@hello-pangea/dnd), remove buttons, `+` pins on every folder/catch-all/address row. Domain sections: health dot (red failed/error, amber pending, green active/verified), hover Settings gear → DomainSettingsPanel, Catch-All virtual folder (Shield) when `catch_all_enabled`, Addresses sublist. Folder labels are Mail-style (`Flagged`, `Junk`). Footer icon row: ThemeMenu (System/Light/Dark) · push toggle · test-push (`POST /api/email/push-test`, shown when enabled) · Refresh.
 
 ### DomainSetup / DomainSettingsPanel
 - **DomainSetup**: state machine `input|checking|conflict|configuring|done|error`. `POST /api/email/domains {check_only:true}` → conflict UI or create → `POST {force_replace_mx?}` (409 re-enters conflict) → `POST /api/email/domains-verify {domain_id, resend_domain_id}`.

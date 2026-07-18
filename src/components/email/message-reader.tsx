@@ -106,37 +106,31 @@ function CopyableAddress({ address }: { address: string }) {
   return <CopyableEmail email={address} />;
 }
 
-// Toolbar action button component
+// Toolbar action button — monochrome, Mail-style: gray icon, neutral hover
 function ToolbarButton({
   onClick,
   icon: Icon,
   title,
-  hoverColor = "var(--mc-accent)",
-  hoverBg = "var(--mc-accent-bg)",
   active = false,
   activeColor,
 }: {
   onClick: () => void;
   icon: typeof Reply;
   title: string;
-  hoverColor?: string;
-  hoverBg?: string;
   active?: boolean;
   activeColor?: string;
 }) {
   return (
     <button
       onClick={onClick}
-      className="p-2 rounded-lg transition-all"
+      className="p-1.5 rounded-md transition-colors"
       style={{
-        color: active && activeColor ? activeColor : "var(--mc-text-faint)",
+        color: active && activeColor ? activeColor : "var(--mc-text-muted)",
       }}
       onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.color = hoverColor;
-        (e.currentTarget as HTMLElement).style.backgroundColor = hoverBg;
+        (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
       }}
       onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.color = active && activeColor ? activeColor : "var(--mc-text-faint)";
         (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
       }}
       title={title}
@@ -177,6 +171,49 @@ export function MessageReader({
   const hasMultipleRecipients = toList.length > 1 || (ccList && ccList.length > 0);
 
   return (
+    <MessageReaderBody
+      key={message.id}
+      message={message}
+      toList={toList}
+      ccList={ccList}
+      hasMultipleRecipients={!!hasMultipleRecipients}
+      onTrash={onTrash}
+      onArchive={onArchive}
+      onToggleStar={onToggleStar}
+      onToggleSpam={onToggleSpam}
+      onReply={onReply}
+      onReplyAll={onReplyAll}
+      onForward={onForward}
+      onToggleRead={onToggleRead}
+      onBack={onBack}
+    />
+  );
+}
+
+function MessageReaderBody({
+  message,
+  toList,
+  ccList,
+  hasMultipleRecipients,
+  onTrash,
+  onArchive,
+  onToggleStar,
+  onToggleSpam,
+  onReply,
+  onReplyAll,
+  onForward,
+  onToggleRead,
+  onBack,
+}: {
+  message: EmailMessage;
+  toList: string[];
+  ccList: string[] | null;
+  hasMultipleRecipients: boolean;
+} & Omit<MessageReaderProps, "message">) {
+  // Mail-style collapsed recipient line with a Details toggle
+  const [showDetails, setShowDetails] = useState(false);
+
+  return (
     <div className="flex flex-col h-full">
       {/* Top actions bar — grouped with dividers */}
       <div
@@ -208,79 +245,67 @@ export function MessageReader({
         {/* Divider */}
         <div className="w-px h-5 mx-1" style={{ backgroundColor: "var(--mc-border)" }} />
 
-        {/* Status group */}
-        <ToolbarButton
-          onClick={() => onToggleRead(message.id, message.is_read)}
-          icon={message.is_read ? MailOpen : Mail}
-          title={message.is_read ? "Mark as unread (u)" : "Mark as read (u)"}
-        />
-        <ToolbarButton
-          onClick={() => onToggleStar(message.id, message.is_starred)}
-          icon={Star}
-          title={message.is_starred ? "Unstar (s)" : "Star (s)"}
-          hoverColor="var(--mc-star)"
-          hoverBg="var(--mc-accent-bg-hover)"
-          active={message.is_starred}
-          activeColor="var(--mc-star)"
-        />
-
-        {/* Divider */}
-        <div className="w-px h-5 mx-1" style={{ backgroundColor: "var(--mc-border)" }} />
-
-        {/* Destructive group */}
-        <ToolbarButton
-          onClick={() => onArchive(message.id)}
-          icon={Archive}
-          title="Archive (a)"
-          hoverColor="var(--mc-warning)"
-          hoverBg="var(--mc-accent-bg-hover)"
-        />
+        {/* File group — Mail order: Archive · Junk · Trash */}
+        <ToolbarButton onClick={() => onArchive(message.id)} icon={Archive} title="Archive (a)" />
         {onToggleSpam && (
           message.folder === "spam" || message.is_spam ? (
             <ToolbarButton
               onClick={() => onToggleSpam(message.id, true)}
               icon={Mail}
-              title="Not spam — restore to inbox and trust the sender"
-              hoverColor="var(--mc-success)"
-              hoverBg="rgba(52, 199, 89, 0.12)"
+              title="Not junk — restore to inbox and trust the sender"
             />
           ) : (
             <ToolbarButton
               onClick={() => onToggleSpam(message.id, false)}
               icon={AlertOctagon}
-              title="Mark as spam"
-              hoverColor="var(--mc-danger)"
-              hoverBg="rgba(255, 59, 48, 0.1)"
+              title="Move to Junk"
             />
           )
         )}
+        <ToolbarButton onClick={() => onTrash(message.id)} icon={Trash2} title="Trash (Delete)" />
+
+        {/* Divider */}
+        <div className="w-px h-5 mx-1" style={{ backgroundColor: "var(--mc-border)" }} />
+
+        {/* Flag + read state */}
         <ToolbarButton
-          onClick={() => onTrash(message.id)}
-          icon={Trash2}
-          title="Trash (Delete)"
-          hoverColor="var(--mc-danger)"
-          hoverBg="rgba(255, 59, 48, 0.1)"
+          onClick={() => onToggleStar(message.id, message.is_starred)}
+          icon={Star}
+          title={message.is_starred ? "Unflag (s)" : "Flag (s)"}
+          active={message.is_starred}
+          activeColor="var(--mc-star)"
+        />
+        <ToolbarButton
+          onClick={() => onToggleRead(message.id, message.is_read)}
+          icon={message.is_read ? MailOpen : Mail}
+          title={message.is_read ? "Mark as unread (u)" : "Mark as read (u)"}
         />
       </div>
 
       {/* Message header */}
       <div className="px-6 py-4" style={{ borderBottom: "1px solid var(--mc-border)" }}>
         <div className="flex items-start gap-3">
-          {/* Avatar */}
-          <div className="h-10 w-10 rounded-full bg-mc-teal flex items-center justify-center text-white text-[15px] font-bold flex-shrink-0 mt-0.5">
+          {/* Avatar — flat monogram circle */}
+          <div
+            className="h-10 w-10 rounded-full flex items-center justify-center text-[15px] font-semibold flex-shrink-0 mt-0.5"
+            style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}
+          >
             {(message.from_name || message.from_address)[0]?.toUpperCase() || "?"}
           </div>
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>
+              <span className="text-[14px] font-semibold" style={{ color: "var(--mc-text)" }}>
                 <CopyableEmail
                   name={message.from_name || undefined}
                   email={message.from_address}
                 />
               </span>
               {message.is_catch_all && (
-                <span className="text-[10px] font-bold bg-[var(--mc-accent-bg-hover)] text-mc-amber px-1.5 py-0.5 rounded">
+                <span
+                  className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: "rgba(255, 149, 0, 0.15)", color: "var(--mc-warning)" }}
+                >
                   CATCH-ALL
                 </span>
               )}
@@ -291,32 +316,55 @@ export function MessageReader({
               )}
             </div>
 
-            {/* To line */}
-            <div className="text-[12px] mt-1 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
-              <span className="flex-shrink-0">To:</span>
-              <span className="flex flex-wrap gap-x-1.5">
-                {toList.map((addr, i) => (
-                  <span key={i}>
-                    <CopyableAddress address={addr} />
-                    {i < toList.length - 1 && <span style={{ color: "var(--mc-text-faint)" }}>,</span>}
-                  </span>
-                ))}
-              </span>
-            </div>
-
-            {/* CC line */}
-            {ccList && (
-              <div className="text-[12px] mt-0.5 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
-                <span className="flex-shrink-0">Cc:</span>
-                <span className="flex flex-wrap gap-x-1.5">
-                  {ccList.map((addr, i) => (
-                    <span key={i}>
-                      <CopyableAddress address={addr} />
-                      {i < ccList.length - 1 && <span style={{ color: "var(--mc-text-faint)" }}>,</span>}
-                    </span>
-                  ))}
+            {/* Recipients — collapsed summary with a Details toggle */}
+            {!showDetails ? (
+              <div className="text-[12px] mt-1 flex items-center gap-1.5 min-w-0" style={{ color: "var(--mc-text-muted)" }}>
+                <span className="truncate">
+                  To: {toList.map((a) => a.replace(/\s*<.*>$/, "")).join(", ")}
+                  {ccList ? ` · Cc: ${ccList.length}` : ""}
                 </span>
+                <button
+                  onClick={() => setShowDetails(true)}
+                  className="flex-shrink-0 text-[11px] transition-colors"
+                  style={{ color: "var(--mc-accent)" }}
+                >
+                  Details
+                </button>
               </div>
+            ) : (
+              <>
+                <div className="text-[12px] mt-1 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
+                  <span className="flex-shrink-0">To:</span>
+                  <span className="flex flex-wrap gap-x-1.5 flex-1 min-w-0">
+                    {toList.map((addr, i) => (
+                      <span key={i}>
+                        <CopyableAddress address={addr} />
+                        {i < toList.length - 1 && <span style={{ color: "var(--mc-text-faint)" }}>,</span>}
+                      </span>
+                    ))}
+                  </span>
+                  <button
+                    onClick={() => setShowDetails(false)}
+                    className="flex-shrink-0 text-[11px] transition-colors"
+                    style={{ color: "var(--mc-accent)" }}
+                  >
+                    Hide
+                  </button>
+                </div>
+                {ccList && (
+                  <div className="text-[12px] mt-0.5 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
+                    <span className="flex-shrink-0">Cc:</span>
+                    <span className="flex flex-wrap gap-x-1.5">
+                      {ccList.map((addr, i) => (
+                        <span key={i}>
+                          <CopyableAddress address={addr} />
+                          {i < ccList.length - 1 && <span style={{ color: "var(--mc-text-faint)" }}>,</span>}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -325,7 +373,7 @@ export function MessageReader({
           </span>
         </div>
 
-        <h1 className="text-[18px] font-semibold mt-4" style={{ color: "var(--mc-text)" }}>
+        <h1 className="text-[16px] font-semibold mt-3" style={{ color: "var(--mc-text)" }}>
           {message.subject || "(no subject)"}
         </h1>
       </div>
@@ -396,6 +444,9 @@ export function MessageReader({
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <base target="_blank">
                 <style>
+                  /* Mail renders messages on a white sheet even in dark mode;
+                     pin the UA to light so form controls/scrollbars match. */
+                  :root { color-scheme: light; }
                   body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                     font-size: 14px;
@@ -409,7 +460,7 @@ export function MessageReader({
                   }
                   /* Force readable text on any background */
                   * { color: inherit; }
-                  a { color: #0284c7 !important; cursor: pointer; }
+                  a { color: #007AFF !important; cursor: pointer; }
                   img { max-width: 100%; height: auto; }
                   table { max-width: 100% !important; }
                   blockquote {
@@ -434,8 +485,13 @@ export function MessageReader({
             // allow-popups + escape: target=_blank / window.open leave the app
             sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
             referrerPolicy="no-referrer"
-            className="w-full border-none min-h-[300px]"
-            style={{ background: "#ffffff", borderRadius: "8px" }}
+            className="w-full min-h-[300px]"
+            style={{
+              background: "#ffffff",
+              borderRadius: "8px",
+              // Visible hairline around the white sheet in dark mode; subtle in light
+              border: "1px solid var(--mc-border-subtle)",
+            }}
             onLoad={(e) => {
               const iframe = e.target as HTMLIFrameElement;
               const doc = iframe.contentDocument;

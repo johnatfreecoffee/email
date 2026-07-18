@@ -4,6 +4,7 @@
 **Path:** `/Users/johnromano/Documents/email`
 **Forked:** 2026-07-08 from `~/Projects/mission-control`
 **Status:** Live on Cloudflare Pages. Do not delete email from MC until this is proven.
+**2026-07-18:** Apple Mail revamp shipped — light/dark (System default), Apple-blue tokens, stacked desktop preview rows, keyset-cursor infinite scroll (envelope API), instant unread counts (catch-all bucket fixed), Favorites v2 (pin any mailbox + drag reorder).
 **Live URL:** https://email-app-7rp.pages.dev
 **GitHub:** https://github.com/johnatfreecoffee/email
 
