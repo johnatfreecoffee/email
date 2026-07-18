@@ -602,14 +602,22 @@ export const onRequest = async (context: CFContext) => {
           vapidPrivateKey
         );
 
-        // Deactivate any subscriptions that got 404/410 (expired/unsubscribed)
+        // Prune permanently-dead subscriptions: expired (404/410), VAPID-key
+        // mismatch (403 — old key, fails forever), malformed (400), corrupt
+        // stored keys (DER parse failure). Transient failures stay active.
         for (const { id, result } of results) {
-          if (result.status === 404 || result.status === 410) {
+          const dead =
+            result.status === 400 ||
+            result.status === 403 ||
+            result.status === 404 ||
+            result.status === 410 ||
+            (result.error || "").includes("Invalid DER");
+          if (dead) {
             await supabaseQuery(env, `/mc_push_subscriptions?id=eq.${id}`, {
               method: "PATCH",
               body: { is_active: false, updated_at: new Date().toISOString() },
             });
-            console.log(`Deactivated expired push subscription ${id}`);
+            console.log(`Deactivated dead push subscription ${id} (${result.status ?? result.error})`);
           } else if (!result.success) {
             console.error(`Push to ${id} failed: ${result.status} ${result.error || result.statusText}`);
           }

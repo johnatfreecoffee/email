@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef, type RefObject } from "react";
 import { HelpCircle, X, Bell } from "lucide-react";
 import { FolderList } from "./folder-list";
-import { isPushSupported, getCurrentSubscription, subscribeToPush, registerServiceWorker } from "@/lib/push-notifications";
+import { usePush } from "@/lib/push-notifications";
+import { Toaster } from "@/lib/toast";
 import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
@@ -1164,43 +1165,30 @@ export function EmailLayout() {
     return () => window.removeEventListener("keydown", handler);
   }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
 
-  // Push notification prompt state
-  const [showPushBanner, setShowPushBanner] = useState(false);
-  const [pushSubscribing, setPushSubscribing] = useState(false);
+  // Push prompt banner — same shared store as the footer bell and Settings,
+  // so enabling anywhere updates everywhere instantly.
+  const push = usePush();
+  const [bannerDismissed, setBannerDismissed] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (!isPushSupported()) return;
-    const dismissed = localStorage.getItem("mc-push-banner-dismissed");
-    if (dismissed) {
-      const dismissedAt = parseInt(dismissed, 10);
-      if (Date.now() - dismissedAt < 7 * 24 * 60 * 60 * 1000) return;
-    }
-    registerServiceWorker().then(() => {
-      getCurrentSubscription().then((sub) => {
-        if (!sub) setShowPushBanner(true);
-      });
-    });
+    try {
+      const dismissed = localStorage.getItem("mc-push-banner-dismissed");
+      if (dismissed && Date.now() - parseInt(dismissed, 10) < 7 * 24 * 60 * 60 * 1000) return;
+    } catch {}
+    setBannerDismissed(false);
   }, []);
 
-  const handleEnablePush = async () => {
-    setPushSubscribing(true);
-    const sub = await subscribeToPush();
-    setPushSubscribing(false);
-    if (sub) {
-      setShowPushBanner(false);
-    } else {
-      alert("Could not enable notifications. Please allow notifications in your browser settings and try again.");
-    }
-  };
+  const showPushBanner = push.supported && !push.enabled && !bannerDismissed;
 
   const handleDismissPushBanner = () => {
-    setShowPushBanner(false);
+    setBannerDismissed(true);
     localStorage.setItem("mc-push-banner-dismissed", String(Date.now()));
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
+    <div className="flex flex-col h-dvh overflow-hidden">
+      <Toaster />
       {/* Dynamic width override — only applies at md+; mobile remains w-full */}
       <style>{`
         @media (min-width: 768px) {
@@ -1222,16 +1210,16 @@ export function EmailLayout() {
             <strong>Get email notifications</strong> — receive push alerts when new emails arrive, even when MC is closed.
           </span>
           <button
-            onClick={handleEnablePush}
-            disabled={pushSubscribing}
+            onClick={() => push.toggle()}
+            disabled={push.loading}
             className="px-3 py-1 rounded-md text-xs font-semibold transition-all"
             style={{
               backgroundColor: "var(--mc-accent)",
               color: "#fff",
-              opacity: pushSubscribing ? 0.6 : 1,
+              opacity: push.loading ? 0.6 : 1,
             }}
           >
-            {pushSubscribing ? "Enabling..." : "Enable"}
+            {push.loading ? "Enabling..." : "Enable"}
           </button>
           <button
             onClick={handleDismissPushBanner}

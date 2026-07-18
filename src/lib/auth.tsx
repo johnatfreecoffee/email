@@ -200,7 +200,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="w-full max-w-[360px] mx-4">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-mc-teal mb-4">
+            {/* Matches the PWA app icon: white envelope on black */}
+            <div
+              className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+              style={{ backgroundColor: "#000000", border: "1px solid var(--mc-border)" }}
+            >
               <svg
                 className="w-8 h-8 text-white"
                 fill="none"
