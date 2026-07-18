@@ -27,7 +27,7 @@ export function favKey(ref: FavoriteRef): string {
   }
 }
 
-function isValidRef(r: unknown): r is FavoriteRef {
+export function isValidRef(r: unknown): r is FavoriteRef {
   if (!r || typeof r !== "object") return false;
   const ref = r as Record<string, unknown>;
   switch (ref.kind) {

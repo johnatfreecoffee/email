@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/lib/theme";
 import { AuthProvider } from "@/lib/auth";
+import { SettingsProvider } from "@/lib/settings";
 
 export const metadata: Metadata = {
   title: "Email",
@@ -54,7 +55,9 @@ export default function RootLayout({
         {/* Fork note: MC's global VoiceProvider + AppChrome were removed —
             this is an email-only app. Auth + Theme are all it needs. */}
         <ThemeProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <SettingsProvider>{children}</SettingsProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
