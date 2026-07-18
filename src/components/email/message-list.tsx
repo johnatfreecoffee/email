@@ -24,6 +24,7 @@ import {
 import { useState, useRef, useCallback, useEffect, memo } from "react";
 import type { EmailMessage, EmailDomain } from "./email-layout";
 import { MessageListVirtual } from "./message-list-virtual";
+import { MessageTable } from "./message-table";
 import { formatDate, getDateGroup } from "./format";
 import { useSettings } from "@/lib/settings";
 
@@ -71,6 +72,7 @@ interface MessageListProps {
   pendingNewCount?: number;
   onRevealPending?: () => void;
   onAtTopChange?: (atTop: boolean) => void;
+  onDisplayOrderChange?: (order: number[] | null) => void;
   scrollResetSignal?: number;
   onBulkMarkRead?: (ids: string[]) => void;
   onBulkMarkUnread?: (ids: string[]) => void;
@@ -506,6 +508,7 @@ export function MessageList({
   pendingNewCount = 0,
   onRevealPending,
   onAtTopChange,
+  onDisplayOrderChange,
   scrollResetSignal = 0,
   onBulkMarkRead,
   onBulkMarkUnread,
@@ -1000,9 +1003,31 @@ export function MessageList({
               </button>
             )}
           </div>
+        ) : isDesktop && settings.viewing.desktopView === "columns" ? (
+          <MessageTable
+            messages={filtered}
+            selectedId={selectedId}
+            focusedIndex={focusedIndex}
+            onFocusedIndexChange={onFocusedIndexChange}
+            onSelectMessage={onSelectMessage}
+            onToggleStar={onToggleStar}
+            onToggleRead={onToggleRead}
+            onTrash={onTrash}
+            selectedIds={selectedIds}
+            onSelectionChange={(ids) => {
+              setSelectedIds(ids);
+              if (ids.size > 0) setSelectMode(true);
+              else setSelectMode(false);
+            }}
+            onBulkTrash={onBulkTrash}
+            scrollResetSignal={scrollResetSignal}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={onLoadMore}
+            onAtTopChange={onAtTopChange}
+            onDisplayOrderChange={onDisplayOrderChange}
+          />
         ) : isDesktop ? (
-          // desktopView "columns" renders MessageTable once it lands; until
-          // then both values use the stacked list.
           <MessageListVirtual
             previewLines={settings.viewing.previewLines}
             messages={filtered}

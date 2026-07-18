@@ -1021,6 +1021,23 @@ export function EmailLayout() {
     setFocusedIndex(-1);
   }, [activeFolder, selectedDomain, selectedAddress, searchQuery]);
 
+  // When the column view sorts, it publishes its display order (parent
+  // indices) so global j/k walks what's visually on screen. Stacked/mobile
+  // views never publish — legacy ±1 stepping stays bit-identical.
+  const displayOrderRef = useRef<number[] | null>(null);
+  const handleDisplayOrderChange = useCallback((order: number[] | null) => {
+    displayOrderRef.current = order;
+  }, []);
+  const stepFocus = useCallback((prev: number, delta: 1 | -1, max: number) => {
+    const order = displayOrderRef.current;
+    if (order && order.length > 0) {
+      const pos = prev >= 0 ? order.indexOf(prev) : -1;
+      const nextPos = Math.max(0, Math.min(order.length - 1, pos + delta));
+      return order[nextPos] ?? prev;
+    }
+    return Math.max(0, Math.min(max, prev + delta));
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
@@ -1037,13 +1054,13 @@ export function EmailLayout() {
         case "ArrowDown":
         case "j": {
           e.preventDefault();
-          setFocusedIndex((prev) => Math.min(prev + 1, currentMessages.length - 1));
+          setFocusedIndex((prev) => stepFocus(prev, 1, currentMessages.length - 1));
           break;
         }
         case "ArrowUp":
         case "k": {
           e.preventDefault();
-          setFocusedIndex((prev) => Math.max(prev - 1, 0));
+          setFocusedIndex((prev) => stepFocus(prev, -1, currentMessages.length - 1));
           break;
         }
         case "Enter": {
@@ -1147,7 +1164,7 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead]);
+  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
 
   // Push notification prompt state
   const [showPushBanner, setShowPushBanner] = useState(false);
@@ -1416,6 +1433,7 @@ export function EmailLayout() {
           pendingNewCount={pendingNew.length}
           onRevealPending={handleRevealPending}
           onAtTopChange={handleAtTopChange}
+          onDisplayOrderChange={handleDisplayOrderChange}
           scrollResetSignal={scrollResetSignal}
           onBulkMarkRead={handleBulkMarkRead}
           onBulkMarkUnread={handleBulkMarkUnread}
