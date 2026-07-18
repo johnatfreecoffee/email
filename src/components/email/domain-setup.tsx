@@ -406,11 +406,5 @@ export function DomainSetupCard({ onClose, onDomainAdded }: DomainSetupProps) {
   );
 }
 
-// Standalone overlay wrapper — used by the sidebar "Add Domain" flow.
-export function DomainSetup(props: DomainSetupProps) {
-  return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <DomainSetupCard {...props} />
-    </div>
-  );
-}
+// Domain adding lives exclusively in Settings → Accounts ("+" in the rail),
+// which embeds DomainSetupCard directly — no standalone overlay remains.

@@ -57,7 +57,6 @@ interface FolderListProps {
   onCatchAllToggle?: (domain: EmailDomain) => void;
   unreadCount: number;
   draftsCount?: number;
-  onAddDomain: () => void;
   onCompose: () => void;
   onRefreshDomains: () => void;
   onOpenSettings: (target?: { tab?: SettingsTab; domainId?: string }) => void;
@@ -244,7 +243,6 @@ export function FolderList({
   onCatchAllToggle,
   unreadCount: _unreadCount,
   draftsCount = 0,
-  onAddDomain,
   onCompose,
   onRefreshDomains,
   onOpenSettings,
@@ -725,23 +723,25 @@ export function FolderList({
             );
           })}
 
-          {/* Add Domain */}
-          <button
-            onClick={onAddDomain}
-            className="w-full flex items-center gap-2 h-7 px-2 rounded-md text-[12px] transition-all"
-            style={{ color: "var(--mc-text-faint)" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--mc-accent)";
-              e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--mc-text-faint)";
-              e.currentTarget.style.backgroundColor = "transparent";
-            }}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add Domain
-          </button>
+          {/* Domain adding lives in Settings → Accounts ("+" in the rail) */}
+          {domains.length === 0 && (
+            <button
+              onClick={() => onOpenSettings({ tab: "accounts" })}
+              className="w-full flex items-center gap-2 h-7 px-2 rounded-md text-[12px] transition-all"
+              style={{ color: "var(--mc-text-faint)" }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "var(--mc-accent)";
+                e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = "var(--mc-text-faint)";
+                e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add a domain in Settings
+            </button>
+          )}
         </div>
 
         {/* Footer icon row */}

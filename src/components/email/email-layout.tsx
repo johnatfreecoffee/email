@@ -7,7 +7,6 @@ import { isPushSupported, getCurrentSubscription, subscribeToPush, registerServi
 import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
-import { DomainSetup } from "./domain-setup";
 import { SettingsModal } from "./settings/settings-modal";
 import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
@@ -271,7 +270,6 @@ export function EmailLayout() {
   const [activeFolder, setActiveFolder] = useState("inbox");
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
-  const [showDomainSetup, setShowDomainSetup] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; domainId: string | null } | null>(null);
   // searchInput = what the box shows (instant); searchQuery = committed value
   // that actually drives fetches, debounced 300ms.
@@ -1321,7 +1319,6 @@ export function EmailLayout() {
           }}
           unreadCount={unreadCount}
           draftsCount={drafts.length}
-          onAddDomain={() => setShowDomainSetup(true)}
           onCompose={() => { setComposeDraft(null); setShowCompose(true); }}
           onRefreshDomains={() => {
             fetchDomains();
@@ -1549,17 +1546,6 @@ export function EmailLayout() {
             setComposeDraft(null);
             loadPage("reset");
             if (activeFolder === "drafts") fetchDrafts();
-          }}
-        />
-      )}
-
-      {/* Domain Setup */}
-      {showDomainSetup && (
-        <DomainSetup
-          onClose={() => setShowDomainSetup(false)}
-          onDomainAdded={() => {
-            setShowDomainSetup(false);
-            fetchDomains();
           }}
         />
       )}
