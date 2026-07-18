@@ -1,6 +1,8 @@
 import { Env, jsonResponse, errorResponse, supabaseQuery } from "./_shared";
 import { broadcastPush } from "./_web-push";
 import { classifySpam, SPAM_FOLDER } from "./_spam";
+import { readSetting, SETTINGS_DEFAULTS } from "./_settings";
+import { fetchActiveRules, applyRuleActions, type DeliveryState } from "./_rules";
 
 interface CFContext {
   request: Request;
@@ -380,6 +382,13 @@ export const onRequest = async (context: CFContext) => {
       ? matchedDomain.catchall_destination_address_id
       : null;
 
+  // User-tunable junk settings + delivery rules — both tolerate missing
+  // tables (pre-migration) and never fail the webhook.
+  const [junkSettings, activeRules] = await Promise.all([
+    readSetting(env, "junk", SETTINGS_DEFAULTS.junk),
+    fetchActiveRules(env),
+  ]);
+
   // Spam classification — heuristics + free LLM. Falls back gracefully if
   // OpenRouter is unavailable; never fails the webhook.
   let spamVerdict;
@@ -392,11 +401,41 @@ export const onRequest = async (context: CFContext) => {
         headers,
         is_catch_all: isCatchAll,
       },
-      env
+      env,
+      junkSettings
     );
   } catch (e) {
     console.error("Spam classifier threw (non-fatal):", e);
     spamVerdict = { is_spam: false, score: 0, reason: "classifier_error" };
+  }
+
+  // Delivery rules run AFTER classification and may override it (an explicit
+  // inbox rule rescues a spam verdict). All matching rules apply in priority
+  // order; later rules win on conflicts.
+  const delivery: DeliveryState = {
+    folder: spamVerdict.is_spam ? SPAM_FOLDER : "inbox",
+    is_read: false,
+    is_starred: false,
+    is_spam: spamVerdict.is_spam,
+    is_trash: false,
+    is_archived: false,
+  };
+  try {
+    const applicable = activeRules.filter((r) => !r.domain_id || r.domain_id === matchedDomain.id);
+    if (applicable.length > 0) {
+      const fired = applyRuleActions(
+        applicable,
+        {
+          from: fromAddress.toLowerCase().trim(),
+          to: toAddresses.map((a: string) => (a || "").toLowerCase()),
+          subject: finalSubject || "",
+        },
+        delivery
+      );
+      if (fired.length > 0) console.log(`Rules fired: ${fired.join(", ")}`);
+    }
+  } catch (e) {
+    console.error("Rules pass threw (non-fatal):", e);
   }
 
   // Insert message
@@ -417,9 +456,12 @@ export const onRequest = async (context: CFContext) => {
       body_html: bodyHtml,
       headers: headers,
       is_catch_all: isCatchAll,
-      folder: spamVerdict.is_spam ? SPAM_FOLDER : "inbox",
-      is_read: false,
-      is_spam: spamVerdict.is_spam,
+      folder: delivery.folder,
+      is_read: delivery.is_read,
+      is_starred: delivery.is_starred,
+      is_trash: delivery.is_trash,
+      is_archived: delivery.is_archived,
+      is_spam: delivery.is_spam,
       spam_score: spamVerdict.score,
       spam_reason: spamVerdict.reason,
       spam_checked_at: new Date().toISOString(),
@@ -516,10 +558,18 @@ export const onRequest = async (context: CFContext) => {
     console.error("Contact learning failed (non-fatal):", e);
   }
 
-  // 4. Send push notifications (RFC 8291 encrypted + VAPID signed). Spam
-  // never pings the phone — the user opens the Spam folder when they want.
-  if (spamVerdict.is_spam) {
-    return jsonResponse({ received: true, message_id: message.id, spam: true }, 200);
+  // 4. Send push notifications (RFC 8291 encrypted + VAPID signed). Only
+  // mail that lands in the inbox, unread and unfiled, pings the phone —
+  // junk, and rule-filed/-read/-trashed deliveries stay silent (a rule that
+  // only flags still notifies).
+  const shouldNotify =
+    delivery.folder === "inbox" &&
+    !delivery.is_read &&
+    !delivery.is_spam &&
+    !delivery.is_trash &&
+    !delivery.is_archived;
+  if (!shouldNotify) {
+    return jsonResponse({ received: true, message_id: message.id, spam: delivery.is_spam }, 200);
   }
   try {
     const subsRes = await supabaseQuery(env, "/mc_push_subscriptions?is_active=eq.true");

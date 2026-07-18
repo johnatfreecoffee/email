@@ -16,6 +16,18 @@ import { Env, supabaseQuery } from "./_shared";
 
 const SPAM_THRESHOLD = 0.7;
 
+// User-tunable knobs (Settings → Junk Mail), threaded in by inbound.ts from
+// the email_settings row; defaults preserve historical behavior.
+export interface JunkSettings {
+  llmAssist: boolean;
+  threshold: number;
+}
+
+export const DEFAULT_JUNK_SETTINGS: JunkSettings = {
+  llmAssist: true,
+  threshold: SPAM_THRESHOLD,
+};
+
 const FREE_MODELS = [
   "google/gemini-2.0-flash-exp:free",
   "meta-llama/llama-3.3-70b-instruct:free",
@@ -90,7 +102,8 @@ function heuristicScore(input: SpamInput): { score: number; reasons: string[] } 
 async function callOpenRouter(
   env: Env,
   model: string,
-  input: SpamInput
+  input: SpamInput,
+  threshold: number
 ): Promise<SpamVerdict | null> {
   if (!env.OPENROUTER_KEY) return null;
 
@@ -139,7 +152,7 @@ Be conservative — only mark spam if you are confident. Marketing/newsletters f
     const parsed = JSON.parse(match[0]) as { is_spam?: boolean; score?: number; reason?: string };
     const score = Math.max(0, Math.min(1, Number(parsed.score ?? 0)));
     return {
-      is_spam: Boolean(parsed.is_spam) || score >= SPAM_THRESHOLD,
+      is_spam: Boolean(parsed.is_spam) || score >= threshold,
       score,
       reason: String(parsed.reason || "llm").slice(0, 80),
     };
@@ -200,7 +213,12 @@ async function upsertSender(
   });
 }
 
-export async function classifySpam(input: SpamInput, env: Env): Promise<SpamVerdict> {
+export async function classifySpam(
+  input: SpamInput,
+  env: Env,
+  junk: JunkSettings = DEFAULT_JUNK_SETTINGS
+): Promise<SpamVerdict> {
+  const threshold = Math.max(0.05, Math.min(0.99, junk.threshold ?? SPAM_THRESHOLD));
   const fromAddress = (input.from_address || "").toLowerCase().trim();
 
   // 1. Per-sender cache
@@ -226,24 +244,30 @@ export async function classifySpam(input: SpamInput, env: Env): Promise<SpamVerd
 
   // 2. Heuristic fast-path
   const h = heuristicScore(input);
-  if (h.score >= SPAM_THRESHOLD) {
+  if (h.score >= threshold) {
     if (fromAddress) await upsertSender(env, fromAddress, "spam", h.score, false);
     return { is_spam: true, score: h.score, reason: `heuristic:${h.reasons.join(",")}` };
   }
 
-  // 3. LLM
+  // 3. LLM (user-disableable; env key remains the second gate)
   let verdict: SpamVerdict | null = null;
-  for (const model of FREE_MODELS) {
-    verdict = await callOpenRouter(env, model, input);
-    if (verdict) break;
+  if (junk.llmAssist) {
+    for (const model of FREE_MODELS) {
+      verdict = await callOpenRouter(env, model, input, threshold);
+      if (verdict) break;
+    }
   }
 
   if (!verdict) {
     // 4. Fallback: heuristic-only verdict
     verdict = {
-      is_spam: h.score >= SPAM_THRESHOLD,
+      is_spam: h.score >= threshold,
       score: h.score,
-      reason: h.reasons.length ? `heuristic_only:${h.reasons.join(",")}` : "llm_unavailable",
+      reason: h.reasons.length
+        ? `heuristic_only:${h.reasons.join(",")}`
+        : junk.llmAssist
+        ? "llm_unavailable"
+        : "llm_disabled",
     };
   }
 

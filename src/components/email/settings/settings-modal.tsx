@@ -147,7 +147,7 @@ export function SettingsModal({
           {activeTab === "viewing" && <ViewingTab />}
           {activeTab === "composing" && <ComposingTab domains={domains} />}
           {activeTab === "signatures" && <SignaturesTab domains={domains} />}
-          {activeTab === "rules" && <RulesTab />}
+          {activeTab === "rules" && <RulesTab domains={domains} />}
           {activeTab === "privacy" && <PrivacyTab />}
         </div>
       </div>
