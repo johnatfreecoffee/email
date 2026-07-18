@@ -1327,6 +1327,7 @@ export function EmailLayout() {
           onOpenSettings={(target) =>
             setSettingsTarget({ tab: target?.tab ?? "general", domainId: target?.domainId ?? null })
           }
+          onClose={() => setMobileView("list")}
           unreadCounts={unreadCounts}
         />
       </div>

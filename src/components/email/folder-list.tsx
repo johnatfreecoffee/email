@@ -9,6 +9,7 @@ import {
   Archive,
   Plus,
   Pencil,
+  X,
   RefreshCw,
   Settings,
   Bell,
@@ -60,6 +61,8 @@ interface FolderListProps {
   onCompose: () => void;
   onRefreshDomains: () => void;
   onOpenSettings: (target?: { tab?: SettingsTab; domainId?: string }) => void;
+  /** Mobile: dismiss the hamburger-opened sidebar without picking anything. */
+  onClose?: () => void;
   unreadCounts?: UnreadCountsShape;
 }
 
@@ -246,6 +249,7 @@ export function FolderList({
   onCompose,
   onRefreshDomains,
   onOpenSettings,
+  onClose,
   unreadCounts = { domains: {}, folders: {}, totals: {} },
 }: FolderListProps) {
   const [refreshing, setRefreshing] = useState(false);
@@ -426,6 +430,40 @@ export function FolderList({
   return (
     <>
       <div className="flex flex-col h-full p-2.5">
+        {/* Mobile top bar — iOS Mail style: title + collapse-all + close.
+            Without this, the hamburger-opened sidebar can only be left by
+            selecting a mailbox. */}
+        {onClose && (
+          <div className="flex md:hidden items-center justify-between mb-2 -mx-0.5">
+            <span className="text-[17px] font-semibold px-1" style={{ color: "var(--mc-text)" }}>
+              Mailboxes
+            </span>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={anythingExpanded ? collapseAll : expandAll}
+                className="p-2 rounded-md transition-colors"
+                style={{ color: "var(--mc-text-muted)" }}
+                title={anythingExpanded ? "Collapse all" : "Expand all"}
+              >
+                {anythingExpanded ? (
+                  <ChevronsDownUp className="h-4 w-4" />
+                ) : (
+                  <ChevronsUpDown className="h-4 w-4" />
+                )}
+              </button>
+              <button
+                onClick={onClose}
+                className="p-2 rounded-md transition-colors"
+                style={{ color: "var(--mc-text-muted)" }}
+                title="Close"
+                aria-label="Close mailboxes"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Compose */}
         <button
           onClick={onCompose}
@@ -436,8 +474,9 @@ export function FolderList({
           Compose
         </button>
 
-        {/* Mailboxes header — collapse/expand everything at once */}
-        <div className="flex items-center px-1 mb-0.5">
+        {/* Mailboxes header — collapse/expand everything at once (desktop;
+            on mobile these live in the top bar above) */}
+        <div className={`${onClose ? "hidden md:flex" : "flex"} items-center px-1 mb-0.5`}>
           <span className="flex-1 text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
             Mailboxes
           </span>
