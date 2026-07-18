@@ -26,23 +26,18 @@ import {
   Check,
   GripVertical,
   Minus,
-  FlaskConical,
+  ChevronsDownUp,
+  ChevronsUpDown,
   type LucideIcon,
 } from "lucide-react";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useRef } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import type { EmailDomain } from "./email-layout";
-import { DomainSettingsPanel } from "./domain-settings-panel";
-import {
-  isPushSupported,
-  subscribeToPush,
-  unsubscribeFromPush,
-  getCurrentSubscription,
-  registerServiceWorker,
-} from "@/lib/push-notifications";
-import { apiFetch } from "@/lib/auth";
+import { usePush } from "@/lib/push-notifications";
 import { useTheme, type ThemePref } from "@/lib/theme";
-import { type FavoriteRef, favKey, loadFavorites, saveFavorites } from "./favorites";
+import { useSettings, type SettingsTab } from "@/lib/settings";
+import { type FavoriteRef, favKey } from "./favorites";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -65,6 +60,7 @@ interface FolderListProps {
   onAddDomain: () => void;
   onCompose: () => void;
   onRefreshDomains: () => void;
+  onOpenSettings: (target?: { tab?: SettingsTab; domainId?: string }) => void;
   unreadCounts?: UnreadCountsShape;
 }
 
@@ -95,31 +91,6 @@ function getDomainHealthDot(d: EmailDomain): string {
   if (status === "pending" || status === "not_started") return "var(--mc-warning)";
   if (["active", "verified", "dns_configured"].includes(status)) return "var(--mc-success)";
   return "var(--mc-text-faint)";
-}
-
-const COLLAPSED_KEY = "email-collapsed-domains";
-const FAVORITES_KEY = "email-favorites-visible";
-
-function loadCollapsed(): string[] {
-  try {
-    const raw = localStorage.getItem(COLLAPSED_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCollapsed(ids: string[]) {
-  localStorage.setItem(COLLAPSED_KEY, JSON.stringify(ids));
-}
-
-function loadFavoritesVisible(): boolean {
-  try {
-    const raw = localStorage.getItem(FAVORITES_KEY);
-    return raw === null ? true : raw === "true";
-  } catch {
-    return true;
-  }
 }
 
 // ---------- Shared row ----------
@@ -276,56 +247,40 @@ export function FolderList({
   onAddDomain,
   onCompose,
   onRefreshDomains,
+  onOpenSettings,
   unreadCounts = { domains: {}, folders: {}, totals: {} },
 }: FolderListProps) {
-  const [settingsDomain, setSettingsDomain] = useState<EmailDomain | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [pushEnabled, setPushEnabled] = useState(false);
-  const [pushLoading, setPushLoading] = useState(false);
-  const [pushSupported, setPushSupported] = useState(false);
-  const [collapsedDomains, setCollapsedDomains] = useState<string[]>([]);
-  const [favoritesVisible, setFavoritesVisible] = useState(true);
-  const [favorites, setFavorites] = useState<FavoriteRef[]>([]);
+  const push = usePush();
   const [editing, setEditing] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    setPushSupported(isPushSupported());
-    registerServiceWorker().then(() => {
-      getCurrentSubscription().then((sub) => {
-        setPushEnabled(!!sub);
-      });
-    });
-    setCollapsedDomains(loadCollapsed());
-    setFavoritesVisible(loadFavoritesVisible());
-    setFavorites(loadFavorites());
-  }, []);
+  // Roaming sidebar state (server-synced via the settings provider)
+  const { settings, updateSetting, replaceSetting } = useSettings();
+  const collapsedDomains = settings.sidebar.collapsedDomains;
+  const favoritesVisible = settings.sidebar.favoritesVisible;
+  const favorites = settings.favorites.items;
+
+  const updateFavorites = (next: FavoriteRef[]) => {
+    replaceSetting("favorites", { v: 2, items: next });
+  };
 
   // Prune favorites whose domain/address no longer exists (once domains load)
   useEffect(() => {
-    if (domains.length === 0) return;
-    setFavorites((prev) => {
-      const pruned = prev.filter((ref) => {
-        if (ref.kind === "folder") return true;
-        const d = domains.find((x) => x.id === ref.domainId);
-        if (!d) return false;
-        if (ref.kind === "address") {
-          return (d.addresses || []).some((a) => a.id === ref.addressId);
-        }
-        return true;
-      });
-      if (pruned.length !== prev.length) {
-        saveFavorites(pruned);
-        return pruned;
+    if (domains.length === 0 || favorites.length === 0) return;
+    const pruned = favorites.filter((ref) => {
+      if (ref.kind === "folder") return true;
+      const d = domains.find((x) => x.id === ref.domainId);
+      if (!d) return false;
+      if (ref.kind === "address") {
+        return (d.addresses || []).some((a) => a.id === ref.addressId);
       }
-      return prev;
+      return true;
     });
+    if (pruned.length !== favorites.length) {
+      replaceSetting("favorites", { v: 2, items: pruned });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domains]);
-
-  const updateFavorites = (next: FavoriteRef[]) => {
-    setFavorites(next);
-    saveFavorites(next);
-  };
 
   const favoriteKeys = useMemo(() => new Set(favorites.map(favKey)), [favorites]);
 
@@ -345,35 +300,24 @@ export function FolderList({
     setTimeout(() => setRefreshing(false), 600);
   };
 
-  const handleTogglePush = async () => {
-    setPushLoading(true);
-    if (pushEnabled) {
-      const ok = await unsubscribeFromPush();
-      if (ok) setPushEnabled(false);
-    } else {
-      const sub = await subscribeToPush();
-      setPushEnabled(!!sub);
-    }
-    setPushLoading(false);
-  };
-
   const toggleDomainCollapse = (domainId: string) => {
-    setCollapsedDomains((prev) => {
-      const next = prev.includes(domainId)
-        ? prev.filter((id) => id !== domainId)
-        : [...prev, domainId];
-      saveCollapsed(next);
-      return next;
-    });
+    const next = collapsedDomains.includes(domainId)
+      ? collapsedDomains.filter((id) => id !== domainId)
+      : [...collapsedDomains, domainId];
+    updateSetting("sidebar", { collapsedDomains: next });
   };
 
   const toggleFavorites = () => {
-    setFavoritesVisible((prev) => {
-      const next = !prev;
-      localStorage.setItem(FAVORITES_KEY, String(next));
-      return next;
-    });
+    updateSetting("sidebar", { favoritesVisible: !favoritesVisible });
   };
+
+  // Collapse All / Expand All — "anything expanded" drives which action shows
+  const anythingExpanded =
+    favoritesVisible || domains.some((d) => !collapsedDomains.includes(d.id));
+  const collapseAll = () =>
+    updateSetting("sidebar", { collapsedDomains: domains.map((d) => d.id), favoritesVisible: false });
+  const expandAll = () =>
+    updateSetting("sidebar", { collapsedDomains: [], favoritesVisible: true });
 
   const isAllSelected = selectedDomain === null;
 
@@ -493,6 +437,27 @@ export function FolderList({
           <Pencil className="h-3.5 w-3.5" />
           Compose
         </button>
+
+        {/* Mailboxes header — collapse/expand everything at once */}
+        <div className="flex items-center px-1 mb-0.5">
+          <span className="flex-1 text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
+            Mailboxes
+          </span>
+          <button
+            onClick={anythingExpanded ? collapseAll : expandAll}
+            className="p-1 rounded transition-colors"
+            style={{ color: "var(--mc-text-faint)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--mc-accent)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--mc-text-faint)"; }}
+            title={anythingExpanded ? "Collapse all" : "Expand all"}
+          >
+            {anythingExpanded ? (
+              <ChevronsDownUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronsUpDown className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
 
         {/* Favorites */}
         <div className="mb-1.5">
@@ -664,7 +629,7 @@ export function FolderList({
                       </span>
                     )}
                     <button
-                      onClick={() => setSettingsDomain(d)}
+                      onClick={() => onOpenSettings({ tab: "accounts", domainId: d.id })}
                       className="p-1 rounded transition-all opacity-0 group-hover/domain:opacity-100"
                       style={{ color: "var(--mc-text-faint)" }}
                       onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)"; }}
@@ -785,47 +750,23 @@ export function FolderList({
           style={{ borderTop: "1px solid var(--mc-border)" }}
         >
           <ThemeMenu />
-          {pushSupported && (
+          {push.supported && (
             <button
-              onClick={handleTogglePush}
-              disabled={pushLoading}
+              onClick={() => push.toggle()}
+              disabled={push.loading}
               className="p-1.5 rounded-md transition-colors"
-              style={{ color: pushEnabled ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+              style={{ color: push.enabled ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
               onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
               onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-              title={pushEnabled ? "Notifications on — click to disable" : "Enable notifications"}
+              title={push.enabled ? "Notifications on — click to disable" : "Enable notifications"}
             >
-              {pushLoading ? (
+              {push.loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
-              ) : pushEnabled ? (
+              ) : push.enabled ? (
                 <Bell className="h-4 w-4" />
               ) : (
                 <BellOff className="h-4 w-4" />
               )}
-            </button>
-          )}
-          {pushEnabled && (
-            <button
-              onClick={async () => {
-                try {
-                  const res = await apiFetch("/api/email/push-test", { method: "POST" });
-                  const data = await res.json();
-                  if (data.success) {
-                    alert("✅ Test push sent! Check your notifications.");
-                  } else {
-                    alert(`❌ Push test failed: ${data.error || JSON.stringify(data.results)}`);
-                  }
-                } catch (e) {
-                  alert(`❌ Error: ${(e as Error).message}`);
-                }
-              }}
-              className="p-1.5 rounded-md transition-colors"
-              style={{ color: "var(--mc-text-muted)" }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-              title="Send a test push notification"
-            >
-              <FlaskConical className="h-4 w-4" />
             </button>
           )}
           <button
@@ -839,19 +780,18 @@ export function FolderList({
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
+          <button
+            onClick={() => onOpenSettings()}
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: "var(--mc-text-muted)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
         </div>
       </div>
-
-      {/* Settings Panel (popup modal) */}
-      {settingsDomain && (
-        <DomainSettingsPanel
-          domain={settingsDomain}
-          onClose={() => setSettingsDomain(null)}
-          onRefresh={() => {
-            onRefreshDomains();
-          }}
-        />
-      )}
     </>
   );
 }

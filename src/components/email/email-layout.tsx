@@ -8,7 +8,9 @@ import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
 import { DomainSetup } from "./domain-setup";
+import { SettingsModal } from "./settings/settings-modal";
 import { apiFetch } from "@/lib/auth";
+import { type SettingsTab } from "@/lib/settings";
 
 const API_BASE = "/api/email";
 
@@ -269,6 +271,7 @@ export function EmailLayout() {
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
   const [showDomainSetup, setShowDomainSetup] = useState(false);
+  const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; domainId: string | null } | null>(null);
   // searchInput = what the box shows (instant); searchQuery = committed value
   // that actually drives fetches, debounced 300ms.
   const [searchInput, setSearchInput] = useState("");
@@ -992,6 +995,7 @@ export function EmailLayout() {
         if (e.key === "Escape") setShowCompose(false);
         return;
       }
+      if (settingsTarget) return; // settings modal owns its own keys
 
       const currentMessages = activeFolder === "drafts" ? drafts : messages;
 
@@ -1109,7 +1113,7 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead]);
+  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead]);
 
   // Push notification prompt state
   const [showPushBanner, setShowPushBanner] = useState(false);
@@ -1272,6 +1276,9 @@ export function EmailLayout() {
             fetchDomains();
             fetchUnreadCounts();
           }}
+          onOpenSettings={(target) =>
+            setSettingsTarget({ tab: target?.tab ?? "general", domainId: target?.domainId ?? null })
+          }
           unreadCounts={unreadCounts}
         />
       </div>
@@ -1502,6 +1509,20 @@ export function EmailLayout() {
           onDomainAdded={() => {
             setShowDomainSetup(false);
             fetchDomains();
+          }}
+        />
+      )}
+
+      {/* Global settings */}
+      {settingsTarget && (
+        <SettingsModal
+          initialTab={settingsTarget.tab}
+          initialDomainId={settingsTarget.domainId}
+          domains={domains}
+          onClose={() => setSettingsTarget(null)}
+          onRefreshDomains={() => {
+            fetchDomains();
+            fetchUnreadCounts();
           }}
         />
       )}

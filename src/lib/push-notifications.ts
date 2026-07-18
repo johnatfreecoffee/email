@@ -1,4 +1,5 @@
 // Push notification helpers
+import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "./auth";
 
 // Fork note: this MUST match the VAPID keypair the server signs with
@@ -107,4 +108,34 @@ export async function getCurrentSubscription(): Promise<PushSubscription | null>
   } catch {
     return null;
   }
+}
+
+/** Shared push-subscription state so the sidebar bell and Settings → General
+ *  can't drift: both read/toggle through the same flow. */
+export function usePush() {
+  const [supported, setSupported] = useState(false);
+  const [enabled, setEnabled] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSupported(isPushSupported());
+    registerServiceWorker().then(() => {
+      getCurrentSubscription().then((sub) => setEnabled(!!sub));
+    });
+  }, []);
+
+  const toggle = useCallback(async () => {
+    setLoading(true);
+    if (enabled) {
+      const ok = await unsubscribeFromPush();
+      if (ok) setEnabled(false);
+    } else {
+      const sub = await subscribeToPush();
+      setEnabled(!!sub);
+    }
+    setLoading(false);
+  }, [enabled]);
+
+  return { supported, enabled, loading, toggle };
 }

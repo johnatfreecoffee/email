@@ -29,7 +29,9 @@ interface MxConflict {
 
 type Step = "input" | "checking" | "conflict" | "configuring" | "done" | "error";
 
-export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
+// The wizard card itself — embeddable (Settings → Accounts) or wrapped in
+// the standalone overlay below.
+export function DomainSetupCard({ onClose, onDomainAdded }: DomainSetupProps) {
   const [domain, setDomain] = useState("");
   const [step, setStep] = useState<Step>("input");
   const [result, setResult] = useState<any>(null);
@@ -145,8 +147,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-[500px] bg-card rounded-2xl border border-border shadow-2xl">
+    <div className="w-full max-w-[500px] bg-card rounded-2xl border border-border shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
@@ -401,7 +402,15 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
             </div>
           )}
         </div>
-      </div>
+    </div>
+  );
+}
+
+// Standalone overlay wrapper — used by the sidebar "Add Domain" flow.
+export function DomainSetup(props: DomainSetupProps) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <DomainSetupCard {...props} />
     </div>
   );
 }
