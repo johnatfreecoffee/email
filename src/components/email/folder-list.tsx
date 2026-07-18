@@ -403,7 +403,9 @@ export function FolderList({
     updateFavorites(next);
   };
 
-  // Small pin toggle used across domain sections while editing
+  // Small pin toggle used across domain sections while editing. The outer
+  // span is a padded tap target (exempt from the mobile 44px stretch); the
+  // inner circle is the small visual.
   const PinButton = ({ refItem }: { refItem: FavoriteRef }) => {
     const pinned = isPinned(refItem);
     return (
@@ -414,15 +416,19 @@ export function FolderList({
           e.stopPropagation();
           togglePin(refItem);
         }}
-        className="flex-shrink-0 h-4 w-4 rounded-full flex items-center justify-center transition-colors cursor-pointer"
-        style={{
-          backgroundColor: pinned ? "var(--mc-accent)" : "transparent",
-          border: pinned ? "none" : "1px solid var(--mc-text-faint)",
-          color: pinned ? "#fff" : "var(--mc-text-faint)",
-        }}
+        className="mc-touch-exempt flex-shrink-0 p-1.5 -m-1.5 flex items-center justify-center cursor-pointer"
         title={pinned ? "Remove from Favorites" : "Add to Favorites"}
       >
-        {pinned ? <Check className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+        <span
+          className="h-[18px] w-[18px] rounded-full flex items-center justify-center transition-colors"
+          style={{
+            backgroundColor: pinned ? "var(--mc-accent)" : "transparent",
+            border: pinned ? "none" : "1px solid var(--mc-text-faint)",
+            color: pinned ? "#fff" : "var(--mc-text-faint)",
+          }}
+        >
+          {pinned ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+        </span>
       </span>
     );
   };
@@ -565,11 +571,15 @@ export function FolderList({
                                           e.stopPropagation();
                                           updateFavorites(favorites.filter((f) => favKey(f) !== key));
                                         }}
-                                        className="flex-shrink-0 h-4 w-4 rounded-full flex items-center justify-center cursor-pointer"
-                                        style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                        className="mc-touch-exempt flex-shrink-0 p-1.5 -m-1.5 flex items-center justify-center cursor-pointer"
                                         title="Remove from Favorites"
                                       >
-                                        <Minus className="h-2.5 w-2.5" />
+                                        <span
+                                          className="h-[18px] w-[18px] rounded-full flex items-center justify-center"
+                                          style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                        >
+                                          <Minus className="h-3 w-3" />
+                                        </span>
                                       </span>
                                     }
                                   />

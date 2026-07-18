@@ -79,7 +79,7 @@ export function MCSwitch({
       checked={checked}
       onCheckedChange={onCheckedChange}
       disabled={disabled}
-      className="relative h-[22px] w-[38px] rounded-full transition-colors outline-none disabled:opacity-40"
+      className="mc-touch-exempt relative h-[22px] w-[38px] rounded-full transition-colors outline-none disabled:opacity-40"
       style={{ backgroundColor: checked ? "var(--mc-accent)" : "var(--mc-bg-active)" }}
     >
       <Switch.Thumb

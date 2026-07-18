@@ -161,7 +161,7 @@
   button, a, [role="button"] {
     min-height: 44px;
   }
-  kbd, .animate-pulse {
+  kbd, .animate-pulse, .mc-touch-exempt {
     min-height: unset;
     min-width: unset;
   }
