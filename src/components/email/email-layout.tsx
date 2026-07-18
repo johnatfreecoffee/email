@@ -206,7 +206,6 @@ export interface EmailMessage {
 // Persistence keys for resizable panes
 const FOLDER_W_KEY = "mc.email.folderColumnWidth";
 const LIST_W_KEY = "mc.email.listColumnWidth";
-const PAGE_SIZE_KEY = "mc.email.pageSize";
 const FOLDER_W_DEFAULT = 240;
 const FOLDER_W_MIN = 180;
 const FOLDER_W_MAX = 380;
@@ -220,6 +219,16 @@ interface UnreadCounts {
   folders: Record<string, Record<string, number>>;
   totals: Record<string, number>;
 }
+
+// Envelope shape from /api/email/messages when cursor/with_total is sent
+interface ListResponse {
+  messages: EmailMessage[];
+  total: number | null;
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+const PAGE_SIZE = 50;
 
 export function EmailLayout() {
   const [domains, setDomains] = useState<EmailDomain[]>([]);
@@ -239,6 +248,9 @@ export function EmailLayout() {
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
   const [showDomainSetup, setShowDomainSetup] = useState(false);
+  // searchInput = what the box shows (instant); searchQuery = committed value
+  // that actually drives fetches, debounced 300ms.
+  const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [mobileView, setMobileView] = useState<"folders" | "list" | "reader">("list");
   const [domainFolderCounts, setDomainFolderCounts] = useState<Record<string, Record<string, number>>>({});
@@ -326,26 +338,28 @@ export function EmailLayout() {
     }, 120);
     return () => clearTimeout(t);
   }, [folderColWidth]);
-  const [pageSize, setPageSize] = useState(50);
-  const [currentPage, setCurrentPage] = useState(1); // 1-indexed
-  const [totalCount, setTotalCount] = useState(0);
-  // Monotonically-incrementing signal so child components (MessageTable) can
-  // respond to page changes (e.g. scroll the virtualized list back to top).
+  // Infinite-scroll list state: `messages` accumulates pages; totalCount is
+  // display-only (null while searching — counting an ilike scan is too slow
+  // server-side, so search views live off has_more alone).
+  const [totalCount, setTotalCount] = useState<number | null>(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // New arrivals found by a poll while the user is scrolled down — buffered so
+  // the list doesn't shift under them; surfaced via an "N new" chip.
+  const [pendingNew, setPendingNew] = useState<EmailMessage[]>([]);
+  // Monotonically-incrementing signal so child components can
+  // respond to list resets (e.g. scroll the virtualized list back to top).
   const [scrollResetSignal, setScrollResetSignal] = useState(0);
 
-  // Hydrate pageSize from localStorage on mount to survive reloads
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const raw = parseInt(localStorage.getItem(PAGE_SIZE_KEY) || "");
-      if (!Number.isNaN(raw) && [20, 30, 50, 100].includes(raw)) {
-        setPageSize(raw);
-      }
-    } catch {}
-  }, []);
-
-  // Track known message IDs for new-email detection
-  const knownMessageIds = useRef<Set<string>>(new Set());
+  // Request bookkeeping (refs — no stale closures)
+  const listGen = useRef(0);
+  const listAbort = useRef<AbortController | null>(null);
+  const nextCursorRef = useRef<string | null>(null);
+  const hasMoreRef = useRef(false);
+  const loadingMoreRef = useRef(false);
+  const atTopRef = useRef(true);
+  const messagesRef = useRef<EmailMessage[]>([]);
+  const pendingNewRef = useRef<EmailMessage[]>([]);
 
   const fetchDomains = useCallback(async () => {
     try {
@@ -393,82 +407,147 @@ export function EmailLayout() {
     return params;
   }, [activeFolder, selectedDomain, selectedAddress, catchAllOnly, showCatchAllInInbox, searchQuery, activeFilter]);
 
-  // Fetch total matching count for current filter set
-  const fetchTotalCount = useCallback(async () => {
+  // Keep ref mirrors in sync for code that must read list state outside render
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { pendingNewRef.current = pendingNew; }, [pendingNew]);
+
+  // One fetch pipeline for the message list.
+  //   reset — filter/folder/domain/address/search changed (or manual refresh):
+  //           replaces the list and re-requests the total.
+  //   more  — infinite-scroll tail load via keyset cursor: appends.
+  //   poll  — background freshness: merges page 1 into the accumulated list
+  //           without ever touching the scrollback tail.
+  const loadPage = useCallback(async (kind: "reset" | "more" | "poll") => {
     if (domains.length === 0) return;
+    if (kind === "more" && (!hasMoreRef.current || loadingMoreRef.current || !nextCursorRef.current)) return;
+
+    const gen = kind === "reset" ? ++listGen.current : listGen.current;
+    if (kind === "reset") {
+      listAbort.current?.abort();
+      listAbort.current = new AbortController();
+      if (isFirstFetch.current) setLoading(true);
+    } else if (kind === "more") {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    }
+
     try {
       const params = buildFilterParams();
-      params.set("count_only", "true");
-      const res = await apiFetch(`${API_BASE}/messages?${params}`);
+      params.set("limit", String(PAGE_SIZE));
+      if (kind === "more") {
+        params.set("cursor", nextCursorRef.current!);
+      } else {
+        params.set("with_total", "true");
+      }
+
+      const res = await apiFetch(`${API_BASE}/messages?${params}`, {
+        signal: kind === "reset" ? listAbort.current?.signal : undefined,
+      });
+      if (gen !== listGen.current) return; // a newer reset superseded this request
       if (res.ok) {
-        const data = await res.json();
-        setTotalCount(Math.max(0, Number(data?.count || 0)));
+        const body: ListResponse = await res.json();
+        if (gen !== listGen.current) return;
+        const rows = Array.isArray(body.messages) ? body.messages : [];
+
+        if (kind === "reset") {
+          setMessages(rows);
+          messagesRef.current = rows;
+          setPendingNew([]);
+          nextCursorRef.current = body.next_cursor;
+          hasMoreRef.current = body.has_more;
+          setHasMore(body.has_more);
+          setTotalCount(body.total);
+        } else if (kind === "more") {
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            return [...prev, ...rows.filter((m) => !seen.has(m.id))];
+          });
+          nextCursorRef.current = body.next_cursor;
+          hasMoreRef.current = body.has_more;
+          setHasMore(body.has_more);
+        } else {
+          // poll: refresh flag fields in place, surface new arrivals. Rows
+          // missing from page 1 are NOT removed — absence is ambiguous
+          // between "moved elsewhere" and "pushed past row 50 by arrivals".
+          const known = new Set([
+            ...messagesRef.current.map((m) => m.id),
+            ...pendingNewRef.current.map((m) => m.id),
+          ]);
+          const fresh = rows.filter((m) => !known.has(m.id));
+          const byId = new Map(rows.map((m) => [m.id, m]));
+          setMessages((prev) => {
+            let changed = false;
+            const next = prev.map((m) => {
+              const inc = byId.get(m.id);
+              if (!inc) return m;
+              if (
+                inc.is_read !== m.is_read ||
+                inc.is_starred !== m.is_starred ||
+                inc.is_archived !== m.is_archived ||
+                inc.is_trash !== m.is_trash ||
+                inc.is_spam !== m.is_spam ||
+                inc.folder !== m.folder
+              ) {
+                changed = true;
+                return inc;
+              }
+              return m;
+            });
+            if (fresh.length > 0 && atTopRef.current) {
+              return [...fresh, ...next];
+            }
+            return changed ? next : prev;
+          });
+          if (fresh.length > 0 && !atTopRef.current) {
+            setPendingNew((prev) => [...fresh, ...prev]);
+          }
+          if (typeof body.total === "number") setTotalCount(body.total);
+        }
       }
     } catch (e) {
-      console.error("Failed to fetch total count:", e);
+      if ((e as { name?: string })?.name !== "AbortError") {
+        console.error("Failed to fetch messages:", e);
+      }
+    } finally {
+      if (kind === "more") {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      } else if (kind === "reset" && gen === listGen.current) {
+        isFirstFetch.current = false;
+        setLoading(false);
+      }
     }
   }, [domains.length, buildFilterParams]);
 
-  const fetchMessages = useCallback(async () => {
-    if (domains.length === 0) return;
-    // Only show loading spinner on the very first fetch, not on background polls
-    if (isFirstFetch.current) {
-      setLoading(true);
+  // Always-current handle for callbacks wired up once (service worker, etc.)
+  const loadPageRef = useRef(loadPage);
+  useEffect(() => { loadPageRef.current = loadPage; }, [loadPage]);
+
+  const handleLoadMore = useCallback(() => { loadPage("more"); }, [loadPage]);
+
+  const handleRevealPending = useCallback(() => {
+    const pending = pendingNewRef.current;
+    if (pending.length === 0) return;
+    setMessages((prev) => {
+      const ids = new Set(prev.map((m) => m.id));
+      return [...pending.filter((m) => !ids.has(m.id)), ...prev];
+    });
+    setPendingNew([]);
+    setScrollResetSignal((n) => n + 1);
+  }, []);
+
+  const handleAtTopChange = useCallback((atTop: boolean) => {
+    atTopRef.current = atTop;
+    // Scrolled back to top with buffered arrivals → flush them in place
+    if (atTop && pendingNewRef.current.length > 0) {
+      const pending = pendingNewRef.current;
+      setMessages((prev) => {
+        const ids = new Set(prev.map((m) => m.id));
+        return [...pending.filter((m) => !ids.has(m.id)), ...prev];
+      });
+      setPendingNew([]);
     }
-    try {
-      const params = buildFilterParams();
-      const offset = (currentPage - 1) * pageSize;
-      params.set("limit", String(pageSize));
-      params.set("offset", String(offset));
-
-      const res = await apiFetch(`${API_BASE}/messages?${params}`);
-      if (res.ok) {
-        const data: EmailMessage[] = await res.json();
-
-        // Detect new messages for notification bell (inbox, page 1 only — newest)
-        if (knownMessageIds.current.size > 0 && activeFolder === "inbox" && currentPage === 1) {
-          const newMsgs = data.filter((m) => !knownMessageIds.current.has(m.id));
-          if (newMsgs.length > 0) {
-            for (const nm of newMsgs.slice(0, 3)) {
-              try {
-                await apiFetch("/api/notifications", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    title: "New Email",
-                    body: `${nm.from_name || nm.from_address}: ${nm.subject || "(no subject)"}`,
-                    type: "message",
-                  }),
-                }).catch(() => {});
-              } catch {
-                // Silent
-              }
-            }
-          }
-        }
-
-        // Update known IDs (only track page 1 for new-email detection)
-        if (currentPage === 1) {
-          knownMessageIds.current = new Set(data.map((m) => m.id));
-        }
-
-        // Smart update: only replace messages if the data actually changed
-        setMessages((prev) => {
-          if (prev.length !== data.length) return data;
-          const prevFingerprint = prev.map((m) => `${m.id}:${m.is_read}:${m.is_starred}`).join(",");
-          const newFingerprint = data.map((m) => `${m.id}:${m.is_read}:${m.is_starred}`).join(",");
-          if (prevFingerprint === newFingerprint) return prev; // No change — skip re-render
-          return data;
-        });
-      }
-    } catch (e) {
-      console.error("Failed to fetch messages:", e);
-    }
-    if (isFirstFetch.current) {
-      isFirstFetch.current = false;
-    }
-    setLoading(false);
-  }, [domains, buildFilterParams, currentPage, pageSize, activeFolder]);
+  }, []);
 
   const fetchDomainFolderCounts = useCallback(async () => {
     if (domains.length === 0) return;
@@ -804,7 +883,7 @@ export function EmailLayout() {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.addEventListener("message", (event) => {
         if (event.data?.type === "notification-click" && event.data?.data?.type === "email") {
-          fetchMessages();
+          loadPageRef.current("poll");
           if (event.data.data.messageId) {
             fetchFullMessage(event.data.data.messageId);
           }
@@ -813,42 +892,28 @@ export function EmailLayout() {
     }
   }, []);
 
+  // Commit the search box to the fetch-driving query, debounced
   useEffect(() => {
-    fetchMessages();
+    const t = setTimeout(() => setSearchQuery(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  // A committed search change is a list reset: spinner + scroll to top
+  const prevSearchRef = useRef("");
+  useEffect(() => {
+    if (prevSearchRef.current !== searchQuery) {
+      prevSearchRef.current = searchQuery;
+      isFirstFetch.current = true;
+      setScrollResetSignal((n) => n + 1);
+    }
+  }, [searchQuery]);
+
+  // The single list-reset effect: loadPage identity changes with every filter
+  // primitive (via buildFilterParams) and with domains arriving.
+  useEffect(() => {
+    loadPage("reset");
     if (activeFolder === "drafts") fetchDrafts();
-  }, [fetchMessages, activeFolder, fetchDrafts, activeFilter]);
-
-  // Fetch total count whenever filter/folder/search/domain/address changes
-  useEffect(() => {
-    fetchTotalCount();
-  }, [fetchTotalCount]);
-
-  // Total pages (derived)
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-
-  // Guard: if currentPage exceeds totalPages after a filter/delete change, snap back
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-      setScrollResetSignal((n) => n + 1);
-    }
-  }, [currentPage, totalPages]);
-
-  const goToPage = useCallback((page: number) => {
-    const safe = Math.max(1, Math.min(totalPages, page));
-    if (safe !== currentPage) {
-      setCurrentPage(safe);
-      setScrollResetSignal((n) => n + 1);
-      // Also scroll window list containers to top
-      if (typeof window !== "undefined") {
-        requestAnimationFrame(() => {
-          document.querySelectorAll<HTMLElement>("[data-mc-email-list-scroll]").forEach((el) => {
-            el.scrollTop = 0;
-          });
-        });
-      }
-    }
-  }, [totalPages, currentPage]);
+  }, [loadPage, activeFolder, fetchDrafts]);
 
   useEffect(() => {
     fetchDomainFolderCounts();
@@ -868,7 +933,7 @@ export function EmailLayout() {
   useEffect(() => {
     const interval = setInterval(() => {
       if (!document.hidden && !isMobileReaderOpen.current) {
-        fetchMessages();
+        loadPage("poll");
       }
     }, 30000);
 
@@ -881,7 +946,7 @@ export function EmailLayout() {
 
     const handleVisibility = () => {
       if (!document.hidden && !isMobileReaderOpen.current) {
-        fetchMessages();
+        loadPage("poll");
         fetchDomainFolderCounts();
         fetchUnreadCounts();
       }
@@ -893,7 +958,7 @@ export function EmailLayout() {
       clearInterval(unreadInterval);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [fetchMessages, fetchDomainFolderCounts, fetchUnreadCounts]);
+  }, [loadPage, fetchDomainFolderCounts, fetchUnreadCounts]);
 
   const unreadCount = messages.filter((m) => !m.is_read).length;
 
@@ -936,24 +1001,6 @@ export function EmailLayout() {
       }
 
       const currentMessages = activeFolder === "drafts" ? drafts : messages;
-
-      // Page-turn shortcuts (bonus): ]/Cmd+Right = next · [/Cmd+Left = prev
-      // Only when metaKey/ctrlKey is held for arrow keys, so plain arrows still
-      // drive row navigation below.
-      if (e.key === "]" || ((e.metaKey || e.ctrlKey) && e.key === "ArrowRight")) {
-        if (currentPage < totalPages) {
-          e.preventDefault();
-          goToPage(currentPage + 1);
-          return;
-        }
-      }
-      if (e.key === "[" || ((e.metaKey || e.ctrlKey) && e.key === "ArrowLeft")) {
-        if (currentPage > 1) {
-          e.preventDefault();
-          goToPage(currentPage - 1);
-          return;
-        }
-      }
 
       switch (e.key) {
         case "ArrowDown":
@@ -1069,7 +1116,7 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, currentPage, totalPages, goToPage]);
+  }, [showCompose, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead]);
 
   // Push notification prompt state
   const [showPushBanner, setShowPushBanner] = useState(false);
@@ -1172,7 +1219,6 @@ export function EmailLayout() {
             setSelectedMessage(null);
             setMobileView("list");
             isFirstFetch.current = true;
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
             if (f === "drafts") fetchDrafts();
           }}
@@ -1198,7 +1244,6 @@ export function EmailLayout() {
             setCatchAllOnly(false);
             setSelectedMessage(null);
             isFirstFetch.current = true;
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
           }}
           selectedAddress={selectedAddress}
@@ -1206,7 +1251,6 @@ export function EmailLayout() {
             setSelectedAddress(a);
             setCatchAllOnly(false);
             setSelectedMessage(null);
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
             if (selectedDomain) {
               try {
@@ -1225,7 +1269,6 @@ export function EmailLayout() {
             setSelectedAddress(null);
             setCatchAllOnly(true);
             setSelectedMessage(null);
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
           }}
           unreadCount={unreadCount}
@@ -1307,8 +1350,8 @@ export function EmailLayout() {
           }) as EmailMessage) : messages}
           selectedId={selectedMessage?.id || null}
           loading={loading}
-          searchQuery={searchQuery}
-          onSearchChange={(q) => { setSearchQuery(q); setCurrentPage(1); }}
+          searchQuery={searchInput}
+          onSearchChange={setSearchInput}
           onSelectMessage={(m) => {
             if (activeFolder === "drafts") {
               const draft = drafts.find((d: any) => d.id === m.id);
@@ -1323,31 +1366,24 @@ export function EmailLayout() {
           onTrash={handleTrash}
           onArchive={handleArchive}
           onMobileMenuClick={() => setMobileView("folders")}
-          onRefresh={() => { fetchMessages(); fetchTotalCount(); if (activeFolder === "drafts") fetchDrafts(); }}
+          onRefresh={() => { loadPage("reset"); fetchUnreadCounts(); if (activeFolder === "drafts") fetchDrafts(); }}
           focusedIndex={focusedIndex}
           onFocusedIndexChange={setFocusedIndex}
           activeFilter={activeFilter}
           onFilterChange={(f) => {
+            if (f === activeFilter) return; // re-click of the active pill: nothing to do
             setActiveFilter(f);
             setMessages([]);
             isFirstFetch.current = true;
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
           }}
-          pageSize={pageSize}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            setMessages([]);
-            isFirstFetch.current = true;
-            setCurrentPage(1);
-            setScrollResetSignal((n) => n + 1);
-            try { if (typeof window !== "undefined") localStorage.setItem(PAGE_SIZE_KEY, String(size)); } catch {}
-          }}
-          currentPage={currentPage}
           totalCount={totalCount}
-          totalPages={totalPages}
-          onPrevPage={() => goToPage(currentPage - 1)}
-          onNextPage={() => goToPage(currentPage + 1)}
+          hasMore={hasMore}
+          loadingMore={loadingMore}
+          onLoadMore={handleLoadMore}
+          pendingNewCount={pendingNew.length}
+          onRevealPending={handleRevealPending}
+          onAtTopChange={handleAtTopChange}
           scrollResetSignal={scrollResetSignal}
           onBulkMarkRead={handleBulkMarkRead}
           onBulkMarkUnread={handleBulkMarkUnread}
@@ -1363,7 +1399,6 @@ export function EmailLayout() {
           onToggleShowCatchAllInInbox={(next) => {
             setShowCatchAllInInbox(next);
             try { if (typeof window !== "undefined") localStorage.setItem("mc.email.showCatchAll", String(next)); } catch {}
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
           }}
           domain={selectedDomain}
@@ -1372,7 +1407,6 @@ export function EmailLayout() {
             setSelectedAddress(a);
             setCatchAllOnly(false);
             setSelectedMessage(null);
-            setCurrentPage(1);
             setScrollResetSignal((n) => n + 1);
             if (selectedDomain) {
               try {
@@ -1464,7 +1498,7 @@ export function EmailLayout() {
           onSent={() => {
             setShowCompose(false);
             setComposeDraft(null);
-            fetchMessages();
+            loadPage("reset");
             if (activeFolder === "drafts") fetchDrafts();
           }}
         />

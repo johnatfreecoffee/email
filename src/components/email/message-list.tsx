@@ -16,8 +16,6 @@ import {
   Square,
   MinusSquare,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   AlertOctagon,
   Eye,
   EyeOff,
@@ -62,14 +60,15 @@ interface MessageListProps {
   onFocusedIndexChange?: (index: number) => void;
   activeFilter?: string;
   onFilterChange?: (filter: string) => void;
-  pageSize?: number;
-  onPageSizeChange?: (size: number) => void;
-  // Page-turn pagination
-  currentPage?: number;
-  totalCount?: number;
-  totalPages?: number;
-  onPrevPage?: () => void;
-  onNextPage?: () => void;
+  // Infinite scroll: total is null while searching (server skips the count)
+  totalCount?: number | null;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  // Poll-buffered new arrivals ("N new" chip) + scroll-position tracking
+  pendingNewCount?: number;
+  onRevealPending?: () => void;
+  onAtTopChange?: (atTop: boolean) => void;
   scrollResetSignal?: number;
   onBulkMarkRead?: (ids: string[]) => void;
   onBulkMarkUnread?: (ids: string[]) => void;
@@ -527,13 +526,13 @@ export function MessageList({
   onFocusedIndexChange,
   activeFilter: externalFilter = "all",
   onFilterChange,
-  pageSize = 50,
-  onPageSizeChange,
-  currentPage = 1,
   totalCount = 0,
-  totalPages = 1,
-  onPrevPage,
-  onNextPage,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  pendingNewCount = 0,
+  onRevealPending,
+  onAtTopChange,
   scrollResetSignal = 0,
   onBulkMarkRead,
   onBulkMarkUnread,
@@ -557,7 +556,6 @@ export function MessageList({
   const [resetSwipeSignal, setResetSwipeSignal] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
-  const [showPageSizeDropdown, setShowPageSizeDropdown] = useState(false);
   const [showAddressDropdown, setShowAddressDropdown] = useState(false);
 
   // Close address dropdown on outside click or Escape
@@ -587,10 +585,12 @@ export function MessageList({
   const listRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
 
-  // Clear selection when messages change
+  // Clear selection only on genuine list resets (folder/filter/search change),
+  // NOT on every messages identity change — load-more appends and poll merges
+  // must not nuke an in-progress selection.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [messages]);
+  }, [scrollResetSignal]);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -616,11 +616,8 @@ export function MessageList({
     setTimeout(() => setRefreshing(false), 800);
   }, [onRefresh]);
 
-  // Messages are already server-filtered for unread/starred.
-  // Only client-filter for "attachments" since that's not in the API yet.
-  const filtered = activeFilter === "attachments"
-    ? messages.filter((msg) => msg.attachments && msg.attachments.length > 0)
-    : messages;
+  // All quick filters (incl. attachments) are server-side now.
+  const filtered = messages;
 
   const unreadInView = messages.filter((m) => !m.is_read).length;
 
@@ -659,6 +656,24 @@ export function MessageList({
   const resetAllSwipes = useCallback(() => {
     setResetSwipeSignal((s) => s + 1);
   }, []);
+
+  // Mobile infinite scroll: sentinel near the bottom of the card list asks
+  // for the next page. Re-created whenever the list grows so a sentinel that
+  // stayed inside rootMargin after an append still re-fires.
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    const root = listRef.current;
+    if (!el || !root || isDesktop || !onLoadMore || !hasMore) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoadMore();
+      },
+      { root, rootMargin: "400px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [isDesktop, onLoadMore, hasMore, messages.length]);
 
   return (
     <div className="flex flex-col h-full">
@@ -847,77 +862,11 @@ export function MessageList({
           <span className="text-[10px]" style={{ color: "var(--mc-text-faint)" }}>
             {selectedIds.size > 0
               ? `${selectedIds.size} selected`
-              : `${filtered.length} email${filtered.length !== 1 ? "s" : ""}${unreadInView > 0 && activeFilter !== "unread" ? ` · ${unreadInView} unread` : ""}`
+              : totalCount === null
+                ? `${filtered.length}${hasMore ? "+" : ""} result${filtered.length !== 1 ? "s" : ""}`
+                : `${totalCount > filtered.length ? `${filtered.length} of ${totalCount}` : filtered.length} email${(totalCount || filtered.length) !== 1 ? "s" : ""}${unreadInView > 0 && activeFilter !== "unread" ? ` · ${unreadInView} unread` : ""}`
             }
           </span>
-        </div>
-
-        {/* Pagination: prev / page X of Y / next + page size dropdown */}
-        <div className="flex items-center gap-2">
-          {totalPages > 1 && (
-            <div className="flex items-center gap-1" title={`Page ${currentPage} of ${totalPages}`}>
-              <button
-                onClick={onPrevPage}
-                disabled={currentPage <= 1}
-                className="p-0.5 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ color: currentPage <= 1 ? "var(--mc-text-faint)" : "var(--mc-text-muted)" }}
-                onMouseEnter={(e) => { if (currentPage > 1) (e.currentTarget as HTMLElement).style.color = "#06B6D4"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = currentPage <= 1 ? "var(--mc-text-faint)" : "var(--mc-text-muted)"; }}
-                aria-label="Previous page"
-                title="Previous page ([ or Cmd/Ctrl+←)"
-              >
-                <ChevronLeft className="h-3 w-3" />
-              </button>
-              <span className="text-[10px] tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
-                Page {currentPage} of {totalPages}
-              </span>
-              <button
-                onClick={onNextPage}
-                disabled={currentPage >= totalPages}
-                className="p-0.5 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                style={{ color: currentPage >= totalPages ? "var(--mc-text-faint)" : "var(--mc-text-muted)" }}
-                onMouseEnter={(e) => { if (currentPage < totalPages) (e.currentTarget as HTMLElement).style.color = "#06B6D4"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = currentPage >= totalPages ? "var(--mc-text-faint)" : "var(--mc-text-muted)"; }}
-                aria-label="Next page"
-                title="Next page (] or Cmd/Ctrl+→)"
-              >
-                <ChevronRight className="h-3 w-3" />
-              </button>
-            </div>
-          )}
-
-          {/* Page size dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowPageSizeDropdown(!showPageSizeDropdown)}
-              className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded transition-colors"
-              style={{ color: "var(--mc-text-faint)" }}
-            >
-              {pageSize}/page <ChevronDown className="h-2.5 w-2.5" />
-            </button>
-            {showPageSizeDropdown && (
-              <div
-                className="absolute right-0 top-full mt-1 rounded-lg shadow-xl z-20 py-1 min-w-[80px]"
-                style={{ backgroundColor: "var(--mc-bg)", border: "1px solid var(--mc-border)" }}
-              >
-                {[20, 30, 50, 100].map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => { onPageSizeChange?.(size); setShowPageSizeDropdown(false); }}
-                    className="w-full text-left px-3 py-1.5 text-[11px] transition-colors"
-                    style={{
-                      color: pageSize === size ? "#06B6D4" : "var(--mc-text-muted)",
-                      backgroundColor: pageSize === size ? "var(--mc-accent-bg)" : "transparent",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = pageSize === size ? "var(--mc-accent-bg)" : "transparent"; }}
-                  >
-                    {size}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
@@ -1047,7 +996,23 @@ export function MessageList({
       )}
 
       {/* Message list with date groups */}
-      <div className="flex-1 overflow-y-auto" ref={listRef} data-mc-email-list-scroll="">
+      <div className="relative flex-1 overflow-hidden flex flex-col">
+        {/* Poll-buffered arrivals chip */}
+        {pendingNewCount > 0 && onRevealPending && (
+          <button
+            onClick={onRevealPending}
+            className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full text-[11px] font-semibold shadow-lg transition-transform hover:scale-105"
+            style={{ backgroundColor: "var(--mc-accent, #06B6D4)", color: "#fff" }}
+          >
+            {pendingNewCount} new message{pendingNewCount !== 1 ? "s" : ""}
+          </button>
+        )}
+      <div
+        className="flex-1 overflow-y-auto"
+        ref={listRef}
+        data-mc-email-list-scroll=""
+        onScroll={(e) => onAtTopChange?.((e.currentTarget as HTMLElement).scrollTop < 4)}
+      >
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-5 w-5 text-[#06B6D4] animate-spin" />
@@ -1086,6 +1051,10 @@ export function MessageList({
             }}
             onBulkTrash={onBulkTrash}
             scrollResetSignal={scrollResetSignal}
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={onLoadMore}
+            onAtTopChange={onAtTopChange}
           />
         ) : (
           <>
@@ -1112,8 +1081,16 @@ export function MessageList({
                 ))}
               </div>
             ))}
+            {/* Infinite-scroll sentinel + tail state */}
+            <div ref={loadMoreRef} />
+            {loadingMore && (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent, #06B6D4)" }} />
+              </div>
+            )}
           </>
         )}
+      </div>
       </div>
     </div>
   );

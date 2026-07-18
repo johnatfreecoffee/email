@@ -23,7 +23,7 @@ import {
   memo,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Star, Paperclip, ChevronUp, ChevronDown, CheckSquare, Square, MinusSquare } from "lucide-react";
+import { Star, Paperclip, ChevronUp, ChevronDown, CheckSquare, Square, MinusSquare, Loader2 } from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 
 // -------------------- Types --------------------
@@ -167,8 +167,13 @@ export interface MessageTableProps {
   // Bulk ops triggered via keyboard
   onBulkTrash?: (ids: string[]) => void;
   // Monotonically-incrementing signal from the parent to scroll the virtualized
-  // list back to top (e.g. on page-turn).
+  // list back to top (e.g. on list reset).
   scrollResetSignal?: number;
+  // Infinite scroll
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  onAtTopChange?: (atTop: boolean) => void;
 }
 
 // -------------------- Component --------------------
@@ -186,6 +191,10 @@ export function MessageTable({
   onSelectionChange,
   onBulkTrash,
   scrollResetSignal = 0,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  onAtTopChange,
 }: MessageTableProps) {
   // --- Sort state ---
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
@@ -674,6 +683,14 @@ export function MessageTable({
         ref={parentRef}
         className="flex-1 overflow-y-auto"
         style={{ backgroundColor: "var(--mc-bg-secondary)" }}
+        onScroll={(e) => {
+          const el = e.currentTarget as HTMLElement;
+          onAtTopChange?.(el.scrollTop < 4);
+          if (hasMore && !loadingMore && onLoadMore &&
+              el.scrollHeight - el.scrollTop - el.clientHeight < 600) {
+            onLoadMore();
+          }
+        }}
       >
         <div
           style={{
@@ -707,6 +724,12 @@ export function MessageTable({
             );
           })}
         </div>
+
+        {loadingMore && (
+          <div className="flex items-center justify-center py-3">
+            <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent, #06B6D4)" }} />
+          </div>
+        )}
 
         {sortedMessages.length === 0 && (
           <div className="flex items-center justify-center py-12 text-[13px]" style={{ color: "var(--mc-text-faint)" }}>
