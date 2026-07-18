@@ -2,10 +2,12 @@
 
 import React, { useState, useRef } from "react";
 import { X, Send, Loader2, Paperclip, FileText, Image, File, Save } from "lucide-react";
+import type { Editor } from "@tiptap/react";
 import { AddressAutocomplete } from "./address-autocomplete";
 import { RichEditor } from "./rich-editor";
 import type { EmailDomain, EmailMessage } from "./email-layout";
 import { apiFetch } from "@/lib/auth";
+import { useSettings } from "@/lib/settings";
 
 interface Draft {
   id: string;
@@ -39,6 +41,7 @@ export function ComposeModal({
   onClose,
   onSent,
 }: ComposeModalProps) {
+  const { settings } = useSettings();
   // Build "from" options from all domains + addresses
   const fromOptions: { label: string; value: string; domainId: string; addressId?: string }[] = [];
   for (const domain of domains) {
@@ -65,7 +68,13 @@ export function ComposeModal({
     }
   }
 
-  const defaultFrom = fromOptions.length > 0 ? fromOptions[0].value : "";
+  // New composes honor the "Send new messages from" setting when set;
+  // replies/forwards keep the existing first-option behavior.
+  const preferred =
+    composeMode === "new" && settings.composing.defaultAddressId
+      ? fromOptions.find((o) => o.addressId === settings.composing.defaultAddressId)
+      : undefined;
+  const defaultFrom = preferred?.value ?? (fromOptions.length > 0 ? fromOptions[0].value : "");
 
   const isReply = composeMode === "reply" || composeMode === "reply-all";
   const isForward = composeMode === "forward";
@@ -134,6 +143,35 @@ export function ComposeModal({
     return "";
   };
 
+  // ---------- Signatures ----------
+  const getSignatureHtml = (addressId: string | undefined): string => {
+    if (!addressId) return "";
+    const sig = settings.signatures.byAddressId[addressId];
+    if (!sig?.enabled || !sig.html) return "";
+    // Strip a signature that's only empty paragraphs
+    const textish = sig.html.replace(/<[^>]+>/g, "").trim();
+    if (!textish) return "";
+    return `<div data-mc-signature="1">${sig.html}</div>`;
+  };
+
+  // Full initial body for a given From value: quote/forward block from the
+  // message context + that address's signature, placed per the setting.
+  const composeInitialHtml = (fromValue: string): string => {
+    const opt = fromOptions.find((o) => o.value === fromValue);
+    const sig = getSignatureHtml(opt?.addressId);
+    const base = buildInitialHtml();
+    if (!sig) return base;
+    if (!base) return `<p><br></p><p><br></p>${sig}`; // new message: caret on top
+    if (settings.composing.signaturePlacement === "above") {
+      // Right after the leading blank paragraph, before the quote
+      if (base.startsWith("<p><br></p>")) {
+        return `<p><br></p>${sig}${base.slice("<p><br></p>".length)}`;
+      }
+      return `${sig}${base}`;
+    }
+    return `${base}${sig}`;
+  };
+
   const [from, setFrom] = useState(draft?.from_address || defaultFrom);
   const [to, setTo] = useState(draft ? (draft.to_addresses || []).join(", ") : buildInitialTo());
   const [cc, setCc] = useState(draft ? (draft.cc_addresses || []).join(", ") : buildInitialCc());
@@ -142,6 +180,26 @@ export function ComposeModal({
   const [body, setBody] = useState(draft?.body_text || buildInitialBody());
   const [showCcBcc, setShowCcBcc] = useState(composeMode === "reply-all" && cc.length > 0);
   const [htmlBody, setHtmlBody] = useState(draft?.body_html || "");
+
+  // Editor content seeds ONCE (drafts verbatim — never inject a signature);
+  // later From changes swap the signature only while the body is pristine.
+  const [initialEditorHtml] = useState<string>(() => draft?.body_html || composeInitialHtml(draft?.from_address || defaultFrom));
+  const editorRef = useRef<Editor | null>(null);
+  const baselineRef = useRef<string>("");
+
+  React.useEffect(() => {
+    if (draft) return; // drafts keep their content, whatever the From
+    const ed = editorRef.current;
+    if (!ed) return;
+    if (baselineRef.current && ed.getHTML() !== baselineRef.current) return; // user typed
+    const next = composeInitialHtml(from);
+    ed.commands.setContent(next);
+    baselineRef.current = ed.getHTML(); // post-normalization baseline
+    // setContent doesn't reliably emit update — sync the send/draft state
+    setHtmlBody(baselineRef.current);
+    setBody(ed.getText());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from]);
   const [draftId, setDraftId] = useState<string | null>(draft?.id || null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
@@ -414,10 +472,19 @@ export function ComposeModal({
 
           {/* Rich Text Body */}
           <RichEditor
-            initialContent={draft?.body_html || buildInitialHtml()}
+            initialContent={initialEditorHtml}
             placeholder="Write your message..."
             onHtmlChange={(html) => setHtmlBody(html)}
             onTextChange={(text) => setBody(text)}
+            onEditorReady={(ed) => {
+              editorRef.current = ed;
+              if (!baselineRef.current) baselineRef.current = ed.getHTML();
+              // Seed send/draft state with the signature-bearing initial body
+              if (!draft) {
+                setHtmlBody(ed.getHTML());
+                setBody(ed.getText());
+              }
+            }}
           />
 
           {/* Attachments */}

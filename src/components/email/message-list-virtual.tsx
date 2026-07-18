@@ -19,7 +19,8 @@ import { Star, Paperclip, Loader2 } from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 import { formatDate, getDateGroup } from "./format";
 
-const ROW_HEIGHT = 84;
+const ROW_HEIGHT_2_LINES = 84;
+const ROW_HEIGHT_1_LINE = 68;
 const HEADER_HEIGHT = 28;
 
 type Item =
@@ -43,6 +44,8 @@ export interface MessageListVirtualProps {
   loadingMore?: boolean;
   onLoadMore?: () => void;
   onAtTopChange?: (atTop: boolean) => void;
+  /** Preview lines under the subject (1 or 2) — drives row height. */
+  previewLines?: 1 | 2;
 }
 
 export function MessageListVirtual({
@@ -62,7 +65,9 @@ export function MessageListVirtual({
   loadingMore = false,
   onLoadMore,
   onAtTopChange,
+  previewLines = 2,
 }: MessageListVirtualProps) {
+  const rowHeight = previewLines === 1 ? ROW_HEIGHT_1_LINE : ROW_HEIGHT_2_LINES;
   // Interleave date-group headers with message rows; keep a message-index →
   // item-index map so keyboard focus can scroll the right virtual item.
   const { items, msgItemIndex } = useMemo(() => {
@@ -85,7 +90,7 @@ export function MessageListVirtual({
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (i) => (items[i]?.t === "header" ? HEADER_HEIGHT : ROW_HEIGHT),
+    estimateSize: (i) => (items[i]?.t === "header" ? HEADER_HEIGHT : rowHeight),
     overscan: 8,
   });
 
@@ -99,6 +104,12 @@ export function MessageListVirtual({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusedIndex, messages.length]);
+
+  // Re-measure cached row sizes when the preview-lines setting changes
+  useEffect(() => {
+    rowVirtualizer.measure();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowHeight]);
 
   // Scroll to top on list reset
   useEffect(() => {
@@ -351,7 +362,7 @@ export function MessageListVirtual({
                   top: 0,
                   left: 0,
                   width: "100%",
-                  height: `${ROW_HEIGHT}px`,
+                  height: `${rowHeight}px`,
                   transform: `translateY(${vItem.start}px)`,
                   backgroundColor: rowBg,
                 }}
@@ -438,13 +449,13 @@ export function MessageListVirtual({
                       </span>
                     </div>
 
-                    {/* Lines 3-4: preview */}
+                    {/* Preview (1 or 2 lines per the Viewing setting) */}
                     <span
                       className="text-[12px] leading-4 mt-[2px] overflow-hidden"
                       style={{
                         color: muted,
                         display: "-webkit-box",
-                        WebkitLineClamp: 2,
+                        WebkitLineClamp: previewLines,
                         WebkitBoxOrient: "vertical",
                       }}
                     >

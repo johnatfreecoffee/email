@@ -1,6 +1,6 @@
 "use client";
 
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Underline } from "@tiptap/extension-underline";
 import { TextStyle } from "@tiptap/extension-text-style";
@@ -35,6 +35,8 @@ interface RichEditorProps {
   placeholder?: string;
   onHtmlChange: (html: string) => void;
   onTextChange: (text: string) => void;
+  /** Hands the Tiptap editor instance to the parent (signature swapping). */
+  onEditorReady?: (editor: Editor) => void;
 }
 
 const COLORS = [
@@ -114,7 +116,7 @@ function ColorPicker({
   );
 }
 
-export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextChange }: RichEditorProps) {
+export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextChange, onEditorReady }: RichEditorProps) {
   const [showColors, setShowColors] = useState(false);
   const [showHighlight, setShowHighlight] = useState(false);
   const [showFontSize, setShowFontSize] = useState(false);
@@ -155,6 +157,11 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
       editor.commands.setContent(initialContent);
     }
   }, [initialContent, editor]);
+
+  useEffect(() => {
+    if (editor && onEditorReady) onEditorReady(editor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
 
   // Close dropdowns when clicking outside
   useEffect(() => {

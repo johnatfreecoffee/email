@@ -25,6 +25,7 @@ import { useState, useRef, useCallback, useEffect, memo } from "react";
 import type { EmailMessage, EmailDomain } from "./email-layout";
 import { MessageListVirtual } from "./message-list-virtual";
 import { formatDate, getDateGroup } from "./format";
+import { useSettings } from "@/lib/settings";
 
 // Hook: matches md: breakpoint (768px)
 function useIsDesktop(): boolean {
@@ -524,6 +525,7 @@ export function MessageList({
 }: MessageListProps) {
   const activeFilter = externalFilter as QuickFilter;
   const isDesktop = useIsDesktop();
+  const { settings } = useSettings();
   const [refreshing, setRefreshing] = useState(false);
   const [resetSwipeSignal, setResetSwipeSignal] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -999,7 +1001,10 @@ export function MessageList({
             )}
           </div>
         ) : isDesktop ? (
+          // desktopView "columns" renders MessageTable once it lands; until
+          // then both values use the stacked list.
           <MessageListVirtual
+            previewLines={settings.viewing.previewLines}
             messages={filtered}
             selectedId={selectedId}
             focusedIndex={focusedIndex}

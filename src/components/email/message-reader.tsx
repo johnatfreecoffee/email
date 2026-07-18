@@ -16,9 +16,15 @@ import {
   MailOpen,
   Mail,
   AlertOctagon,
+  Shield,
 } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { EmailMessage } from "./email-layout";
+import { useSettings } from "@/lib/settings";
+import { stripRemoteContent } from "./remote-content";
+
+// Session-lifetime "load remote content" grants, keyed by message id.
+const revealedRemote = new Set<string>();
 
 interface MessageReaderProps {
   message: EmailMessage | null;
@@ -212,6 +218,17 @@ function MessageReaderBody({
 } & Omit<MessageReaderProps, "message">) {
   // Mail-style collapsed recipient line with a Details toggle
   const [showDetails, setShowDetails] = useState(false);
+
+  // Remote-content blocking (privacy setting). Reveal is per message id,
+  // session-only — navigate away and back keeps it revealed; reload re-blocks.
+  const { settings } = useSettings();
+  const [revealed, setRevealed] = useState(() => revealedRemote.has(message.id));
+  const blockActive = settings.privacy.blockRemoteContent && !revealed && !!message.body_html;
+  const { html: displayHtml, blocked } = useMemo(() => {
+    if (!message.body_html) return { html: "", blocked: 0 };
+    if (!blockActive) return { html: message.body_html, blocked: 0 };
+    return stripRemoteContent(message.body_html);
+  }, [message.body_html, blockActive]);
 
   return (
     <div className="flex flex-col h-full">
@@ -432,6 +449,29 @@ function MessageReaderBody({
         </div>
       )}
 
+      {/* Remote-content blocked banner */}
+      {blockActive && blocked > 0 && (
+        <div
+          className="flex items-center gap-2 px-6 py-1.5 text-[12px]"
+          style={{ backgroundColor: "var(--mc-bg-hover)", borderBottom: "1px solid var(--mc-border-subtle)", color: "var(--mc-text-muted)" }}
+        >
+          <Shield className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="flex-1">
+            Remote content blocked ({blocked} item{blocked !== 1 ? "s" : ""})
+          </span>
+          <button
+            onClick={() => {
+              revealedRemote.add(message.id);
+              setRevealed(true);
+            }}
+            className="flex-shrink-0 font-medium"
+            style={{ color: "var(--mc-accent)" }}
+          >
+            Load Remote Content
+          </button>
+        </div>
+      )}
+
       {/* Message body */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {message.body_html ? (
@@ -478,7 +518,7 @@ function MessageReaderBody({
                   }
                 </style>
               </head>
-              <body>${message.body_html}</body>
+              <body>${displayHtml}</body>
               </html>
             `}
             // allow-same-origin: parent can rewrite links + size iframe

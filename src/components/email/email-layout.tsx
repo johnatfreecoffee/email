@@ -10,7 +10,7 @@ import { ComposeModal } from "./compose-modal";
 import { DomainSetup } from "./domain-setup";
 import { SettingsModal } from "./settings/settings-modal";
 import { apiFetch } from "@/lib/auth";
-import { type SettingsTab } from "@/lib/settings";
+import { useSettings, type SettingsTab } from "@/lib/settings";
 
 const API_BASE = "/api/email";
 
@@ -261,10 +261,11 @@ export function EmailLayout() {
   // alongside (or instead of) a specific address, depending on what the
   // user clicked in the sidebar.
   const [catchAllOnly, setCatchAllOnly] = useState(false);
-  // Inbox shows addressed mail only by default — toggle to fold catch-alls
-  // into the inbox view. Persisted to localStorage so the user's choice
-  // survives reloads.
-  const [showCatchAllInInbox, setShowCatchAllInInbox] = useState(false);
+  // Roaming preferences (server-synced): catch-alls-in-inbox, mark-read
+  // delay, desktop list style, preview lines.
+  const { settings, updateSetting } = useSettings();
+  const showCatchAllInInbox = settings.viewing.showCatchAllInInbox;
+  const markReadDelay = settings.viewing.markReadDelaySeconds;
   const [messages, setMessages] = useState<EmailMessage[]>([]);
   const [selectedMessage, setSelectedMessage] = useState<EmailMessage | null>(null);
   const [activeFolder, setActiveFolder] = useState("inbox");
@@ -290,8 +291,6 @@ export function EmailLayout() {
       if (!Number.isNaN(f) && f >= FOLDER_W_MIN && f <= FOLDER_W_MAX) setFolderColWidth(f);
       const l = parseInt(localStorage.getItem(LIST_W_KEY) || "");
       if (!Number.isNaN(l) && l >= LIST_W_MIN) setListColWidth(l);
-      const sc = localStorage.getItem("mc.email.showCatchAll");
-      if (sc === "true") setShowCatchAllInInbox(true);
     } catch {}
   }, []);
 
@@ -649,29 +648,62 @@ export function EmailLayout() {
     scheduleCountsReconcile();
   }, [scheduleCountsReconcile]);
 
+  // Opening a message marks it read after the configured delay (Apple Mail's
+  // "Mark messages as read" setting). null = never; 0 = immediately.
+  const openReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markReadDelayRef = useRef(markReadDelay);
+  useEffect(() => { markReadDelayRef.current = markReadDelay; }, [markReadDelay]);
+
   const fetchFullMessage = useCallback(async (id: string) => {
     try {
       const res = await apiFetch(`${API_BASE}/messages?id=${id}`);
       if (res.ok) {
         const data = await res.json();
         setSelectedMessage(data);
-        if (!data.is_read) {
-          await apiFetch(`${API_BASE}/messages`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id, is_read: true }),
-          });
-          setMessages((prev) =>
-            prev.map((m) => (m.id === id ? { ...m, is_read: true } : m))
-          );
-          // Optimistic unread count update: message went unread -> read
-          applyUnreadTransitions([[data, null]]);
+        if (openReadTimer.current) {
+          clearTimeout(openReadTimer.current);
+          openReadTimer.current = null;
+        }
+        const delay = markReadDelayRef.current;
+        if (!data.is_read && delay !== null) {
+          const markRead = async () => {
+            openReadTimer.current = null;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === id ? { ...m, is_read: true } : m))
+            );
+            setSelectedMessage((prev) => (prev?.id === id ? { ...prev, is_read: true } : prev));
+            applyUnreadTransitions([[data, null]]);
+            await apiFetch(`${API_BASE}/messages`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id, is_read: true }),
+            });
+          };
+          if (delay <= 0) {
+            markRead();
+          } else {
+            openReadTimer.current = setTimeout(markRead, delay * 1000);
+          }
         }
       }
     } catch (e) {
       console.error("Failed to fetch message:", e);
     }
   }, [applyUnreadTransitions]);
+
+  // Closing the reader before the delay elapses leaves the message unread
+  useEffect(() => {
+    if (!selectedMessage && openReadTimer.current) {
+      clearTimeout(openReadTimer.current);
+      openReadTimer.current = null;
+    }
+    return () => {
+      if (!selectedMessage && openReadTimer.current) {
+        clearTimeout(openReadTimer.current);
+        openReadTimer.current = null;
+      }
+    };
+  }, [selectedMessage]);
 
   const handleToggleStar = useCallback(async (id: string, starred: boolean) => {
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
@@ -963,24 +995,26 @@ export function EmailLayout() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const readerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-mark as read after 1.5s of keyboard focus (like Apple Mail preview)
+  // Auto-mark as read after the configured delay of keyboard focus (like
+  // Apple Mail's "Mark messages as read" preview setting)
   const autoReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (autoReadTimer.current) clearTimeout(autoReadTimer.current);
-    
+    if (markReadDelay === null) return;
+
     const currentMessages = activeFolder === "drafts" ? drafts : messages;
     if (focusedIndex >= 0 && focusedIndex < currentMessages.length) {
       const msg = currentMessages[focusedIndex];
       if (msg && !msg.is_read) {
         autoReadTimer.current = setTimeout(() => {
           handleToggleRead(msg.id, false); // false = currently unread, will mark read
-        }, 1500);
+        }, Math.max(0, markReadDelay * 1000));
       }
     }
     return () => {
       if (autoReadTimer.current) clearTimeout(autoReadTimer.current);
     };
-  }, [focusedIndex, activeFolder, drafts, messages]);
+  }, [focusedIndex, activeFolder, drafts, messages, markReadDelay]);
 
   // Reset focused index when messages change
   useEffect(() => {
@@ -1395,8 +1429,7 @@ export function EmailLayout() {
           catchAllOnly={catchAllOnly}
           showCatchAllInInbox={showCatchAllInInbox}
           onToggleShowCatchAllInInbox={(next) => {
-            setShowCatchAllInInbox(next);
-            try { if (typeof window !== "undefined") localStorage.setItem("mc.email.showCatchAll", String(next)); } catch {}
+            updateSetting("viewing", { showCatchAllInInbox: next });
             setScrollResetSignal((n) => n + 1);
           }}
           domain={selectedDomain}
