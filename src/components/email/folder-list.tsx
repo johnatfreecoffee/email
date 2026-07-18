@@ -353,7 +353,7 @@ export function FolderList({
         if (!d || !def) return null;
         return {
           icon: def.icon,
-          label: `${def.label} — ${d.domain}`,
+          label: ref.label?.trim() || `${def.label} — ${d.domain}`,
           count: ref.folder === "drafts" ? 0 : unreadCounts.folders[d.id]?.[ref.folder] ?? 0,
           active:
             selectedDomain?.id === d.id &&
@@ -372,7 +372,7 @@ export function FolderList({
         if (!d || !addr) return null;
         return {
           icon: User,
-          label: `${addr.address}@${d.domain}`,
+          label: ref.label?.trim() || `${addr.address}@${d.domain}`,
           active: selectedDomain?.id === d.id && selectedAddress === addr.id && !catchAllOnly,
           onClick: () => {
             onDomainChange(d);
@@ -386,7 +386,7 @@ export function FolderList({
         if (!d) return null;
         return {
           icon: Shield,
-          label: `Catch-All — ${d.domain}`,
+          label: ref.label?.trim() || `Catch-All — ${d.domain}`,
           count: unreadCounts.folders[d.id]?.catchall ?? 0,
           active: selectedDomain?.id === d.id && catchAllOnly,
           onClick: () => onCatchAllToggle?.(d),
@@ -401,6 +401,44 @@ export function FolderList({
     const [moved] = next.splice(result.source.index, 1);
     next.splice(result.destination.index, 0, moved);
     updateFavorites(next);
+  };
+
+  // Default (computed) name for a favorite — used as the rename placeholder.
+  // The standard aggregates keep their fixed names and can't be renamed.
+  const defaultFavoriteLabel = (ref: FavoriteRef): string => {
+    switch (ref.kind) {
+      case "folder":
+        return aggregateDefs.find((f) => f.id === ref.folder)?.label ?? ref.folder;
+      case "domain-folder": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        const def = folderDefs.find((f) => f.id === ref.folder);
+        return d && def ? `${def.label} — ${d.domain}` : "";
+      }
+      case "address": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        const addr = d?.addresses?.find((a) => a.id === ref.addressId);
+        return d && addr ? `${addr.address}@${d.domain}` : "";
+      }
+      case "catchall": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        return d ? `Catch-All — ${d.domain}` : "";
+      }
+    }
+  };
+
+  const renameFavorite = (key: string, rawLabel: string) => {
+    updateFavorites(
+      favorites.map((f) => {
+        if (favKey(f) !== key || f.kind === "folder") return f;
+        const label = rawLabel;
+        if (!label.trim()) {
+          // Cleared → back to the default name
+          const { label: _drop, ...rest } = f as { label?: string } & FavoriteRef;
+          return rest as FavoriteRef;
+        }
+        return { ...f, label };
+      })
+    );
   };
 
   // Small pin toggle used across domain sections while editing. The outer
@@ -502,6 +540,11 @@ export function FolderList({
           </button>
         </div>
 
+        {/* One scroll container for the whole mailbox tree — Favorites and
+            domain sections scroll together (matters most in Edit mode, where
+            the Favorites section grows tall). */}
+        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">
+
         {/* Favorites */}
         <div className="mb-1.5">
           <div className="flex items-center px-1 mb-0.5">
@@ -539,50 +582,66 @@ export function FolderList({
                           const resolved = resolveFavorite(ref);
                           if (!resolved) return null;
                           const key = favKey(ref);
+                          const renamable = ref.kind !== "folder";
                           return (
                             <Draggable key={key} draggableId={key} index={index}>
                               {(dragProvided, snapshot) => (
                                 <div
                                   ref={dragProvided.innerRef}
                                   {...dragProvided.draggableProps}
+                                  className="flex items-center gap-2 h-8 rounded-md pl-2 pr-2"
                                   style={{
                                     ...dragProvided.draggableProps.style,
                                     opacity: snapshot.isDragging ? 0.85 : 1,
+                                    backgroundColor: snapshot.isDragging ? "var(--mc-bg-hover)" : "transparent",
                                   }}
                                 >
-                                  <SidebarRow
-                                    icon={resolved.icon}
-                                    label={resolved.label}
-                                    active={false}
-                                    leading={
-                                      <span
-                                        {...dragProvided.dragHandleProps}
-                                        className="flex-shrink-0 cursor-grab active:cursor-grabbing"
-                                        style={{ color: "var(--mc-text-faint)" }}
-                                      >
-                                        <GripVertical className="h-3.5 w-3.5" />
-                                      </span>
-                                    }
-                                    trailing={
-                                      <span
-                                        role="button"
-                                        tabIndex={0}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          updateFavorites(favorites.filter((f) => favKey(f) !== key));
-                                        }}
-                                        className="mc-touch-exempt flex-shrink-0 p-1.5 -m-1.5 flex items-center justify-center cursor-pointer"
-                                        title="Remove from Favorites"
-                                      >
-                                        <span
-                                          className="h-[18px] w-[18px] rounded-full flex items-center justify-center"
-                                          style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
-                                        >
-                                          <Minus className="h-3 w-3" />
-                                        </span>
-                                      </span>
-                                    }
+                                  <span
+                                    {...dragProvided.dragHandleProps}
+                                    className="flex-shrink-0 cursor-grab active:cursor-grabbing"
+                                    style={{ color: "var(--mc-text-faint)" }}
+                                  >
+                                    <GripVertical className="h-3.5 w-3.5" />
+                                  </span>
+                                  <resolved.icon
+                                    className="h-[15px] w-[15px] flex-shrink-0"
+                                    style={{ color: "var(--mc-accent)" }}
                                   />
+                                  {renamable ? (
+                                    <input
+                                      type="text"
+                                      value={(ref as { label?: string }).label ?? ""}
+                                      placeholder={defaultFavoriteLabel(ref)}
+                                      onChange={(e) => renameFavorite(key, e.target.value)}
+                                      className="flex-1 min-w-0 bg-transparent text-[13px] focus:outline-none rounded px-1 -mx-1 focus:bg-[var(--mc-bg-tertiary)]"
+                                      style={{ color: "var(--mc-text)" }}
+                                      title="Tap to rename"
+                                    />
+                                  ) : (
+                                    <span
+                                      className="flex-1 min-w-0 truncate text-[13px]"
+                                      style={{ color: "var(--mc-text-secondary)" }}
+                                    >
+                                      {resolved.label}
+                                    </span>
+                                  )}
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateFavorites(favorites.filter((f) => favKey(f) !== key));
+                                    }}
+                                    className="mc-touch-exempt flex-shrink-0 p-1.5 -m-1.5 flex items-center justify-center cursor-pointer"
+                                    title="Remove from Favorites"
+                                  >
+                                    <span
+                                      className="h-[18px] w-[18px] rounded-full flex items-center justify-center"
+                                      style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                    >
+                                      <Minus className="h-3 w-3" />
+                                    </span>
+                                  </span>
                                 </div>
                               )}
                             </Draggable>
@@ -637,7 +696,7 @@ export function FolderList({
         </div>
 
         {/* Domain accounts */}
-        <div className="flex-1 overflow-y-auto space-y-1.5 -mx-1 px-1">
+        <div className="space-y-1.5">
           {domains.map((d) => {
             const isThisDomain = selectedDomain?.id === d.id;
             const dotColor = getDomainHealthDot(d);
@@ -791,6 +850,7 @@ export function FolderList({
               Add a domain in Settings
             </button>
           )}
+        </div>
         </div>
 
         {/* Footer icon row */}

@@ -3,10 +3,10 @@
 // migrates the legacy folder-type list ("email-favorite-items") in place.
 
 export type FavoriteRef =
-  | { kind: "folder"; folder: string } // aggregate across domains (All Inboxes, Sent, …)
-  | { kind: "domain-folder"; domainId: string; folder: string }
-  | { kind: "address"; domainId: string; addressId: string }
-  | { kind: "catchall"; domainId: string };
+  | { kind: "folder"; folder: string } // aggregate across domains (All Inboxes, Sent, …) — fixed names
+  | { kind: "domain-folder"; domainId: string; folder: string; label?: string }
+  | { kind: "address"; domainId: string; addressId: string; label?: string }
+  | { kind: "catchall"; domainId: string; label?: string };
 
 const V2_KEY = "email.favorites.v2";
 const LEGACY_KEY = "email-favorite-items";

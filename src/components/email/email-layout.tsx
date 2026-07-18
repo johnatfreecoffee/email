@@ -1247,7 +1247,7 @@ export function EmailLayout() {
       {/* Left: Folders + Domains */}
       <div
         id="mc-email-folder-col"
-        className={`flex-shrink-0 overflow-y-auto ${
+        className={`flex-shrink-0 overflow-hidden ${
           mobileView === "folders" ? "block" : "hidden"
         } md:block`}
         style={{
