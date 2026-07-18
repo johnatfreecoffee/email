@@ -23,7 +23,8 @@ import {
 } from "lucide-react";
 import { useState, useRef, useCallback, useEffect, memo } from "react";
 import type { EmailMessage, EmailDomain } from "./email-layout";
-import { MessageTable } from "./message-table";
+import { MessageListVirtual } from "./message-list-virtual";
+import { formatDate, getDateGroup } from "./format";
 
 // Hook: matches md: breakpoint (768px)
 function useIsDesktop(): boolean {
@@ -87,35 +88,6 @@ interface MessageListProps {
   domain?: EmailDomain | null;
   selectedAddress?: string | null;
   onAddressChange?: (id: string | null) => void;
-}
-
-function formatDate(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) {
-    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  }
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) {
-    return date.toLocaleDateString([], { weekday: "short" });
-  }
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-function getDateGroup(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const msgDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.floor((today.getTime() - msgDay.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return "This Week";
-  return "Earlier";
 }
 
 const quickFilters: { id: QuickFilter; label: string; icon: typeof Mail }[] = [
@@ -687,22 +659,25 @@ export function MessageList({
             <Menu className="h-4 w-4" />
           </button>
           <div
-            className="flex-1 flex items-center gap-2 rounded-lg px-3 py-2"
-            style={{ backgroundColor: "var(--mc-bg-hover, rgba(255,255,255,0.04))" }}
+            className="flex-1 flex items-center gap-1.5 rounded-md px-2 h-7"
+            style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
           >
-            <Search className="h-4 w-4 text-muted-foreground" />
+            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-muted)" }} />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search emails..."
-              className="flex-1 bg-transparent text-[13px] focus:outline-none"
-              style={{ color: "var(--mc-text)", }}
+              placeholder="Search"
+              className="flex-1 min-w-0 bg-transparent text-[13px] focus:outline-none"
+              style={{ color: "var(--mc-text)" }}
             />
           </div>
           <button
             onClick={handleRefresh}
-            className="p-2 text-muted-foreground hover:text-mc-teal rounded-lg hover:bg-mc-teal-glow transition-colors"
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: "var(--mc-text-muted)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
             title="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
@@ -803,24 +778,16 @@ export function MessageList({
             <button
               key={f.id}
               onClick={() => onFilterChange ? onFilterChange(f.id) : undefined}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
                 isActive
                   ? "bg-mc-teal-dim text-mc-teal"
-                  : "text-muted-foreground hover:text-muted-foreground hover:bg-muted/30"
+                  : "text-muted-foreground hover:bg-muted/40"
               }`}
             >
               <f.icon className={`h-3 w-3 ${isActive && f.id === "starred" ? "fill-current" : ""}`} />
               {f.label}
               {count > 0 && f.id !== "all" && (
-                <span
-                  className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                    isActive
-                      ? "bg-mc-teal-dim text-mc-teal"
-                      : "bg-muted/40 text-muted-foreground"
-                  }`}
-                >
-                  {count}
-                </span>
+                <span className="text-[10px] font-semibold tabular-nums opacity-70">{count}</span>
               )}
             </button>
           );
@@ -831,16 +798,15 @@ export function MessageList({
         {activeFolder === "inbox" && !catchAllOnly && onToggleShowCatchAllInInbox && (
           <button
             onClick={() => onToggleShowCatchAllInInbox(!showCatchAllInInbox)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
+            className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all flex-shrink-0 ${
               showCatchAllInInbox
-                ? "bg-[var(--mc-accent-bg-hover)] text-mc-amber"
-                : "text-muted-foreground hover:text-muted-foreground hover:bg-muted/30"
+                ? "text-mc-amber bg-[rgba(255,149,0,0.12)]"
+                : "text-muted-foreground hover:bg-muted/40"
             }`}
-            title={showCatchAllInInbox ? "Hide catch-alls from inbox" : "Show catch-alls in inbox"}
+            title={showCatchAllInInbox ? "Catch-alls shown in inbox — click to hide" : "Catch-alls hidden from inbox — click to show"}
           >
-            {showCatchAllInInbox ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
             <Shield className="h-3 w-3" />
-            {showCatchAllInInbox ? "Catch-alls on" : "Catch-alls hidden"}
+            {showCatchAllInInbox ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
           </button>
         )}
       </div>
@@ -1033,7 +999,7 @@ export function MessageList({
             )}
           </div>
         ) : isDesktop ? (
-          <MessageTable
+          <MessageListVirtual
             messages={filtered}
             selectedId={selectedId}
             focusedIndex={focusedIndex}

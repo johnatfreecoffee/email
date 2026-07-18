@@ -209,7 +209,7 @@ const LIST_W_KEY = "mc.email.listColumnWidth";
 const FOLDER_W_DEFAULT = 240;
 const FOLDER_W_MIN = 180;
 const FOLDER_W_MAX = 380;
-const LIST_W_DEFAULT = 560;
+const LIST_W_DEFAULT = 380;
 const LIST_W_MIN = 320;
 const READER_MIN = 400;
 
