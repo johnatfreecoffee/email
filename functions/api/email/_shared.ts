@@ -121,7 +121,7 @@ export async function supabaseQuery(
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await res.json();
-  return { data, status: res.status, ok: res.ok };
+  return { data, status: res.status, ok: res.ok, headers: res.headers };
 }
 
 // Resend API helper
