@@ -38,12 +38,12 @@ interface RichEditorProps {
 }
 
 const COLORS = [
-  "#FFFFFF", "#D1D5DB", "#9CA3AF", "#06B6D4", "#3B82F6",
+  "#FFFFFF", "#D1D5DB", "#9CA3AF", "var(--mc-accent)", "#3B82F6",
   "#8B5CF6", "#EC4899", "#EF4444", "#F59E0B", "#10B981",
 ];
 
 const HIGHLIGHT_COLORS = [
-  "#FBBF2440", "#F8717140", "#06B6D440", "#8B5CF640", "#10B98140",
+  "var(--mc-warning)40", "var(--mc-danger)40", "var(--mc-accent)40", "#8B5CF640", "#10B98140",
 ];
 
 const FONT_SIZES = [
@@ -77,7 +77,7 @@ function ToolbarButton({
       title={title}
       className={`p-1.5 rounded transition-colors ${
         active
-          ? "bg-[rgba(6,182,212,0.15)] text-[#06B6D4]"
+          ? "bg-mc-teal-dim text-mc-teal"
           : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
       }`}
     >
@@ -104,7 +104,7 @@ function ColorPicker({
           onMouseDown={(e) => e.preventDefault()}
           tabIndex={-1}
           className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${
-            activeColor === color ? "border-[#06B6D4] scale-110" : "border-transparent"
+            activeColor === color ? "border-mc-teal scale-110" : "border-transparent"
           }`}
           style={{ backgroundColor: color }}
           title={color}
@@ -223,7 +223,7 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
             <Palette className="h-3.5 w-3.5" />
           </ToolbarButton>
           {showColors && (
-            <div className="absolute top-full left-0 mt-1 bg-[#1A1F28] border border-border rounded-lg shadow-xl z-50">
+            <div className="absolute top-full left-0 mt-1 bg-[var(--mc-bg-elevated)] border border-border rounded-lg shadow-xl z-50">
               <ColorPicker
                 colors={COLORS}
                 onSelect={(c) => { editor.chain().focus().setColor(c).run(); setShowColors(false); }}
@@ -243,7 +243,7 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
             <Highlighter className="h-3.5 w-3.5" />
           </ToolbarButton>
           {showHighlight && (
-            <div className="absolute top-full left-0 mt-1 bg-[#1A1F28] border border-border rounded-lg shadow-xl z-50">
+            <div className="absolute top-full left-0 mt-1 bg-[var(--mc-bg-elevated)] border border-border rounded-lg shadow-xl z-50">
               <ColorPicker
                 colors={HIGHLIGHT_COLORS}
                 onSelect={(c) => { editor.chain().focus().toggleHighlight({ color: c }).run(); setShowHighlight(false); }}
@@ -263,7 +263,7 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
             <Type className="h-3.5 w-3.5" />
           </ToolbarButton>
           {showFontSize && (
-            <div className="absolute top-full left-0 mt-1 bg-[#1A1F28] border border-border rounded-lg shadow-xl z-50 py-1 min-w-[100px]">
+            <div className="absolute top-full left-0 mt-1 bg-[var(--mc-bg-elevated)] border border-border rounded-lg shadow-xl z-50 py-1 min-w-[100px]">
               {FONT_SIZES.map((fs) => (
                 <button
                   key={fs.size}
@@ -338,7 +338,7 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
           margin: 0.5em 0;
         }
         .tiptap a {
-          color: #06B6D4;
+          color: var(--mc-accent);
           text-decoration: underline;
         }
         .tiptap mark {

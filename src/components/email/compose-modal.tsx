@@ -125,7 +125,7 @@ export function ComposeModal({
     const quotedContent = replyTo.body_html
       || `<p>${escHtml(replyTo.body_text || "").replace(/\n/g, "<br>")}</p>`;
     if (isReply) {
-      return `<p><br></p><p>On ${dateStr}, ${sender} wrote:</p><blockquote style="border-left: 3px solid #06B6D4; padding-left: 12px; margin-left: 0; color: #9CA3AF;">${quotedContent}</blockquote>`;
+      return `<p><br></p><p>On ${dateStr}, ${sender} wrote:</p><blockquote style="border-left: 3px solid var(--mc-accent); padding-left: 12px; margin-left: 0; color: #9CA3AF;">${quotedContent}</blockquote>`;
     }
     if (isForward) {
       const toAddrs = escHtml((replyTo.to_addresses || []).join(", "));
@@ -341,7 +341,7 @@ export function ComposeModal({
               <select
                 value={from}
                 onChange={(e) => setFrom(e.target.value)}
-                className="flex-1 bg-transparent text-[13px] text-white focus:outline-none appearance-none cursor-pointer"
+                className="flex-1 bg-transparent text-[13px] text-foreground focus:outline-none appearance-none cursor-pointer"
               >
                 {fromOptions.map((opt) => (
                   <option key={opt.value} value={opt.value} className="bg-card">
@@ -350,7 +350,7 @@ export function ComposeModal({
                 ))}
               </select>
             ) : (
-              <span className="text-[13px] text-white">{from || "No addresses configured"}</span>
+              <span className="text-[13px] text-foreground">{from || "No addresses configured"}</span>
             )}
           </div>
 
@@ -368,7 +368,7 @@ export function ComposeModal({
             {!showCcBcc && (
               <button
                 onClick={() => setShowCcBcc(true)}
-                className="text-[11px] text-muted-foreground hover:text-[#06B6D4] mr-3"
+                className="text-[11px] text-muted-foreground hover:text-mc-teal mr-3"
               >
                 Cc/Bcc
               </button>
@@ -400,7 +400,7 @@ export function ComposeModal({
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               placeholder="Subject"
-              className="flex-1 bg-transparent text-[13px] text-white placeholder-[#4B5563] focus:outline-none"
+              className="flex-1 bg-transparent text-[13px] text-foreground placeholder-[#4B5563] focus:outline-none"
               onKeyDown={(e) => {
                 // Tab from subject → jump straight to editor body (skip toolbar)
                 if (e.key === "Tab" && !e.shiftKey) {
@@ -442,7 +442,7 @@ export function ComposeModal({
                       <span className="text-[10px] text-muted-foreground">{formatFileSize(file.size)}</span>
                       <button
                         onClick={() => removeAttachment(i)}
-                        className="p-0.5 text-muted-foreground hover:text-[#F87171] transition-colors"
+                        className="p-0.5 text-muted-foreground hover:text-mc-red transition-colors"
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -456,7 +456,7 @@ export function ComposeModal({
 
         {/* Error */}
         {error && (
-          <div className="px-4 py-2 text-[12px] text-[#F87171] bg-[rgba(248,113,113,0.08)]">
+          <div className="px-4 py-2 text-[12px] text-mc-red bg-[rgba(255, 59, 48, 0.1)]">
             {error}
           </div>
         )}
@@ -485,7 +485,7 @@ export function ComposeModal({
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="p-2 text-muted-foreground hover:text-[#06B6D4] rounded-lg hover:bg-[rgba(6,182,212,0.08)] transition-colors"
+              className="p-2 text-muted-foreground hover:text-mc-teal rounded-lg hover:bg-mc-teal-glow transition-colors"
               title="Attach files"
             >
               <Paperclip className="h-4 w-4" />
@@ -499,7 +499,7 @@ export function ComposeModal({
               disabled={savingDraft}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] transition-all ${
                 draftSaved
-                  ? "text-[#34D399] bg-[rgba(52,211,153,0.08)]"
+                  ? "text-mc-green bg-[rgba(52, 199, 89, 0.12)]"
                   : "text-muted-foreground hover:text-foreground bg-muted/30 hover:bg-muted/50"
               }`}
               title="Save as draft (⌘S)"
@@ -518,7 +518,7 @@ export function ComposeModal({
             <button
               onClick={handleSend}
               disabled={sending || !from}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-[#06B6D4] to-[#0891B2] text-white text-[13px] font-medium hover:brightness-110 disabled:opacity-50 transition-all"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-mc-teal text-white text-[13px] font-medium hover:brightness-110 disabled:opacity-50 transition-all"
             >
               {sending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

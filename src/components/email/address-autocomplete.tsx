@@ -141,7 +141,7 @@ export function AddressAutocomplete({
         {completedTags.map((tag, i) => (
           <span
             key={`${tag}-${i}`}
-            className="inline-flex items-center gap-1 bg-[rgba(6,182,212,0.12)] text-[#06B6D4] text-[12px] px-2 py-0.5 rounded-full"
+            className="inline-flex items-center gap-1 bg-mc-teal-dim text-mc-teal text-[12px] px-2 py-0.5 rounded-full"
           >
             {tag}
             <button
@@ -181,7 +181,7 @@ export function AddressAutocomplete({
           }}
           onKeyDown={handleKeyDown}
           placeholder={completedTags.length === 0 ? placeholder : ""}
-          className="flex-1 min-w-[120px] bg-transparent text-[13px] text-white placeholder-[#4B5563] focus:outline-none"
+          className="flex-1 min-w-[120px] bg-transparent text-[13px] text-foreground placeholder-[#4B5563] focus:outline-none"
           autoFocus={autoFocus}
         />
       </div>
@@ -190,7 +190,7 @@ export function AddressAutocomplete({
       {showSuggestions && filteredSuggestions.length > 0 && (
         <div
           ref={suggestionsRef}
-          className="absolute left-0 right-0 top-full mt-1 bg-[#1A1F28] border border-border rounded-lg shadow-xl z-50 overflow-hidden"
+          className="absolute left-0 right-0 top-full mt-1 bg-[var(--mc-bg-elevated)] border border-border rounded-lg shadow-xl z-50 overflow-hidden"
         >
           {filteredSuggestions.map((contact, i) => (
             <button
@@ -198,17 +198,17 @@ export function AddressAutocomplete({
               onClick={() => selectSuggestion(contact)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
                 i === selectedIndex
-                  ? "bg-[rgba(6,182,212,0.12)]"
+                  ? "bg-mc-teal-dim"
                   : "hover:bg-muted/30"
               }`}
             >
-              <div className="h-7 w-7 rounded-full bg-gradient-to-br from-[#06B6D4] to-[#34D399] flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0">
+              <div className="h-7 w-7 rounded-full bg-mc-teal flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0">
                 {(contact.display_name || contact.email)[0]?.toUpperCase()}
               </div>
               <div className="flex-1 min-w-0">
                 {contact.display_name ? (
                   <>
-                    <div className="text-[12px] text-white font-medium truncate">
+                    <div className="text-[12px] text-foreground font-medium truncate">
                       {contact.display_name}
                     </div>
                     <div className="text-[11px] text-muted-foreground truncate">

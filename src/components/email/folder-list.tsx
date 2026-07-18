@@ -258,7 +258,7 @@ export function FolderList({
           onClick={onCompose}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[14px] transition-all mb-3"
           style={{
-            background: "linear-gradient(to right, var(--mc-accent), #0891B2)",
+            backgroundColor: "var(--mc-accent)",
             color: "#fff",
           }}
         >
@@ -778,7 +778,7 @@ export function FolderList({
               className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] transition-all"
               style={{
                 color: pushEnabled ? "var(--mc-success)" : "var(--mc-text-faint)",
-                backgroundColor: pushEnabled ? "rgba(52,211,153,0.06)" : "transparent",
+                backgroundColor: pushEnabled ? "rgba(52, 199, 89, 0.12)" : "transparent",
               }}
             >
               {pushLoading ? (
@@ -799,7 +799,7 @@ export function FolderList({
                 <span
                   className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
                   style={{
-                    backgroundColor: "rgba(52,211,153,0.15)",
+                    backgroundColor: "rgba(52, 199, 89, 0.12)",
                     color: "var(--mc-success)",
                   }}
                 >

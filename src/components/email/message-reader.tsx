@@ -67,11 +67,11 @@ function CopyableEmail({ email, name }: { email: string; name?: string }) {
             e.stopPropagation();
             copyToClipboard(name);
           }}
-          className="hover:text-[#06B6D4] transition-colors cursor-pointer"
+          className="hover:text-mc-teal transition-colors cursor-pointer"
           title={`Copy "${name}"`}
         >
           {name}
-          {copied === name && <Check className="inline h-3 w-3 text-[#34D399] ml-0.5" />}
+          {copied === name && <Check className="inline h-3 w-3 text-mc-green ml-0.5" />}
         </button>
       )}
       {name && name !== email && <span style={{ color: "var(--mc-text-faint)" }}>&lt;</span>}
@@ -80,14 +80,14 @@ function CopyableEmail({ email, name }: { email: string; name?: string }) {
           e.stopPropagation();
           copyToClipboard(email);
         }}
-        className="hover:text-[#06B6D4] transition-colors cursor-pointer"
+        className="hover:text-mc-teal transition-colors cursor-pointer"
         title={`Copy ${email}`}
       >
         {email}
-        {copied === email && <Check className="inline h-3 w-3 text-[#34D399] ml-0.5" />}
+        {copied === email && <Check className="inline h-3 w-3 text-mc-green ml-0.5" />}
       </button>
       {name && name !== email && <span style={{ color: "var(--mc-text-faint)" }}>&gt;</span>}
-      <Copy className="h-3 w-3 opacity-0 group-hover/copy:opacity-100 transition-opacity cursor-pointer hover:text-[#06B6D4]"
+      <Copy className="h-3 w-3 opacity-0 group-hover/copy:opacity-100 transition-opacity cursor-pointer hover:text-mc-teal"
         style={{ color: "var(--mc-text-faint)" }}
         onClick={(e) => {
           e.stopPropagation();
@@ -111,8 +111,8 @@ function ToolbarButton({
   onClick,
   icon: Icon,
   title,
-  hoverColor = "#06B6D4",
-  hoverBg = "rgba(6,182,212,0.08)",
+  hoverColor = "var(--mc-accent)",
+  hoverBg = "var(--mc-accent-bg)",
   active = false,
   activeColor,
 }: {
@@ -218,10 +218,10 @@ export function MessageReader({
           onClick={() => onToggleStar(message.id, message.is_starred)}
           icon={Star}
           title={message.is_starred ? "Unstar (s)" : "Star (s)"}
-          hoverColor="#EAB308"
-          hoverBg="rgba(234,179,8,0.08)"
+          hoverColor="var(--mc-star)"
+          hoverBg="var(--mc-accent-bg-hover)"
           active={message.is_starred}
-          activeColor="#EAB308"
+          activeColor="var(--mc-star)"
         />
 
         {/* Divider */}
@@ -232,8 +232,8 @@ export function MessageReader({
           onClick={() => onArchive(message.id)}
           icon={Archive}
           title="Archive (a)"
-          hoverColor="#FBBF24"
-          hoverBg="rgba(251,191,36,0.08)"
+          hoverColor="var(--mc-warning)"
+          hoverBg="var(--mc-accent-bg-hover)"
         />
         {onToggleSpam && (
           message.folder === "spam" || message.is_spam ? (
@@ -241,16 +241,16 @@ export function MessageReader({
               onClick={() => onToggleSpam(message.id, true)}
               icon={Mail}
               title="Not spam — restore to inbox and trust the sender"
-              hoverColor="#34D399"
-              hoverBg="rgba(52,211,153,0.08)"
+              hoverColor="var(--mc-success)"
+              hoverBg="rgba(52, 199, 89, 0.12)"
             />
           ) : (
             <ToolbarButton
               onClick={() => onToggleSpam(message.id, false)}
               icon={AlertOctagon}
               title="Mark as spam"
-              hoverColor="#F87171"
-              hoverBg="rgba(248,113,113,0.08)"
+              hoverColor="var(--mc-danger)"
+              hoverBg="rgba(255, 59, 48, 0.1)"
             />
           )
         )}
@@ -258,8 +258,8 @@ export function MessageReader({
           onClick={() => onTrash(message.id)}
           icon={Trash2}
           title="Trash (Delete)"
-          hoverColor="#F87171"
-          hoverBg="rgba(248,113,113,0.08)"
+          hoverColor="var(--mc-danger)"
+          hoverBg="rgba(255, 59, 48, 0.1)"
         />
       </div>
 
@@ -267,7 +267,7 @@ export function MessageReader({
       <div className="px-6 py-4" style={{ borderBottom: "1px solid var(--mc-border)" }}>
         <div className="flex items-start gap-3">
           {/* Avatar */}
-          <div className="h-10 w-10 rounded-full bg-gradient-to-br from-[#06B6D4] to-[#34D399] flex items-center justify-center text-white text-[15px] font-bold flex-shrink-0 mt-0.5">
+          <div className="h-10 w-10 rounded-full bg-mc-teal flex items-center justify-center text-white text-[15px] font-bold flex-shrink-0 mt-0.5">
             {(message.from_name || message.from_address)[0]?.toUpperCase() || "?"}
           </div>
 
@@ -280,12 +280,12 @@ export function MessageReader({
                 />
               </span>
               {message.is_catch_all && (
-                <span className="text-[10px] font-bold bg-[rgba(251,191,36,0.15)] text-[#FBBF24] px-1.5 py-0.5 rounded">
+                <span className="text-[10px] font-bold bg-[var(--mc-accent-bg-hover)] text-mc-amber px-1.5 py-0.5 rounded">
                   CATCH-ALL
                 </span>
               )}
               {message.direction === "outbound" && (
-                <span className="text-[10px] font-bold bg-[rgba(6,182,212,0.15)] text-[#06B6D4] px-1.5 py-0.5 rounded">
+                <span className="text-[10px] font-bold bg-mc-teal-dim text-mc-teal px-1.5 py-0.5 rounded">
                   SENT
                 </span>
               )}
@@ -359,7 +359,7 @@ export function MessageReader({
                     color: "var(--mc-text-secondary)",
                   }}
                   onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLElement).style.color = "#06B6D4";
+                    (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)";
                   }}
                   onMouseLeave={(e) => {
                     (e.currentTarget as HTMLElement).style.color = "var(--mc-text-secondary)";
@@ -495,8 +495,8 @@ export function MessageReader({
             color: "var(--mc-text-secondary)",
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(6,182,212,0.1)";
-            (e.currentTarget as HTMLElement).style.color = "#06B6D4";
+            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)";
+            (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)";
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
@@ -515,8 +515,8 @@ export function MessageReader({
               color: "var(--mc-text-secondary)",
             }}
             onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(6,182,212,0.1)";
-              (e.currentTarget as HTMLElement).style.color = "#06B6D4";
+              (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)";
+              (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)";
             }}
             onMouseLeave={(e) => {
               (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
@@ -535,8 +535,8 @@ export function MessageReader({
             color: "var(--mc-text-secondary)",
           }}
           onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(6,182,212,0.1)";
-            (e.currentTarget as HTMLElement).style.color = "#06B6D4";
+            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)";
+            (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)";
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";

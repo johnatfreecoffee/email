@@ -200,7 +200,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="w-full max-w-[360px] mx-4">
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#06B6D4] to-[#34D399] mb-4">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-mc-teal mb-4">
               <svg
                 className="w-8 h-8 text-white"
                 fill="none"
@@ -236,7 +236,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               placeholder="Email"
               autoFocus
               autoComplete="email"
-              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-white placeholder-[#6B7280] focus:outline-none focus:border-[#06B6D4] transition-colors"
+              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-foreground placeholder-[#6B7280] focus:outline-none focus:border-mc-teal transition-colors"
             />
             <input
               type="password"
@@ -247,13 +247,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }}
               placeholder="Password"
               autoComplete="current-password"
-              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-white placeholder-[#6B7280] focus:outline-none focus:border-[#06B6D4] transition-colors"
+              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-foreground placeholder-[#6B7280] focus:outline-none focus:border-mc-teal transition-colors"
             />
-            {error && <p className="text-[12px] text-[#F87171]">{error}</p>}
+            {error && <p className="text-[12px] text-mc-red">{error}</p>}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-[#06B6D4] to-[#0891B2] text-white text-[14px] font-medium hover:brightness-110 transition-all disabled:opacity-50"
+              className="w-full py-3 rounded-xl bg-mc-teal text-white text-[14px] font-medium hover:brightness-110 transition-all disabled:opacity-50"
             >
               {loading ? "Signing in..." : "Sign In"}
             </button>

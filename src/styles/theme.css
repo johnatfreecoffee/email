@@ -1,68 +1,81 @@
-/* Mission Control Theme System */
+/* Apple Mail-style theme tokens.
+   :root = light, .dark = dark overrides (class applied pre-paint by the
+   inline script in layout.tsx). Component inline styles consume these
+   names directly — every name must stay defined in both themes. */
 :root {
-  --mc-bg: #0D0F13;
-  --mc-bg-secondary: #161A22;
-  --mc-bg-tertiary: #1A1F28;
-  --mc-bg-hover: rgba(255, 255, 255, 0.03);
-  --mc-bg-active: rgba(255, 255, 255, 0.06);
-  --mc-card: #161A22;
-  --mc-card-border: rgba(56, 189, 230, 0.15);
+  --mc-bg: #FFFFFF;
+  --mc-bg-secondary: #FFFFFF;
+  --mc-bg-tertiary: #F0F0F2;
+  --mc-bg-elevated: #FFFFFF;
+  --mc-bg-hover: rgba(0, 0, 0, 0.045);
+  --mc-bg-active: rgba(0, 0, 0, 0.08);
+  --mc-card: #FFFFFF;
+  --mc-card-border: rgba(0, 0, 0, 0.1);
 
-  --mc-text: #FFFFFF;
-  --mc-text-secondary: #D1D5DB;
-  --mc-text-muted: #9CA3AF;
-  --mc-text-faint: #6B7280;
-  --mc-text-ghost: #4B5563;
+  --mc-text: rgba(0, 0, 0, 0.85);
+  --mc-text-secondary: rgba(0, 0, 0, 0.7);
+  --mc-text-muted: rgba(60, 60, 67, 0.6);
+  --mc-text-faint: rgba(60, 60, 67, 0.4);
+  --mc-text-ghost: rgba(60, 60, 67, 0.25);
 
-  --mc-border: rgba(255, 255, 255, 0.06);
-  --mc-border-subtle: rgba(255, 255, 255, 0.04);
+  --mc-border: rgba(0, 0, 0, 0.1);
+  --mc-border-subtle: rgba(0, 0, 0, 0.06);
 
-  --mc-accent: #06B6D4;
-  --mc-accent-bg: rgba(6, 182, 212, 0.1);
-  --mc-accent-bg-hover: rgba(6, 182, 212, 0.15);
+  --mc-accent: #007AFF;
+  --mc-accent-bg: rgba(0, 122, 255, 0.1);
+  --mc-accent-bg-hover: rgba(0, 122, 255, 0.15);
+  --mc-selected-bg: #007AFF;
+  --mc-selected-fg: #FFFFFF;
 
-  --mc-success: #34D399;
-  --mc-warning: #FBBF24;
-  --mc-danger: #F87171;
-  --mc-star: #EAB308;
+  --mc-success: #34C759;
+  --mc-warning: #FF9500;
+  --mc-danger: #FF3B30;
+  --mc-star: #FF9500;
 
-  --mc-header-bg: #0D0F13;
-  --mc-sidebar-bg: #0D0F13;
+  --mc-header-bg: rgba(243, 243, 247, 0.82);
+  --mc-sidebar-bg: rgba(243, 243, 247, 0.82);
+  --mc-sidebar-solid: #F3F3F7;
+  --mc-sidebar-selected: rgba(0, 0, 0, 0.08);
 
-  --mc-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  --mc-modal-overlay: rgba(0, 0, 0, 0.6);
+  --mc-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.25);
 }
 
-:root[data-theme="light"] {
-  --mc-bg: #F8FAFC;
-  --mc-bg-secondary: #FFFFFF;
-  --mc-bg-tertiary: #F1F5F9;
-  --mc-bg-hover: rgba(0, 0, 0, 0.03);
-  --mc-bg-active: rgba(0, 0, 0, 0.06);
-  --mc-card: #FFFFFF;
-  --mc-card-border: rgba(6, 182, 212, 0.2);
+.dark {
+  --mc-bg: #1E1E1E;
+  --mc-bg-secondary: #1E1E1E;
+  --mc-bg-tertiary: #2A2A2C;
+  --mc-bg-elevated: #2D2D2F;
+  --mc-bg-hover: rgba(255, 255, 255, 0.055);
+  --mc-bg-active: rgba(255, 255, 255, 0.09);
+  --mc-card: #2D2D2F;
+  --mc-card-border: rgba(255, 255, 255, 0.1);
 
-  --mc-text: #0F172A;
-  --mc-text-secondary: #334155;
-  --mc-text-muted: #64748B;
-  --mc-text-faint: #94A3B8;
-  --mc-text-ghost: #CBD5E1;
+  --mc-text: rgba(255, 255, 255, 0.85);
+  --mc-text-secondary: rgba(255, 255, 255, 0.7);
+  --mc-text-muted: rgba(235, 235, 245, 0.6);
+  --mc-text-faint: rgba(235, 235, 245, 0.38);
+  --mc-text-ghost: rgba(235, 235, 245, 0.22);
 
-  --mc-border: rgba(0, 0, 0, 0.08);
-  --mc-border-subtle: rgba(0, 0, 0, 0.04);
+  --mc-border: rgba(255, 255, 255, 0.1);
+  --mc-border-subtle: rgba(255, 255, 255, 0.06);
 
-  --mc-accent: #0891B2;
-  --mc-accent-bg: rgba(8, 145, 178, 0.08);
-  --mc-accent-bg-hover: rgba(8, 145, 178, 0.12);
+  --mc-accent: #0A84FF;
+  --mc-accent-bg: rgba(10, 132, 255, 0.14);
+  --mc-accent-bg-hover: rgba(10, 132, 255, 0.2);
+  --mc-selected-bg: #0A84FF;
+  --mc-selected-fg: #FFFFFF;
 
-  --mc-success: #059669;
-  --mc-warning: #D97706;
-  --mc-danger: #DC2626;
-  --mc-star: #CA8A04;
+  --mc-success: #30D158;
+  --mc-warning: #FF9F0A;
+  --mc-danger: #FF453A;
+  --mc-star: #FF9F0A;
 
-  --mc-header-bg: #F8FAFC;
-  --mc-sidebar-bg: #FFFFFF;
+  --mc-header-bg: rgba(35, 35, 38, 0.75);
+  --mc-sidebar-bg: rgba(35, 35, 38, 0.75);
+  --mc-sidebar-solid: #232326;
+  --mc-sidebar-selected: rgba(255, 255, 255, 0.1);
 
-  --mc-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-  --mc-modal-overlay: rgba(0, 0, 0, 0.3);
+  --mc-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.55);
 }

@@ -1159,12 +1159,12 @@ export function EmailLayout() {
         <div
           className="flex items-center gap-3 px-4 py-2.5 text-sm"
           style={{
-            backgroundColor: "rgba(59, 130, 246, 0.1)",
-            borderBottom: "1px solid rgba(59, 130, 246, 0.2)",
+            backgroundColor: "var(--mc-accent-bg)",
+            borderBottom: "1px solid var(--mc-accent-bg)",
             color: "var(--mc-text)",
           }}
         >
-          <Bell className="h-4 w-4 flex-shrink-0" style={{ color: "#3b82f6" }} />
+          <Bell className="h-4 w-4 flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
           <span className="flex-1">
             <strong>Get email notifications</strong> — receive push alerts when new emails arrive, even when MC is closed.
           </span>
@@ -1173,7 +1173,7 @@ export function EmailLayout() {
             disabled={pushSubscribing}
             className="px-3 py-1 rounded-md text-xs font-semibold transition-all"
             style={{
-              backgroundColor: "#3b82f6",
+              backgroundColor: "var(--mc-accent)",
               color: "#fff",
               opacity: pushSubscribing ? 0.6 : 1,
             }}
@@ -1300,7 +1300,7 @@ export function EmailLayout() {
             backgroundColor: "var(--mc-border)",
             transition: "background-color 0.15s, width 0.15s",
           }}
-          className="group-hover:bg-[#06B6D4] group-hover:w-[2px]"
+          className="group-hover:bg-mc-teal group-hover:w-[2px]"
         />
       </div>
 
@@ -1435,7 +1435,7 @@ export function EmailLayout() {
             backgroundColor: "var(--mc-border)",
             transition: "background-color 0.15s, width 0.15s",
           }}
-          className="group-hover:bg-[#06B6D4] group-hover:w-[2px]"
+          className="group-hover:bg-mc-teal group-hover:w-[2px]"
         />
       </div>
 

@@ -240,10 +240,10 @@ export function DomainSettingsPanel({ domain, onClose, onRefresh }: DomainSettin
               style={{
                 padding: "12px 16px",
                 background: "transparent",
-                color: activeTab === tab.id ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-faint, #9CA3AF)",
+                color: activeTab === tab.id ? "var(--mc-accent)" : "var(--mc-text-faint, #9CA3AF)",
                 borderBottom:
                   activeTab === tab.id
-                    ? "2px solid var(--mc-accent, #06B6D4)"
+                    ? "2px solid var(--mc-accent)"
                     : "2px solid transparent",
                 border: "none",
                 cursor: "pointer",
@@ -275,7 +275,7 @@ export function DomainSettingsPanel({ domain, onClose, onRefresh }: DomainSettin
                     gap: 6,
                     padding: "8px 14px",
                     borderRadius: 6,
-                    background: "var(--mc-accent, #06B6D4)",
+                    background: "var(--mc-accent)",
                     color: "#fff",
                     border: "none",
                     cursor: "pointer",
@@ -443,7 +443,7 @@ export function DomainSettingsPanel({ domain, onClose, onRefresh }: DomainSettin
               )}
 
               {Date.now() - catchAllSavedAt < 2000 && (
-                <div style={{ fontSize: 12, color: "var(--mc-accent, #06B6D4)", display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ fontSize: 12, color: "var(--mc-accent)", display: "flex", alignItems: "center", gap: 4 }}>
                   <Check size={12} /> Saved
                 </div>
               )}
@@ -607,7 +607,7 @@ const inputStyle: React.CSSProperties = {
 const btnPrimary: React.CSSProperties = {
   padding: "8px 14px",
   borderRadius: 6,
-  background: "var(--mc-accent, #06B6D4)",
+  background: "var(--mc-accent)",
   color: "#fff",
   border: "none",
   cursor: "pointer",

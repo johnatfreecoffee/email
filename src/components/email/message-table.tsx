@@ -630,7 +630,7 @@ export function MessageTable({
                   }
                 }}
                 className="p-1 rounded transition-colors"
-                style={{ color: selCount > 0 ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-faint)" }}
+                style={{ color: selCount > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)" }}
                 title={allSelected ? "Deselect all" : someSelected ? "Clear selection" : "Select all"}
                 aria-label={allSelected ? "Deselect all" : "Select all"}
               >
@@ -727,7 +727,7 @@ export function MessageTable({
 
         {loadingMore && (
           <div className="flex items-center justify-center py-3">
-            <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent, #06B6D4)" }} />
+            <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent)" }} />
           </div>
         )}
 
@@ -859,9 +859,9 @@ const TableRow = memo(function TableRow({
   //  - Focused (keyboard): subtle hover
   //  - default: transparent (alternating row striping would be nice but keep minimal)
   const bg = isActive
-    ? "rgba(6,182,212,0.18)"
+    ? "var(--mc-accent-bg)"
     : isInSelection
-    ? "rgba(6,182,212,0.08)"
+    ? "var(--mc-accent-bg)"
     : isFocused
     ? "rgba(255,255,255,0.04)"
     : "transparent";
@@ -880,7 +880,7 @@ const TableRow = memo(function TableRow({
         borderBottom: "1px solid var(--mc-border)",
         // Darker strip on the left for active row
         boxShadow: isActive
-          ? "inset 3px 0 0 0 var(--mc-accent, #06B6D4)"
+          ? "inset 3px 0 0 0 var(--mc-accent)"
           : undefined,
       }}
     >
@@ -897,7 +897,7 @@ const TableRow = memo(function TableRow({
             onToggleSelect(rowIndex, e);
           }}
           className="p-1 rounded transition-colors"
-          style={{ color: isInSelection ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-faint)" }}
+          style={{ color: isInSelection ? "var(--mc-accent)" : "var(--mc-text-faint)" }}
           title={isInSelection ? "Deselect" : "Select"}
           aria-label={isInSelection ? "Deselect" : "Select"}
         >
@@ -928,7 +928,7 @@ const TableRow = memo(function TableRow({
           {isUnread ? (
             <div
               className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: "var(--mc-accent, #06B6D4)" }}
+              style={{ backgroundColor: "var(--mc-accent)" }}
             />
           ) : (
             <div className="h-2 w-2 rounded-full" style={{ backgroundColor: "transparent" }} />
@@ -964,8 +964,8 @@ const TableRow = memo(function TableRow({
           <span
             className="text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0"
             style={{
-              backgroundColor: "rgba(251,191,36,0.15)",
-              color: "#FBBF24",
+              backgroundColor: "var(--mc-accent-bg-hover)",
+              color: "var(--mc-warning)",
             }}
           >
             C-A
@@ -975,8 +975,8 @@ const TableRow = memo(function TableRow({
           <span
             className="text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0"
             style={{
-              backgroundColor: "rgba(6,182,212,0.15)",
-              color: "var(--mc-accent, #06B6D4)",
+              backgroundColor: "var(--mc-accent-bg)",
+              color: "var(--mc-accent)",
             }}
           >
             SENT
@@ -1012,7 +1012,7 @@ const TableRow = memo(function TableRow({
         {msg.is_starred && (
           <Star
             className="h-3 w-3 flex-shrink-0"
-            style={{ fill: "#EAB308", color: "#EAB308" }}
+            style={{ fill: "var(--mc-star)", color: "var(--mc-star)" }}
             onClick={(e) => {
               e.stopPropagation();
               onToggleStar(msg.id, msg.is_starred);

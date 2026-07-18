@@ -314,7 +314,7 @@ const MessageRow = memo(function MessageRow({
               setIsSwiping(false);
             }}
             className="flex-1 flex items-center justify-center transition-colors"
-            style={{ backgroundColor: "rgba(251,191,36,0.9)" }}
+            style={{ backgroundColor: "var(--mc-accent-bg-hover)" }}
           >
             <Archive className="h-5 w-5 text-white" />
           </button>
@@ -326,7 +326,7 @@ const MessageRow = memo(function MessageRow({
               setIsSwiping(false);
             }}
             className="flex-1 flex items-center justify-center transition-colors"
-            style={{ backgroundColor: "rgba(234,179,8,0.9)" }}
+            style={{ backgroundColor: "var(--mc-accent-bg-hover)" }}
           >
             <Star className="h-5 w-5 text-white" />
           </button>
@@ -351,7 +351,7 @@ const MessageRow = memo(function MessageRow({
           className="absolute inset-y-0 left-0 flex items-center justify-center"
           style={{
             width: `${Math.min(swipeX, 120)}px`,
-            backgroundColor: isUnread ? "rgba(6,182,212,0.9)" : "rgba(107,114,128,0.9)",
+            backgroundColor: isUnread ? "var(--mc-accent-bg)" : "rgba(107,114,128,0.9)",
             zIndex: 1,
           }}
         >
@@ -380,11 +380,11 @@ const MessageRow = memo(function MessageRow({
           transform: `translateX(${swipeX}px)`,
           transition: isSwiping ? "none" : "transform 0.25s cubic-bezier(0.2, 0, 0, 1)",
           backgroundColor: isSelected
-            ? "var(--mc-accent-bg, rgba(6,182,212,0.08))"
+            ? "var(--mc-accent-bg)"
             : isFocused
             ? "var(--mc-bg-active, rgba(255,255,255,0.04))"
             : "var(--mc-bg-secondary, #111)",
-          borderLeft: isUnread ? "3px solid #06B6D4" : "3px solid transparent",
+          borderLeft: isUnread ? "3px solid var(--mc-accent)" : "3px solid transparent",
           cursor: "pointer",
           userSelect: "none",
           WebkitUserSelect: "none",
@@ -400,7 +400,7 @@ const MessageRow = memo(function MessageRow({
                 onClick={(e) => { e.stopPropagation(); onToggleCheck(); }}
               >
                 {isChecked ? (
-                  <CheckSquare className="h-4 w-4" style={{ color: "#06B6D4" }} />
+                  <CheckSquare className="h-4 w-4" style={{ color: "var(--mc-accent)" }} />
                 ) : (
                   <Square className="h-4 w-4" style={{ color: "var(--mc-text-faint)" }} />
                 )}
@@ -415,7 +415,7 @@ const MessageRow = memo(function MessageRow({
                 title={isUnread ? "Mark as read" : "Mark as unread"}
               >
                 {isUnread ? (
-                  <div className="h-2.5 w-2.5 rounded-full bg-[#06B6D4]" />
+                  <div className="h-2.5 w-2.5 rounded-full bg-mc-teal" />
                 ) : (
                   <div className="h-2.5 w-2.5 rounded-full border border-[rgba(255,255,255,0.15)]" />
                 )}
@@ -445,12 +445,12 @@ const MessageRow = memo(function MessageRow({
               {/* Row 2: Subject */}
               <div className="flex items-center gap-1.5">
                 {msg.is_catch_all && (
-                  <span className="text-[9px] font-bold bg-[rgba(251,191,36,0.15)] text-[#FBBF24] px-1 py-0.5 rounded flex-shrink-0">
+                  <span className="text-[9px] font-bold bg-[var(--mc-accent-bg-hover)] text-mc-amber px-1 py-0.5 rounded flex-shrink-0">
                     C-A
                   </span>
                 )}
                 {msg.direction === "outbound" && (
-                  <span className="text-[9px] font-bold bg-[rgba(6,182,212,0.15)] text-[#06B6D4] px-1 py-0.5 rounded flex-shrink-0">
+                  <span className="text-[9px] font-bold bg-mc-teal-dim text-mc-teal px-1 py-0.5 rounded flex-shrink-0">
                     SENT
                   </span>
                 )}
@@ -480,7 +480,7 @@ const MessageRow = memo(function MessageRow({
               <Star
                 className={`h-3.5 w-3.5 transition-colors ${
                   msg.is_starred
-                    ? "fill-[#EAB308] text-[#EAB308]"
+                    ? "fill-[color:var(--mc-star)] text-[color:var(--mc-star)]"
                     : "text-[rgba(255,255,255,0.1)] hover:text-muted-foreground"
                 }`}
               />
@@ -702,7 +702,7 @@ export function MessageList({
           </div>
           <button
             onClick={handleRefresh}
-            className="p-2 text-muted-foreground hover:text-[#06B6D4] rounded-lg hover:bg-[rgba(6,182,212,0.08)] transition-colors"
+            className="p-2 text-muted-foreground hover:text-mc-teal rounded-lg hover:bg-mc-teal-glow transition-colors"
             title="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
@@ -718,8 +718,8 @@ export function MessageList({
               onClick={() => setShowAddressDropdown((v) => !v)}
               className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors"
               style={{
-                color: activeAddress ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-muted)",
-                backgroundColor: activeAddress ? "var(--mc-accent-bg, rgba(6,182,212,0.08))" : "var(--mc-bg-hover, rgba(255,255,255,0.04))",
+                color: activeAddress ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                backgroundColor: activeAddress ? "var(--mc-accent-bg)" : "var(--mc-bg-hover, rgba(255,255,255,0.04))",
                 border: "1px solid var(--mc-border)",
               }}
               title="Filter by recipient on this domain"
@@ -744,8 +744,8 @@ export function MessageList({
                   onClick={() => { onAddressChange(null); setShowAddressDropdown(false); }}
                   className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
                   style={{
-                    color: !selectedAddress ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-muted)",
-                    backgroundColor: !selectedAddress ? "var(--mc-accent-bg, rgba(6,182,212,0.08))" : "transparent",
+                    color: !selectedAddress ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                    backgroundColor: !selectedAddress ? "var(--mc-accent-bg)" : "transparent",
                   }}
                   onMouseEnter={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
                   onMouseLeave={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
@@ -763,8 +763,8 @@ export function MessageList({
                         onClick={() => { onAddressChange(a.id); setShowAddressDropdown(false); }}
                         className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
                         style={{
-                          color: isActive ? "var(--mc-accent, #06B6D4)" : "var(--mc-text-muted)",
-                          backgroundColor: isActive ? "var(--mc-accent-bg, rgba(6,182,212,0.08))" : "transparent",
+                          color: isActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                          backgroundColor: isActive ? "var(--mc-accent-bg)" : "transparent",
                         }}
                         onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
                         onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
@@ -805,7 +805,7 @@ export function MessageList({
               onClick={() => onFilterChange ? onFilterChange(f.id) : undefined}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
                 isActive
-                  ? "bg-[rgba(6,182,212,0.15)] text-[#06B6D4]"
+                  ? "bg-mc-teal-dim text-mc-teal"
                   : "text-muted-foreground hover:text-muted-foreground hover:bg-muted/30"
               }`}
             >
@@ -815,7 +815,7 @@ export function MessageList({
                 <span
                   className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
                     isActive
-                      ? "bg-[rgba(6,182,212,0.2)] text-[#06B6D4]"
+                      ? "bg-mc-teal-dim text-mc-teal"
                       : "bg-muted/40 text-muted-foreground"
                   }`}
                 >
@@ -833,7 +833,7 @@ export function MessageList({
             onClick={() => onToggleShowCatchAllInInbox(!showCatchAllInInbox)}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
               showCatchAllInInbox
-                ? "bg-[rgba(251,191,36,0.15)] text-[#FBBF24]"
+                ? "bg-[var(--mc-accent-bg-hover)] text-mc-amber"
                 : "text-muted-foreground hover:text-muted-foreground hover:bg-muted/30"
             }`}
             title={showCatchAllInInbox ? "Hide catch-alls from inbox" : "Show catch-alls in inbox"}
@@ -854,7 +854,7 @@ export function MessageList({
               if (selectMode) { deselectAll(); } else { setSelectMode(true); }
             }}
             className="p-1 rounded transition-colors"
-            style={{ color: selectMode ? "#06B6D4" : "var(--mc-text-faint)" }}
+            style={{ color: selectMode ? "var(--mc-accent)" : "var(--mc-text-faint)" }}
             title={selectMode ? "Exit select mode" : "Select emails"}
           >
             {selectMode ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
@@ -898,7 +898,7 @@ export function MessageList({
             onClick={() => { onBulkMarkRead?.(Array.from(selectedIds)); deselectAll(); }}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
             style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#06B6D4"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(6,182,212,0.08)"; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)"; (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
             title="Mark as read"
           >
@@ -910,7 +910,7 @@ export function MessageList({
             onClick={() => { onBulkMarkUnread?.(Array.from(selectedIds)); deselectAll(); }}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
             style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#06B6D4"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(6,182,212,0.08)"; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)"; (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
             title="Mark as unread"
           >
@@ -933,7 +933,7 @@ export function MessageList({
                 }}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
                 style={{ color: "var(--mc-text-muted)" }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#EAB308"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(234,179,8,0.08)"; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-star)"; (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg-hover)"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
                 title={anyUnstarred ? "Flag (star)" : "Unflag"}
               >
@@ -947,7 +947,7 @@ export function MessageList({
             onClick={() => { onBulkArchive?.(Array.from(selectedIds)); deselectAll(); }}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
             style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#FBBF24"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(251,191,36,0.08)"; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-warning)"; (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-accent-bg-hover)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
             title="Archive"
           >
@@ -962,7 +962,7 @@ export function MessageList({
               onClick={() => { onBulkMarkNotSpam?.(Array.from(selectedIds)); deselectAll(); }}
               className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
               style={{ color: "var(--mc-text-muted)" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#34D399"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(52,211,153,0.08)"; }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-success)"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(52, 199, 89, 0.12)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
               title="Not spam — restore to inbox and trust the sender"
             >
@@ -973,7 +973,7 @@ export function MessageList({
               onClick={() => { onBulkMarkSpam?.(Array.from(selectedIds)); deselectAll(); }}
               className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
               style={{ color: "var(--mc-text-muted)" }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#F87171"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(248,113,113,0.08)"; }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-danger)"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255, 59, 48, 0.1)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
               title="Mark as spam"
             >
@@ -986,7 +986,7 @@ export function MessageList({
             onClick={() => { onBulkTrash?.(Array.from(selectedIds)); deselectAll(); }}
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-colors"
             style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "#F87171"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(248,113,113,0.08)"; }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-danger)"; (e.currentTarget as HTMLElement).style.backgroundColor = "rgba(255, 59, 48, 0.1)"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-muted)"; (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
             title="Trash"
           >
@@ -1002,7 +1002,7 @@ export function MessageList({
           <button
             onClick={onRevealPending}
             className="absolute top-2 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full text-[11px] font-semibold shadow-lg transition-transform hover:scale-105"
-            style={{ backgroundColor: "var(--mc-accent, #06B6D4)", color: "#fff" }}
+            style={{ backgroundColor: "var(--mc-accent)", color: "#fff" }}
           >
             {pendingNewCount} new message{pendingNewCount !== 1 ? "s" : ""}
           </button>
@@ -1015,7 +1015,7 @@ export function MessageList({
       >
         {loading ? (
           <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-5 w-5 text-[#06B6D4] animate-spin" />
+            <Loader2 className="h-5 w-5 text-mc-teal animate-spin" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
@@ -1026,7 +1026,7 @@ export function MessageList({
             {activeFilter !== "all" && (
               <button
                 onClick={() => onFilterChange?.("all")}
-                className="text-[11px] text-[#06B6D4] hover:underline mt-1"
+                className="text-[11px] text-mc-teal hover:underline mt-1"
               >
                 Show all
               </button>
@@ -1085,7 +1085,7 @@ export function MessageList({
             <div ref={loadMoreRef} />
             {loadingMore && (
               <div className="flex items-center justify-center py-4">
-                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent, #06B6D4)" }} />
+                <Loader2 className="h-4 w-4 animate-spin" style={{ color: "var(--mc-accent)" }} />
               </div>
             )}
           </>

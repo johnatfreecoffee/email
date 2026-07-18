@@ -150,7 +150,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <div className="flex items-center gap-2">
-            <Globe className="h-5 w-5 text-[#06B6D4]" />
+            <Globe className="h-5 w-5 text-mc-teal" />
             <h2 className="text-[16px] font-semibold text-foreground">Add Email Domain</h2>
           </div>
           <button
@@ -175,17 +175,17 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
                   value={domain}
                   onChange={(e) => setDomain(e.target.value)}
                   placeholder="cleanenergyexperts.pro"
-                  className="w-full bg-muted/40 border border-border rounded-lg px-3 py-2.5 text-[14px] text-white placeholder-[#4B5563] focus:outline-none focus:border-[#06B6D4] transition-colors"
+                  className="w-full bg-muted/40 border border-border rounded-lg px-3 py-2.5 text-[14px] text-foreground placeholder-[#4B5563] focus:outline-none focus:border-mc-teal transition-colors"
                   onKeyDown={(e) => e.key === "Enter" && handleCheck()}
                   autoFocus
                 />
               </div>
 
-              <div className="bg-[rgba(6,182,212,0.06)] border border-[rgba(6,182,212,0.15)] rounded-lg p-3">
+              <div className="bg-mc-teal-glow border border-mc-teal-dim rounded-lg p-3">
                 <div className="flex items-start gap-2">
-                  <Zap className="h-4 w-4 text-[#06B6D4] mt-0.5 flex-shrink-0" />
+                  <Zap className="h-4 w-4 text-mc-teal mt-0.5 flex-shrink-0" />
                   <div className="text-[12px] text-muted-foreground">
-                    <p className="font-medium text-[#06B6D4] mb-1">What happens automatically:</p>
+                    <p className="font-medium text-mc-teal mb-1">What happens automatically:</p>
                     <ul className="space-y-0.5 list-disc pl-4">
                       <li>Checks for existing email (MX) records</li>
                       <li>Domain registered with Resend (sending + receiving)</li>
@@ -199,7 +199,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
               <button
                 onClick={handleCheck}
                 disabled={!domain.trim()}
-                className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#06B6D4] to-[#0891B2] text-white text-[14px] font-medium hover:brightness-110 disabled:opacity-50 transition-all"
+                className="w-full py-2.5 rounded-lg bg-mc-teal text-white text-[14px] font-medium hover:brightness-110 disabled:opacity-50 transition-all"
               >
                 Add Domain
               </button>
@@ -209,7 +209,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
           {/* CHECKING STEP */}
           {step === "checking" && (
             <div className="flex flex-col items-center py-8">
-              <Loader2 className="h-8 w-8 text-[#06B6D4] animate-spin mb-4" />
+              <Loader2 className="h-8 w-8 text-mc-teal animate-spin mb-4" />
               <p className="text-[14px] text-foreground mb-1">Checking DNS...</p>
               <p className="text-[12px] text-muted-foreground">Looking for existing email records</p>
             </div>
@@ -219,19 +219,19 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
           {step === "conflict" && conflict && (
             <div className="space-y-4">
               <div className="flex items-start gap-3 py-2">
-                <div className="h-10 w-10 rounded-full bg-[rgba(251,191,36,0.15)] flex items-center justify-center flex-shrink-0">
-                  <AlertTriangle className="h-5 w-5 text-[#FBBF24]" />
+                <div className="h-10 w-10 rounded-full bg-[var(--mc-accent-bg-hover)] flex items-center justify-center flex-shrink-0">
+                  <AlertTriangle className="h-5 w-5 text-mc-amber" />
                 </div>
                 <div>
                   <p className="text-[14px] font-medium text-foreground">Existing Email Detected</p>
-                  <p className="text-[12px] text-[#FBBF24] mt-0.5">{conflict.provider}</p>
+                  <p className="text-[12px] text-mc-amber mt-0.5">{conflict.provider}</p>
                 </div>
               </div>
 
-              <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.12)] rounded-lg p-3 text-[12px] text-muted-foreground">
+              <div className="bg-[var(--mc-accent-bg-hover)] border border-[var(--mc-accent-bg-hover)] rounded-lg p-3 text-[12px] text-muted-foreground">
                 <p className="mb-2">
-                  <strong className="text-white">{domain}</strong> already has MX records pointing to{" "}
-                  <strong className="text-[#FBBF24]">{conflict.provider}</strong>. Adding Resend will conflict with your current email setup.
+                  <strong className="text-foreground">{domain}</strong> already has MX records pointing to{" "}
+                  <strong className="text-mc-amber">{conflict.provider}</strong>. Adding Resend will conflict with your current email setup.
                 </p>
                 <div className="space-y-1 font-mono text-[11px] mt-2">
                   {conflict.existing_mx.map((mx, i) => (
@@ -248,31 +248,31 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
               {conflict.suggested_subdomain && (
                 <button
                   onClick={handleUseSubdomain}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-[rgba(6,182,212,0.2)] bg-[rgba(6,182,212,0.04)] hover:bg-[rgba(6,182,212,0.08)] transition-all text-left group"
+                  className="w-full flex items-center gap-3 p-3 rounded-lg border border-mc-teal-dim bg-mc-teal-glow hover:bg-mc-teal-glow transition-all text-left group"
                 >
-                  <div className="h-9 w-9 rounded-lg bg-[rgba(6,182,212,0.15)] flex items-center justify-center flex-shrink-0">
-                    <GitBranch className="h-4 w-4 text-[#06B6D4]" />
+                  <div className="h-9 w-9 rounded-lg bg-mc-teal-dim flex items-center justify-center flex-shrink-0">
+                    <GitBranch className="h-4 w-4 text-mc-teal" />
                   </div>
                   <div className="flex-1">
                     <p className="text-[13px] font-medium text-foreground">
                       Use subdomain instead
-                      <span className="text-[#06B6D4] ml-1.5 font-normal">← Recommended</span>
+                      <span className="text-mc-teal ml-1.5 font-normal">← Recommended</span>
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       Set up <strong className="text-muted-foreground">{conflict.suggested_subdomain}</strong> — keeps {conflict.provider} working on the main domain
                     </p>
                   </div>
-                  <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-[#06B6D4] transition-colors" />
+                  <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-mc-teal transition-colors" />
                 </button>
               )}
 
               {/* Option 2: Replace existing */}
               <button
                 onClick={handleReplaceExisting}
-                className="w-full flex items-center gap-3 p-3 rounded-lg border border-[rgba(248,113,113,0.2)] bg-[rgba(248,113,113,0.04)] hover:bg-[rgba(248,113,113,0.08)] transition-all text-left group"
+                className="w-full flex items-center gap-3 p-3 rounded-lg border border-[rgba(255, 59, 48, 0.1)] bg-[rgba(255, 59, 48, 0.1)] hover:bg-[rgba(255, 59, 48, 0.1)] transition-all text-left group"
               >
-                <div className="h-9 w-9 rounded-lg bg-[rgba(248,113,113,0.15)] flex items-center justify-center flex-shrink-0">
-                  <Replace className="h-4 w-4 text-[#F87171]" />
+                <div className="h-9 w-9 rounded-lg bg-[rgba(255, 59, 48, 0.1)] flex items-center justify-center flex-shrink-0">
+                  <Replace className="h-4 w-4 text-mc-red" />
                 </div>
                 <div className="flex-1">
                   <p className="text-[13px] font-medium text-foreground">Replace existing MX records</p>
@@ -280,7 +280,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
                     Removes {conflict.provider} records. All email for this domain will go through this app.
                   </p>
                 </div>
-                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-[#F87171] transition-colors" />
+                <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-mc-red transition-colors" />
               </button>
 
               {/* Cancel */}
@@ -296,7 +296,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
           {/* CONFIGURING STEP */}
           {step === "configuring" && (
             <div className="flex flex-col items-center py-8">
-              <Loader2 className="h-8 w-8 text-[#06B6D4] animate-spin mb-4" />
+              <Loader2 className="h-8 w-8 text-mc-teal animate-spin mb-4" />
               <p className="text-[14px] text-foreground mb-1">Configuring...</p>
               <p className="text-[12px] text-muted-foreground">
                 Setting up Resend → Pushing DNS → Verifying
@@ -308,8 +308,8 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
           {step === "done" && (
             <div className="space-y-4">
               <div className="flex items-center gap-3 py-2">
-                <div className="h-10 w-10 rounded-full bg-[rgba(52,211,153,0.15)] flex items-center justify-center">
-                  <Check className="h-5 w-5 text-[#34D399]" />
+                <div className="h-10 w-10 rounded-full bg-[rgba(52, 199, 89, 0.12)] flex items-center justify-center">
+                  <Check className="h-5 w-5 text-mc-green" />
                 </div>
                 <div>
                   <p className="text-[14px] font-medium text-foreground">Domain Added!</p>
@@ -318,17 +318,17 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
               </div>
 
               {result?.mx_replaced && (
-                <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.12)] rounded-lg p-3 text-[12px] text-muted-foreground">
+                <div className="bg-[var(--mc-accent-bg-hover)] border border-[var(--mc-accent-bg-hover)] rounded-lg p-3 text-[12px] text-muted-foreground">
                   ⚠️ Previous MX records were removed. All email for this domain now routes through this app.
                 </div>
               )}
 
               {result?.dns_auto_configured ? (
-                <div className="bg-[rgba(52,211,153,0.06)] border border-[rgba(52,211,153,0.15)] rounded-lg p-3 text-[12px] text-muted-foreground">
+                <div className="bg-[rgba(52, 199, 89, 0.12)] border border-[rgba(52, 199, 89, 0.12)] rounded-lg p-3 text-[12px] text-muted-foreground">
                   ✅ DNS records auto-configured via Cloudflare. Verification in progress — may take a few minutes.
                 </div>
               ) : (
-                <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.15)] rounded-lg p-3 text-[12px] text-muted-foreground">
+                <div className="bg-[var(--mc-accent-bg-hover)] border border-[var(--mc-accent-bg-hover)] rounded-lg p-3 text-[12px] text-muted-foreground">
                   ⚠️ Domain not found in your Cloudflare zones. Add these DNS records manually:
                   {result?.records && (
                     <div className="mt-2 space-y-1 font-mono text-[11px]">
@@ -346,7 +346,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
               {result?.verifyResult && (
                 <div className="text-[12px] text-muted-foreground">
                   Verification status:{" "}
-                  <span className="font-medium text-[#06B6D4]">{result.verifyResult.status}</span>
+                  <span className="font-medium text-mc-teal">{result.verifyResult.status}</span>
                 </div>
               )}
 
@@ -360,7 +360,7 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
                 </button>
                 <button
                   onClick={onDomainAdded}
-                  className="flex-1 py-2 rounded-lg bg-gradient-to-r from-[#06B6D4] to-[#0891B2] text-white text-[13px] font-medium hover:brightness-110 transition-all"
+                  className="flex-1 py-2 rounded-lg bg-mc-teal text-white text-[13px] font-medium hover:brightness-110 transition-all"
                 >
                   Done
                 </button>
@@ -372,12 +372,12 @@ export function DomainSetup({ onClose, onDomainAdded }: DomainSetupProps) {
           {step === "error" && (
             <div className="space-y-4">
               <div className="flex items-center gap-3 py-2">
-                <div className="h-10 w-10 rounded-full bg-[rgba(248,113,113,0.15)] flex items-center justify-center">
-                  <AlertCircle className="h-5 w-5 text-[#F87171]" />
+                <div className="h-10 w-10 rounded-full bg-[rgba(255, 59, 48, 0.1)] flex items-center justify-center">
+                  <AlertCircle className="h-5 w-5 text-mc-red" />
                 </div>
                 <div>
                   <p className="text-[14px] font-medium text-foreground">Something went wrong</p>
-                  <p className="text-[12px] text-[#F87171]">{error}</p>
+                  <p className="text-[12px] text-mc-red">{error}</p>
                 </div>
               </div>
 
