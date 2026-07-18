@@ -222,6 +222,28 @@ Auto-built address book (compose autocomplete + most-contacted).
 - **GET** `?q=&limit=` (limit default 10): with `q` → `or=(email.ilike.%q%,display_name.ilike.%q%)&order=send_count.desc,receive_count.desc&limit=`; without `q` → most-contacted. Returns array (never surfaces DB errors as 500 — returns `data || []`).
 - **POST** (upsert, called internally by send/inbound): body `{ contacts:[{email, display_name?, direction:"sent"|"received"}] }`. Per contact: lowercase/trim email, skip if empty or no `@`. Exists → PATCH increment `send_count`+`last_sent_at` or `receive_count`+`last_received_at`; sets `display_name` only if incoming present AND stored empty (**never overwrites a name**). New → POST insert. Returns `200 {processed, results:[{email, action}]}`.
 
+### 5.3b Settings / senders / rules (added 2026-07-18)
+
+#### `GET|PATCH|PUT /api/email/settings` (`settings.ts`) — auth-gated
+Roaming preferences over the `email_settings` KV table (`migrations/email-settings.sql` — **must be pasted in the Supabase SQL editor**; until then GET returns `{settings: null, needs_migration: true}` (200) and writes 503, and the client stays on localStorage).
+- **GET** → `{settings: {key: value}, needs_migration}`. Keys: `sidebar, favorites, viewing, composing, junk, privacy, signatures` (shapes documented in the migration file).
+- **PATCH** `{key, value}` — whole-document upsert per key (PATCH-then-POST idiom; 100KB cap; unknown key → 400).
+- **PUT** `{settings: {…}}` — bulk upsert (one-time first-sync push-up from a device).
+- Server-side reader for Functions: `_settings.ts` `readSetting(env, key, fallback)` — never throws; used by inbound.ts for junk settings.
+- Client: `src/lib/settings.tsx` `SettingsProvider`/`useSettings()` — localStorage cache (`email.settings.cache`), legacy-key migration, optimistic writes with per-key 800ms debounce, keepalive flush on hide, refocus refetch (>60s). Device-local by design: theme, pane/column widths, per-domain address stickiness.
+
+#### `GET|PATCH|DELETE /api/email/senders` (`senders.ts`) — auth-gated
+Sender-reputation management for Settings → Junk Mail (existing `email_sender_reputation` table, no migration).
+- **GET** `?verdict=spam|trusted&search=&limit=&offset=` → rows ordered `last_seen_at desc`.
+- **PATCH** `{from_address, verdict}` → flip with `user_override=true`. **DELETE** `?from_address=` → forget (classified fresh next time).
+
+#### `GET|POST|PATCH|DELETE /api/email/rules` (`rules.ts`) — auth-gated
+Delivery rules over `email_rules` (`migrations/email-rules.sql`; GET returns `[]` pre-migration, writes 503).
+- Row: `{name, is_active, priority, match_type: all|any, conditions: [{field: from|to|subject, op: contains|equals|ends_with, value}], actions: [{type: move_folder|mark_read|flag|junk|trash, folder?: inbox|archive}], domain_id|null}`.
+- **POST** validates (≤20 conditions, ≤10 actions, enums, UUIDs) and appends at `max(priority)+1`. **PATCH** `{id, …partial}` or `{reorder: [ids]}` (rewrites priorities). **DELETE** `?id=`.
+- **Delivery integration** (`inbound.ts` + `_rules.ts`): after spam classify, active rules (global + matching domain) evaluate against `{from, to[], subject}` in priority order; ALL matching rules apply, later wins. Actions mirror messages.ts PATCH semantics — `move_folder inbox` rescues from a spam verdict (clears is_spam/archived/trash), `archive`→`is_archived`, `junk`→`is_spam`+folder spam, `trash`→`is_trash`. A bad rule never fails the webhook. **Push gating**: notifications fire only when the final delivery state is inbox + unread + not spam/trash/archived.
+- **Junk settings** thread into `classifySpam(input, env, junk)`: `threshold` replaces the 0.7 const at all 3 decision points; `llmAssist=false` skips the OpenRouter loop (reason `llm_disabled`).
+
 ### 5.4 Push
 
 #### `GET|POST|DELETE /api/email/push` (`push.ts`) — auth-gated (non-OPTIONS)
@@ -420,6 +442,12 @@ Framework: Next.js **16.1.6** App Router, React **19.2.3**, Tailwind **v4**, sha
 ### Routes
 - **`/email`** (`src/app/email/page.tsx`) — the real client. Trivial shell: `<Sidebar/>` + `<TopNav/>` + `<main className="pt-14 mc-content-offset"><EmailLayout/></main>`. Owns no state.
 - **`/inbox`** (`src/app/inbox/page.tsx`) — **NOT email.** A Linear-style unified activity feed reading Supabase directly (`mc_issues`, `mc_issue_read_states`, `mc_issue_comments`, `mc_approvals`, `mc_notifications`, `mc_agent_runs`+`mc_agents`). Shares no components with email. Do not port.
+
+### Settings window (added 2026-07-18)
+`src/components/email/settings/` — Apple Mail-style Settings modal (gear in the sidebar footer; per-domain gear deep-links to Accounts). Tabs: **General** (push toggle/test via shared `usePush()` hook, banner reset) · **Accounts** (domain rail + `domain-account-detail.tsx`: Account Information/Addresses/Catch-All/Danger; "+" embeds `DomainSetupCard`; replaces the deleted DomainSettingsPanel) · **Junk Mail** (AI toggle, threshold slider, sender lists via /senders) · **Appearance** (theme, device-local) · **Viewing** (stacked|columns desktop list, preview lines, mark-read delay, catch-alls-in-inbox) · **Composing** (default From, signature placement) · **Signatures** (per-address RichEditor) · **Rules** (full manager, dnd reorder) · **Privacy** (block remote content). `MigrationNotice` shows copy-paste SQL while `needs_migration`. Sidebar: "Mailboxes" header with one smart Collapse All/Expand All toggle; collapse state + favorites roam via settings.
+
+### Desktop list views
+`viewing.desktopView` picks **MessageListVirtual** (stacked preview rows, previewLines 1|2 → 68/84px) or **MessageTable** (column layout, resurrected: sortable From/Subject/Date over loaded rows with a display↔parent index mapping so clicks/j/k/ranges/auto-read always act on the visible row; publishes display order via `onDisplayOrderChange` so the layout's global j/k follows the sort). Mobile always uses cards. Reader honors `privacy.blockRemoteContent` via `remote-content.ts` (attribute-rename neutralization + per-message session reveal banner). Compose honors `composing.defaultAddressId` + per-address signatures (pristine-swap on From change; drafts untouched).
 
 ### Component tree (email) — post Apple Mail revamp (2026-07-18)
 ```
