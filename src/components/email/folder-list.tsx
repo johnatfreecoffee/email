@@ -8,7 +8,6 @@ import {
   Trash2,
   Archive,
   Plus,
-  Mail,
   Pencil,
   RefreshCw,
   Settings,
@@ -20,8 +19,18 @@ import {
   User,
   Shield,
   AlertOctagon,
+  SunMoon,
+  Sun,
+  Moon,
+  Monitor,
+  Check,
+  GripVertical,
+  Minus,
+  FlaskConical,
+  type LucideIcon,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import type { EmailDomain } from "./email-layout";
 import { DomainSettingsPanel } from "./domain-settings-panel";
 import {
@@ -32,6 +41,8 @@ import {
   registerServiceWorker,
 } from "@/lib/push-notifications";
 import { apiFetch } from "@/lib/auth";
+import { useTheme, type ThemePref } from "@/lib/theme";
+import { type FavoriteRef, favKey, loadFavorites, saveFavorites } from "./favorites";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -61,23 +72,22 @@ const folderDefs = [
   { id: "inbox", label: "Inbox", icon: Inbox },
   { id: "sent", label: "Sent", icon: Send },
   { id: "drafts", label: "Drafts", icon: FileEdit },
-  { id: "starred", label: "Starred", icon: Star },
+  { id: "starred", label: "Flagged", icon: Star },
   { id: "archive", label: "Archive", icon: Archive },
-  { id: "spam", label: "Spam", icon: AlertOctagon },
+  { id: "spam", label: "Junk", icon: AlertOctagon },
   { id: "trash", label: "Trash", icon: Trash2 },
 ];
 
-const allFavoriteDefs = [
-  { id: "inbox", label: "Inboxes", icon: Inbox, countKey: "inbox" },
-  { id: "sent", label: "Sent", icon: Send, countKey: "sent" },
-  { id: "drafts", label: "Drafts", icon: FileEdit, countKey: "drafts" },
-  { id: "starred", label: "Starred", icon: Star, countKey: "starred" },
-  { id: "archive", label: "Archive", icon: Archive, countKey: "archive" },
-  { id: "spam", label: "Spam", icon: AlertOctagon, countKey: "spam" },
-  { id: "trash", label: "Trash", icon: Trash2, countKey: "trash" },
+// Aggregate (cross-domain) favorite definitions
+const aggregateDefs = [
+  { id: "inbox", label: "All Inboxes", icon: Inbox },
+  { id: "sent", label: "Sent", icon: Send },
+  { id: "drafts", label: "Drafts", icon: FileEdit },
+  { id: "starred", label: "Flagged", icon: Star },
+  { id: "archive", label: "Archive", icon: Archive },
+  { id: "spam", label: "Junk", icon: AlertOctagon },
+  { id: "trash", label: "Trash", icon: Trash2 },
 ];
-
-const DEFAULT_FAVORITE_IDS = ["inbox", "sent", "drafts", "starred"];
 
 function getDomainHealthDot(d: EmailDomain): string {
   const status = d.status?.toLowerCase() || "";
@@ -89,8 +99,6 @@ function getDomainHealthDot(d: EmailDomain): string {
 
 const COLLAPSED_KEY = "email-collapsed-domains";
 const FAVORITES_KEY = "email-favorites-visible";
-const FAV_COLLAPSED_KEY = "email-favorites-collapsed";
-const FAV_ITEMS_KEY = "email-favorite-items";
 
 function loadCollapsed(): string[] {
   try {
@@ -114,31 +122,144 @@ function loadFavoritesVisible(): boolean {
   }
 }
 
-function loadFavCollapsed(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(FAV_COLLAPSED_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+// ---------- Shared row ----------
+
+interface SidebarRowProps {
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+  active?: boolean;
+  depth?: 0 | 1;
+  onClick?: () => void;
+  title?: string;
+  /** Rendered instead of the count (edit-mode pin/remove buttons). */
+  trailing?: React.ReactNode;
+  /** Small leading extra (drag handle in edit mode). */
+  leading?: React.ReactNode;
+  iconColor?: string;
 }
 
-function saveFavCollapsed(state: Record<string, boolean>) {
-  localStorage.setItem(FAV_COLLAPSED_KEY, JSON.stringify(state));
+function SidebarRow({
+  icon: Icon,
+  label,
+  count,
+  active = false,
+  depth = 0,
+  onClick,
+  title,
+  trailing,
+  leading,
+  iconColor,
+}: SidebarRowProps) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="w-full flex items-center gap-2 h-7 rounded-md text-[13px] transition-colors group/row"
+      style={{
+        paddingLeft: depth === 1 ? "26px" : "8px",
+        paddingRight: "8px",
+        color: active ? "var(--mc-text)" : "var(--mc-text-secondary)",
+        backgroundColor: active ? "var(--mc-sidebar-selected)" : "transparent",
+      }}
+      onMouseEnter={(e) => {
+        if (!active) e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
+      }}
+      onMouseLeave={(e) => {
+        if (!active) e.currentTarget.style.backgroundColor = "transparent";
+      }}
+    >
+      {leading}
+      <Icon
+        className="h-[15px] w-[15px] flex-shrink-0"
+        style={{ color: iconColor || "var(--mc-accent)" }}
+      />
+      <span className="flex-1 text-left truncate">{label}</span>
+      {trailing !== undefined
+        ? trailing
+        : typeof count === "number" && count > 0 && (
+            <span
+              className="text-[11px] font-semibold tabular-nums flex-shrink-0"
+              style={{ color: "var(--mc-text-muted)" }}
+            >
+              {count}
+            </span>
+          )}
+    </button>
+  );
 }
 
-function loadFavoriteItems(): string[] {
-  try {
-    const raw = localStorage.getItem(FAV_ITEMS_KEY);
-    return raw ? JSON.parse(raw) : DEFAULT_FAVORITE_IDS;
-  } catch {
-    return DEFAULT_FAVORITE_IDS;
-  }
+// ---------- Theme menu ----------
+
+function ThemeMenu() {
+  const { pref, setPref } = useTheme();
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const options: { id: ThemePref; label: string; icon: LucideIcon }[] = [
+    { id: "system", label: "System", icon: Monitor },
+    { id: "light", label: "Light", icon: Sun },
+    { id: "dark", label: "Dark", icon: Moon },
+  ];
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="p-1.5 rounded-md transition-colors"
+        style={{ color: open ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+        title="Appearance"
+      >
+        <SunMoon className="h-4 w-4" />
+      </button>
+      {open && (
+        <div
+          className="absolute bottom-full left-0 mb-1 rounded-lg py-1 min-w-[130px] z-40"
+          style={{
+            backgroundColor: "var(--mc-bg-elevated)",
+            border: "1px solid var(--mc-border)",
+            boxShadow: "var(--mc-shadow)",
+          }}
+        >
+          {options.map((o) => (
+            <button
+              key={o.id}
+              onClick={() => { setPref(o.id); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] transition-colors"
+              style={{ color: "var(--mc-text-secondary)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            >
+              <o.icon className="h-3.5 w-3.5" style={{ color: "var(--mc-text-muted)" }} />
+              <span className="flex-1 text-left">{o.label}</span>
+              {pref === o.id && <Check className="h-3.5 w-3.5" style={{ color: "var(--mc-accent)" }} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
-function saveFavoriteItems(ids: string[]) {
-  localStorage.setItem(FAV_ITEMS_KEY, JSON.stringify(ids));
-}
+// ---------- Sidebar ----------
 
 export function FolderList({
   activeFolder,
@@ -150,7 +271,7 @@ export function FolderList({
   onAddressChange,
   catchAllOnly = false,
   onCatchAllToggle,
-  unreadCount,
+  unreadCount: _unreadCount,
   draftsCount = 0,
   onAddDomain,
   onCompose,
@@ -164,9 +285,8 @@ export function FolderList({
   const [pushSupported, setPushSupported] = useState(false);
   const [collapsedDomains, setCollapsedDomains] = useState<string[]>([]);
   const [favoritesVisible, setFavoritesVisible] = useState(true);
-  const [favCollapsed, setFavCollapsed] = useState<Record<string, boolean>>({});
-  const [favoriteItems, setFavoriteItems] = useState<string[]>(DEFAULT_FAVORITE_IDS);
-  const [editingFavorites, setEditingFavorites] = useState(false);
+  const [favorites, setFavorites] = useState<FavoriteRef[]>([]);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -178,9 +298,46 @@ export function FolderList({
     });
     setCollapsedDomains(loadCollapsed());
     setFavoritesVisible(loadFavoritesVisible());
-    setFavCollapsed(loadFavCollapsed());
-    setFavoriteItems(loadFavoriteItems());
+    setFavorites(loadFavorites());
   }, []);
+
+  // Prune favorites whose domain/address no longer exists (once domains load)
+  useEffect(() => {
+    if (domains.length === 0) return;
+    setFavorites((prev) => {
+      const pruned = prev.filter((ref) => {
+        if (ref.kind === "folder") return true;
+        const d = domains.find((x) => x.id === ref.domainId);
+        if (!d) return false;
+        if (ref.kind === "address") {
+          return (d.addresses || []).some((a) => a.id === ref.addressId);
+        }
+        return true;
+      });
+      if (pruned.length !== prev.length) {
+        saveFavorites(pruned);
+        return pruned;
+      }
+      return prev;
+    });
+  }, [domains]);
+
+  const updateFavorites = (next: FavoriteRef[]) => {
+    setFavorites(next);
+    saveFavorites(next);
+  };
+
+  const favoriteKeys = useMemo(() => new Set(favorites.map(favKey)), [favorites]);
+
+  const isPinned = (ref: FavoriteRef) => favoriteKeys.has(favKey(ref));
+
+  const togglePin = (ref: FavoriteRef) => {
+    if (isPinned(ref)) {
+      updateFavorites(favorites.filter((f) => favKey(f) !== favKey(ref)));
+    } else {
+      updateFavorites([...favorites, ref]);
+    }
+  };
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -218,293 +375,268 @@ export function FolderList({
     });
   };
 
-  const toggleFavCollapsed = (favId: string) => {
-    setFavCollapsed((prev) => {
-      const next = { ...prev, [favId]: !prev[favId] };
-      saveFavCollapsed(next);
-      return next;
-    });
-  };
-
-  const toggleFavoriteItem = (favId: string) => {
-    setFavoriteItems((prev) => {
-      const next = prev.includes(favId)
-        ? prev.filter((id) => id !== favId)
-        : [...prev, favId];
-      saveFavoriteItems(next);
-      return next;
-    });
-  };
-
   const isAllSelected = selectedDomain === null;
 
-  // Aggregate counts across all domains (live unread counts).
-  const allCounts: Record<string, number> = {
-    inbox: unreadCounts.totals.inbox ?? 0,
-    sent: unreadCounts.totals.sent ?? 0,
-    starred: unreadCounts.totals.starred ?? 0,
-    archive: unreadCounts.totals.archive ?? 0,
-    spam: unreadCounts.totals.spam ?? 0,
-    trash: unreadCounts.totals.trash ?? 0,
+  // Resolve one favorite ref into row props (null → skip: stale ref)
+  const resolveFavorite = (ref: FavoriteRef): {
+    icon: LucideIcon;
+    label: string;
+    count?: number;
+    active: boolean;
+    onClick: () => void;
+  } | null => {
+    switch (ref.kind) {
+      case "folder": {
+        const def = aggregateDefs.find((f) => f.id === ref.folder);
+        if (!def) return null;
+        const count = ref.folder === "drafts" ? draftsCount : unreadCounts.totals[ref.folder] ?? 0;
+        return {
+          icon: def.icon,
+          label: def.label,
+          count,
+          active: isAllSelected && activeFolder === ref.folder && !catchAllOnly,
+          onClick: () => {
+            onDomainChange(null);
+            onFolderChange(ref.folder);
+          },
+        };
+      }
+      case "domain-folder": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        const def = folderDefs.find((f) => f.id === ref.folder);
+        if (!d || !def) return null;
+        return {
+          icon: def.icon,
+          label: `${def.label} — ${d.domain}`,
+          count: ref.folder === "drafts" ? 0 : unreadCounts.folders[d.id]?.[ref.folder] ?? 0,
+          active:
+            selectedDomain?.id === d.id &&
+            activeFolder === ref.folder &&
+            !selectedAddress &&
+            !catchAllOnly,
+          onClick: () => {
+            if (selectedDomain?.id !== d.id) onDomainChange(d);
+            onFolderChange(ref.folder);
+          },
+        };
+      }
+      case "address": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        const addr = d?.addresses?.find((a) => a.id === ref.addressId);
+        if (!d || !addr) return null;
+        return {
+          icon: User,
+          label: `${addr.address}@${d.domain}`,
+          active: selectedDomain?.id === d.id && selectedAddress === addr.id && !catchAllOnly,
+          onClick: () => {
+            onDomainChange(d);
+            onAddressChange(addr.id);
+            onFolderChange("inbox");
+          },
+        };
+      }
+      case "catchall": {
+        const d = domains.find((x) => x.id === ref.domainId);
+        if (!d) return null;
+        return {
+          icon: Shield,
+          label: `Catch-All — ${d.domain}`,
+          count: unreadCounts.folders[d.id]?.catchall ?? 0,
+          active: selectedDomain?.id === d.id && catchAllOnly,
+          onClick: () => onCatchAllToggle?.(d),
+        };
+      }
+    }
   };
 
-  const activeFavorites = allFavoriteDefs.filter((f) => favoriteItems.includes(f.id));
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    const next = [...favorites];
+    const [moved] = next.splice(result.source.index, 1);
+    next.splice(result.destination.index, 0, moved);
+    updateFavorites(next);
+  };
+
+  // Small pin toggle used across domain sections while editing
+  const PinButton = ({ refItem }: { refItem: FavoriteRef }) => {
+    const pinned = isPinned(refItem);
+    return (
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.stopPropagation();
+          togglePin(refItem);
+        }}
+        className="flex-shrink-0 h-4 w-4 rounded-full flex items-center justify-center transition-colors cursor-pointer"
+        style={{
+          backgroundColor: pinned ? "var(--mc-accent)" : "transparent",
+          border: pinned ? "none" : "1px solid var(--mc-text-faint)",
+          color: pinned ? "#fff" : "var(--mc-text-faint)",
+        }}
+        title={pinned ? "Remove from Favorites" : "Add to Favorites"}
+      >
+        {pinned ? <Check className="h-2.5 w-2.5" /> : <Plus className="h-2.5 w-2.5" />}
+      </span>
+    );
+  };
 
   return (
     <>
-      <div className="flex flex-col h-full p-3">
-        {/* Compose Button */}
+      <div className="flex flex-col h-full p-2.5">
+        {/* Compose */}
         <button
           onClick={onCompose}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-[14px] transition-all mb-3"
-          style={{
-            backgroundColor: "var(--mc-accent)",
-            color: "#fff",
-          }}
+          className="w-full flex items-center justify-center gap-2 h-8 rounded-md font-medium text-[13px] transition-all mb-3 hover:brightness-110"
+          style={{ backgroundColor: "var(--mc-accent)", color: "#fff" }}
         >
-          <Pencil className="h-4 w-4" />
+          <Pencil className="h-3.5 w-3.5" />
           Compose
         </button>
 
-        {/* Favorites Section */}
-        <div className="mb-2">
-          <button
-            onClick={toggleFavorites}
-            className="w-full flex items-center gap-1.5 px-2 py-1 mb-1"
-            style={{ color: "var(--mc-text-faint)" }}
-          >
-            {favoritesVisible ? (
-              <ChevronDown className="h-3 w-3" />
-            ) : (
-              <ChevronRight className="h-3 w-3" />
-            )}
-            <span className="text-[10px] font-semibold uppercase tracking-widest">
-              Favorites
-            </span>
-          </button>
+        {/* Favorites */}
+        <div className="mb-1.5">
+          <div className="flex items-center px-1 mb-0.5">
+            <button
+              onClick={toggleFavorites}
+              className="flex items-center gap-1 flex-1 py-0.5"
+              style={{ color: "var(--mc-text-faint)" }}
+            >
+              {favoritesVisible ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              <span className="text-[11px] font-semibold">Favorites</span>
+            </button>
+            <button
+              onClick={() => setEditing((v) => !v)}
+              className="text-[11px] px-1.5 py-0.5 rounded transition-colors"
+              style={{ color: editing ? "var(--mc-accent)" : "var(--mc-text-faint)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "var(--mc-accent)"; }}
+              onMouseLeave={(e) => { if (!editing) e.currentTarget.style.color = "var(--mc-text-faint)"; }}
+            >
+              {editing ? "Done" : "Edit"}
+            </button>
+          </div>
 
-          <div
-            className="overflow-hidden transition-all duration-200"
-            style={{
-              maxHeight: favoritesVisible ? "600px" : "0px",
-              opacity: favoritesVisible ? 1 : 0,
-            }}
-          >
-            <div className="space-y-0.5">
-              {activeFavorites.map((f) => {
-                const isParentActive = isAllSelected && activeFolder === f.id;
-                const count =
-                  f.countKey === "drafts"
-                    ? draftsCount
-                    : allCounts[f.countKey] || 0;
-                const isExpanded = !favCollapsed[f.id];
+          {favoritesVisible && (
+            <div className="space-y-px">
+              {editing ? (
+                <DragDropContext onDragEnd={onDragEnd}>
+                  <Droppable droppableId="favorites">
+                    {(dropProvided) => (
+                      <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                        {favorites.map((ref, index) => {
+                          const resolved = resolveFavorite(ref);
+                          if (!resolved) return null;
+                          const key = favKey(ref);
+                          return (
+                            <Draggable key={key} draggableId={key} index={index}>
+                              {(dragProvided, snapshot) => (
+                                <div
+                                  ref={dragProvided.innerRef}
+                                  {...dragProvided.draggableProps}
+                                  style={{
+                                    ...dragProvided.draggableProps.style,
+                                    opacity: snapshot.isDragging ? 0.85 : 1,
+                                  }}
+                                >
+                                  <SidebarRow
+                                    icon={resolved.icon}
+                                    label={resolved.label}
+                                    active={false}
+                                    leading={
+                                      <span
+                                        {...dragProvided.dragHandleProps}
+                                        className="flex-shrink-0 cursor-grab active:cursor-grabbing"
+                                        style={{ color: "var(--mc-text-faint)" }}
+                                      >
+                                        <GripVertical className="h-3.5 w-3.5" />
+                                      </span>
+                                    }
+                                    trailing={
+                                      <span
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          updateFavorites(favorites.filter((f) => favKey(f) !== key));
+                                        }}
+                                        className="flex-shrink-0 h-4 w-4 rounded-full flex items-center justify-center cursor-pointer"
+                                        style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                        title="Remove from Favorites"
+                                      >
+                                        <Minus className="h-2.5 w-2.5" />
+                                      </span>
+                                    }
+                                  />
+                                </div>
+                              )}
+                            </Draggable>
+                          );
+                        })}
+                        {dropProvided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
+                </DragDropContext>
+              ) : (
+                favorites.map((ref) => {
+                  const resolved = resolveFavorite(ref);
+                  if (!resolved) return null;
+                  return (
+                    <SidebarRow
+                      key={favKey(ref)}
+                      icon={resolved.icon}
+                      label={resolved.label}
+                      count={resolved.count}
+                      active={resolved.active}
+                      onClick={resolved.onClick}
+                    />
+                  );
+                })
+              )}
 
-                return (
-                  <div key={f.id}>
-                    {/* Parent favorite item */}
-                    <div className="flex items-center">
-                      <button
-                        onClick={() => toggleFavCollapsed(f.id)}
-                        className="flex-shrink-0 p-1 rounded transition-all"
-                        style={{ color: "var(--mc-text-faint)" }}
-                      >
-                        {isExpanded ? (
-                          <ChevronDown className="h-3 w-3" />
-                        ) : (
-                          <ChevronRight className="h-3 w-3" />
-                        )}
-                      </button>
-                      <button
-                        onClick={() => {
-                          // "All Inboxes" / cross-domain view: clear domain
-                          // (which resets the active selectedAddress to null
-                          // without touching each domain's saved choice in
-                          // localStorage).
-                          onDomainChange(null);
-                          onFolderChange(f.id);
-                        }}
-                        className="flex-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-[13px] transition-all"
-                        style={{
-                          color: isParentActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                          backgroundColor: isParentActive ? "var(--mc-accent-bg)" : "transparent",
-                          fontWeight: isParentActive ? 500 : 400,
-                        }}
-                        onMouseEnter={(e) => {
-                          if (!isParentActive) {
-                            e.currentTarget.style.color = "var(--mc-text-secondary)";
-                            e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (!isParentActive) {
-                            e.currentTarget.style.color = "var(--mc-text-muted)";
-                            e.currentTarget.style.backgroundColor = "transparent";
-                          }
-                        }}
-                      >
-                        <f.icon className="h-4 w-4" />
-                        <span className="flex-1 text-left">{f.label}</span>
-                        <span
-                          className="text-[11px] font-bold px-1.5 py-0.5 rounded-full"
-                          style={{
-                            color: count > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                            backgroundColor: "var(--mc-bg-hover)",
-                          }}
-                        >
-                          ({count})
-                        </span>
-                      </button>
-                    </div>
-
-                    {/* Domain sub-items */}
-                    <div
-                      className="overflow-hidden transition-all duration-200"
-                      style={{
-                        maxHeight: isExpanded ? `${domains.length * 32}px` : "0px",
-                        opacity: isExpanded ? 1 : 0,
-                      }}
-                    >
-                      {domains.map((d) => {
-                        const domainCount =
-                          f.countKey === "drafts"
-                            ? 0
-                            : (unreadCounts.folders[d.id]?.[f.countKey] ?? 0);
-                        const isSubActive =
-                          selectedDomain?.id === d.id && activeFolder === f.id && !selectedAddress;
-
-                        return (
-                          <button
-                            key={d.id}
-                            onClick={() => {
-                              // Same-domain folder change preserves the
-                              // active recipient filter. Cross-domain jump
-                              // restores that domain's saved choice (if any).
-                              if (selectedDomain?.id !== d.id) {
-                                onDomainChange(d);
-                              }
-                              onFolderChange(f.id);
-                            }}
-                            className="w-full flex items-center gap-2 pl-9 pr-3 py-1 rounded-lg text-[12px] transition-all"
-                            style={{
-                              color: isSubActive ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                              backgroundColor: isSubActive ? "var(--mc-accent-bg)" : "transparent",
-                              fontWeight: isSubActive ? 500 : 400,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isSubActive) {
-                                e.currentTarget.style.color = "var(--mc-text-secondary)";
-                                e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!isSubActive) {
-                                e.currentTarget.style.color = "var(--mc-text-faint)";
-                                e.currentTarget.style.backgroundColor = "transparent";
-                              }
-                            }}
-                          >
-                            <span className="flex-1 text-left truncate">{d.domain}</span>
-                            <span
-                              className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                              style={{
-                                color: domainCount > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                                backgroundColor: "var(--mc-bg-hover)",
-                              }}
-                            >
-                              ({domainCount})
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
+              {/* While editing: aggregates not yet pinned, one tap to add */}
+              {editing && (
+                <div className="mt-1 pt-1" style={{ borderTop: "1px solid var(--mc-border-subtle)" }}>
+                  {aggregateDefs
+                    .filter((f) => !favoriteKeys.has(`folder:${f.id}`))
+                    .map((f) => (
+                      <SidebarRow
+                        key={`add-${f.id}`}
+                        icon={f.icon}
+                        label={f.label}
+                        iconColor="var(--mc-text-faint)"
+                        onClick={() => togglePin({ kind: "folder", folder: f.id })}
+                        trailing={<PinButton refItem={{ kind: "folder", folder: f.id }} />}
+                      />
+                    ))}
+                  <div className="px-2 py-1 text-[10px]" style={{ color: "var(--mc-text-faint)" }}>
+                    Tip: use the + on any mailbox below to pin it here.
                   </div>
-                );
-              })}
-            </div>
-
-            {/* Edit Favorites */}
-            <div className="mt-1.5">
-              <button
-                onClick={() => setEditingFavorites(!editingFavorites)}
-                className="text-[11px] px-3 py-1 transition-all"
-                style={{ color: "var(--mc-text-faint)" }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "var(--mc-accent)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = "var(--mc-text-faint)";
-                }}
-              >
-                {editingFavorites ? "Done" : "Edit Favorites"}
-              </button>
-
-              {editingFavorites && (
-                <div className="mt-1 space-y-0.5 px-2">
-                  {allFavoriteDefs.map((f) => {
-                    const checked = favoriteItems.includes(f.id);
-                    return (
-                      <button
-                        key={f.id}
-                        onClick={() => toggleFavoriteItem(f.id)}
-                        className="w-full flex items-center gap-2 px-2 py-1 rounded text-[12px] transition-all"
-                        style={{ color: "var(--mc-text-muted)" }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = "transparent";
-                        }}
-                      >
-                        <div
-                          className="h-3.5 w-3.5 rounded border flex items-center justify-center flex-shrink-0"
-                          style={{
-                            borderColor: checked ? "var(--mc-accent)" : "var(--mc-border)",
-                            backgroundColor: checked ? "var(--mc-accent)" : "transparent",
-                          }}
-                        >
-                          {checked && (
-                            <svg className="h-2.5 w-2.5 text-white" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M2 6l3 3 5-5" />
-                            </svg>
-                          )}
-                        </div>
-                        <f.icon className="h-3.5 w-3.5" />
-                        <span>{f.label}</span>
-                      </button>
-                    );
-                  })}
                 </div>
               )}
             </div>
-          </div>
+          )}
 
           <div className="mt-2" style={{ borderTop: "1px solid var(--mc-border)" }} />
         </div>
 
-        {/* Domain accounts — Apple Mail style collapsible sections */}
-        <div className="flex-1 overflow-y-auto space-y-2">
+        {/* Domain accounts */}
+        <div className="flex-1 overflow-y-auto space-y-1.5 -mx-1 px-1">
           {domains.map((d) => {
             const isThisDomain = selectedDomain?.id === d.id;
             const dotColor = getDomainHealthDot(d);
-            // Per-folder unread counts (live)
             const liveFolderCounts = unreadCounts.folders[d.id] || {};
-            const counts: Record<string, number> = {
-              inbox: liveFolderCounts.inbox ?? 0,
-              sent: liveFolderCounts.sent ?? 0,
-              drafts: 0,
-              starred: liveFolderCounts.starred ?? 0,
-              archive: liveFolderCounts.archive ?? 0,
-              spam: liveFolderCounts.spam ?? 0,
-              trash: liveFolderCounts.trash ?? 0,
-            };
             const isCollapsed = collapsedDomains.includes(d.id);
-            // Domain total unread = excludes trash (matches API semantics)
-            const domainTotalUnread = unreadCounts.domains[d.id] ?? (liveFolderCounts.inbox ?? 0);
+            const domainTotalUnread = unreadCounts.domains[d.id] ?? 0;
 
             return (
               <div key={d.id}>
-                {/* Domain header — clickable chevron to collapse */}
-                <div className="flex items-center justify-between px-2 mb-1">
+                {/* Section header */}
+                <div className="flex items-center justify-between pl-1 pr-0.5 h-6 group/domain">
                   <button
                     onClick={() => toggleDomainCollapse(d.id)}
                     className="flex items-center gap-1.5 min-w-0 flex-1"
@@ -516,236 +648,114 @@ export function FolderList({
                       <ChevronDown className="h-3 w-3 flex-shrink-0" />
                     )}
                     <div
-                      className="h-2 w-2 rounded-full flex-shrink-0"
+                      className="h-1.5 w-1.5 rounded-full flex-shrink-0"
                       style={{ backgroundColor: dotColor }}
                     />
-                    <span
-                      className="text-[11px] font-semibold uppercase tracking-wider truncate"
-                    >
-                      {d.domain}
-                    </span>
+                    <span className="text-[11px] font-semibold truncate">{d.domain}</span>
                   </button>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <span
-                      className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                      style={{
-                        color: domainTotalUnread > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                        backgroundColor: "var(--mc-bg-hover)",
-                      }}
-                      title={domainTotalUnread > 0 ? `${domainTotalUnread} unread across all folders` : "No unread"}
-                    >
-                      ({domainTotalUnread})
-                    </span>
+                  <div className="flex items-center gap-0.5 flex-shrink-0">
+                    {domainTotalUnread > 0 && (
+                      <span
+                        className="text-[11px] font-semibold tabular-nums"
+                        style={{ color: "var(--mc-text-muted)" }}
+                        title={`${domainTotalUnread} unread across all folders`}
+                      >
+                        {domainTotalUnread}
+                      </span>
+                    )}
                     <button
                       onClick={() => setSettingsDomain(d)}
-                      className="p-1 rounded-lg transition-all flex-shrink-0"
+                      className="p-1 rounded transition-all opacity-0 group-hover/domain:opacity-100"
                       style={{ color: "var(--mc-text-faint)" }}
-                      onMouseEnter={(e) => {
-                        (e.target as HTMLElement).style.color = "var(--mc-accent)";
-                        (e.target as HTMLElement).style.backgroundColor = "var(--mc-accent-bg)";
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.target as HTMLElement).style.color = "var(--mc-text-faint)";
-                        (e.target as HTMLElement).style.backgroundColor = "transparent";
-                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--mc-text-faint)"; }}
                       title="Domain settings"
                     >
-                      <Settings className="h-3.5 w-3.5" />
+                      <Settings className="h-3 w-3" />
                     </button>
                   </div>
                 </div>
 
-                {/* Folder tree + addresses — collapsible */}
-                <div
-                  className="overflow-hidden transition-all duration-200"
-                  style={{
-                    maxHeight: isCollapsed ? "0px" : "500px",
-                    opacity: isCollapsed ? 0 : 1,
-                  }}
-                >
-                  <div className="space-y-0.5">
+                {/* Folders */}
+                {!isCollapsed && (
+                  <div className="space-y-px">
                     {folderDefs.flatMap((f) => {
-                      // Inject the per-domain Catch-All "virtual folder"
-                      // right after Inbox, when the domain has catch-all
-                      // enabled. It queries is_catch_all=true and reuses
-                      // the existing catchAllOnly state in the parent.
                       const items: React.ReactNode[] = [];
-                      const isActive = isThisDomain && activeFolder === f.id && !selectedAddress && !catchAllOnly;
-                      const count = f.id === "drafts" ? (isThisDomain ? draftsCount : 0) : (counts[f.id] || 0);
+                      const isActive =
+                        isThisDomain && activeFolder === f.id && !selectedAddress && !catchAllOnly;
+                      const count =
+                        f.id === "drafts" ? (isThisDomain ? draftsCount : 0) : liveFolderCounts[f.id] ?? 0;
+                      const dfRef: FavoriteRef = { kind: "domain-folder", domainId: d.id, folder: f.id };
 
                       items.push(
-                        <button
+                        <SidebarRow
                           key={f.id}
+                          icon={f.icon}
+                          label={f.label}
+                          count={count}
+                          active={isActive}
+                          depth={1}
                           onClick={() => {
-                            // Switching to a different domain restores that
-                            // domain's saved recipient filter via onDomainChange.
-                            // Staying on the same domain preserves the active
-                            // recipient filter across folder switches.
-                            if (selectedDomain?.id !== d.id) {
-                              onDomainChange(d);
-                            }
+                            if (selectedDomain?.id !== d.id) onDomainChange(d);
                             onFolderChange(f.id);
                           }}
-                          className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-[13px] transition-all"
-                          style={{
-                            color: isActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                            backgroundColor: isActive ? "var(--mc-accent-bg)" : "transparent",
-                            fontWeight: isActive ? 500 : 400,
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!isActive) {
-                              e.currentTarget.style.color = "var(--mc-text-secondary)";
-                              e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!isActive) {
-                              e.currentTarget.style.color = "var(--mc-text-muted)";
-                              e.currentTarget.style.backgroundColor = "transparent";
-                            }
-                          }}
-                        >
-                          <f.icon className="h-4 w-4" />
-                          <span className="flex-1 text-left">{f.label}</span>
-                          <span
-                            className="text-[11px] font-bold px-1.5 py-0.5 rounded-full"
-                            style={{
-                              color: count > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                              backgroundColor: "var(--mc-bg-hover)",
-                            }}
-                          >
-                            ({count})
-                          </span>
-                        </button>
+                          trailing={editing ? <PinButton refItem={dfRef} /> : undefined}
+                        />
                       );
 
-                      // Catch-All virtual folder appears right after Inbox
                       if (f.id === "inbox" && d.catch_all_enabled && onCatchAllToggle) {
-                        const isCatchActive = isThisDomain && catchAllOnly;
-                        const catchAllCount = liveFolderCounts.catchall ?? 0;
+                        const caRef: FavoriteRef = { kind: "catchall", domainId: d.id };
                         items.push(
-                          <button
+                          <SidebarRow
                             key={`${f.id}-catchall`}
+                            icon={Shield}
+                            label="Catch-All"
+                            count={liveFolderCounts.catchall ?? 0}
+                            active={isThisDomain && catchAllOnly}
+                            depth={1}
                             onClick={() => onCatchAllToggle(d)}
-                            className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-[13px] transition-all"
-                            style={{
-                              color: isCatchActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                              backgroundColor: isCatchActive ? "var(--mc-accent-bg)" : "transparent",
-                              fontWeight: isCatchActive ? 500 : 400,
-                            }}
-                            onMouseEnter={(e) => {
-                              if (!isCatchActive) {
-                                e.currentTarget.style.color = "var(--mc-text-secondary)";
-                                e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              if (!isCatchActive) {
-                                e.currentTarget.style.color = "var(--mc-text-muted)";
-                                e.currentTarget.style.backgroundColor = "transparent";
-                              }
-                            }}
                             title="Mail addressed to unknown local-parts on this domain"
-                          >
-                            <Shield className="h-4 w-4" />
-                            <span className="flex-1 text-left">Catch-All</span>
-                            <span
-                              className="text-[11px] font-bold px-1.5 py-0.5 rounded-full"
-                              style={{
-                                color: catchAllCount > 0 ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                                backgroundColor: "var(--mc-bg-hover)",
-                              }}
-                            >
-                              ({catchAllCount})
-                            </span>
-                          </button>
+                            trailing={editing ? <PinButton refItem={caRef} /> : undefined}
+                          />
                         );
                       }
 
                       return items;
                     })}
-                  </div>
 
-                  {/* Address sub-items + Catch-All filter */}
-                  {((d.addresses && d.addresses.some((a) => a.is_active)) || d.catch_all_enabled) && (
-                    <div className="mt-1.5 ml-3 space-y-0.5">
-                      <div
-                        className="text-[10px] font-semibold uppercase tracking-widest px-3 py-1"
-                        style={{ color: "var(--mc-text-faint)" }}
-                      >
-                        Filter
-                      </div>
-                      {d.addresses
-                        .filter((addr) => addr.is_active)
-                        .map((addr) => {
-                          const isAddrActive = isThisDomain && selectedAddress === addr.id && !catchAllOnly;
-                          return (
-                            <button
-                              key={addr.id}
-                              onClick={() => {
-                                onDomainChange(d);
-                                onAddressChange(addr.id);
-                                onFolderChange("inbox");
-                              }}
-                              className="w-full flex items-center gap-2 px-3 py-1 rounded-lg text-[12px] transition-all"
-                              style={{
-                                color: isAddrActive ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                                backgroundColor: isAddrActive ? "var(--mc-accent-bg)" : "transparent",
-                                fontWeight: isAddrActive ? 500 : 400,
-                              }}
-                              onMouseEnter={(e) => {
-                                if (!isAddrActive) {
-                                  e.currentTarget.style.color = "var(--mc-text-secondary)";
-                                  e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                                }
-                              }}
-                              onMouseLeave={(e) => {
-                                if (!isAddrActive) {
-                                  e.currentTarget.style.color = "var(--mc-text-faint)";
-                                  e.currentTarget.style.backgroundColor = "transparent";
-                                }
-                              }}
-                            >
-                              <User className="h-3 w-3" />
-                              <span className="flex-1 text-left truncate">{addr.address}</span>
-                            </button>
-                          );
-                        })}
-                      {d.catch_all_enabled && onCatchAllToggle && (
-                        (() => {
-                          const isCatchActive = isThisDomain && catchAllOnly;
-                          return (
-                            <button
-                              onClick={() => onCatchAllToggle(d)}
-                              className="w-full flex items-center gap-2 px-3 py-1 rounded-lg text-[12px] transition-all"
-                              style={{
-                                color: isCatchActive ? "var(--mc-accent)" : "var(--mc-text-faint)",
-                                backgroundColor: isCatchActive ? "var(--mc-accent-bg)" : "transparent",
-                                fontWeight: isCatchActive ? 500 : 400,
-                              }}
-                              onMouseEnter={(e) => {
-                                if (!isCatchActive) {
-                                  e.currentTarget.style.color = "var(--mc-text-secondary)";
-                                  e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
-                                }
-                              }}
-                              onMouseLeave={(e) => {
-                                if (!isCatchActive) {
-                                  e.currentTarget.style.color = "var(--mc-text-faint)";
-                                  e.currentTarget.style.backgroundColor = "transparent";
-                                }
-                              }}
-                              title="Show only catch-all mail (no matching local-part)"
-                            >
-                              <Shield className="h-3 w-3" />
-                              <span className="flex-1 text-left truncate">Catch-all only</span>
-                            </button>
-                          );
-                        })()
-                      )}
-                    </div>
-                  )}
-                </div>
+                    {/* Addresses */}
+                    {(d.addresses || []).some((a) => a.is_active) && (
+                      <>
+                        <div
+                          className="text-[10px] font-semibold pl-[26px] pt-1.5 pb-0.5"
+                          style={{ color: "var(--mc-text-faint)" }}
+                        >
+                          Addresses
+                        </div>
+                        {d.addresses
+                          .filter((addr) => addr.is_active)
+                          .map((addr) => {
+                            const aRef: FavoriteRef = { kind: "address", domainId: d.id, addressId: addr.id };
+                            return (
+                              <SidebarRow
+                                key={addr.id}
+                                icon={User}
+                                label={addr.address}
+                                active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
+                                depth={1}
+                                onClick={() => {
+                                  onDomainChange(d);
+                                  onAddressChange(addr.id);
+                                  onFolderChange("inbox");
+                                }}
+                                trailing={editing ? <PinButton refItem={aRef} /> : undefined}
+                              />
+                            );
+                          })}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -753,11 +763,11 @@ export function FolderList({
           {/* Add Domain */}
           <button
             onClick={onAddDomain}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[12px] transition-all"
+            className="w-full flex items-center gap-2 h-7 px-2 rounded-md text-[12px] transition-all"
             style={{ color: "var(--mc-text-faint)" }}
             onMouseEnter={(e) => {
               e.currentTarget.style.color = "var(--mc-accent)";
-              e.currentTarget.style.backgroundColor = "var(--mc-accent-bg)";
+              e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.color = "var(--mc-text-faint)";
@@ -769,46 +779,31 @@ export function FolderList({
           </button>
         </div>
 
-        {/* Bottom — Push Notifications */}
-        <div className="mt-2 pt-2 space-y-1" style={{ borderTop: "1px solid var(--mc-border)" }}>
+        {/* Footer icon row */}
+        <div
+          className="mt-1.5 pt-1.5 flex items-center justify-center gap-1"
+          style={{ borderTop: "1px solid var(--mc-border)" }}
+        >
+          <ThemeMenu />
           {pushSupported && (
             <button
               onClick={handleTogglePush}
               disabled={pushLoading}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] transition-all"
-              style={{
-                color: pushEnabled ? "var(--mc-success)" : "var(--mc-text-faint)",
-                backgroundColor: pushEnabled ? "rgba(52, 199, 89, 0.12)" : "transparent",
-              }}
+              className="p-1.5 rounded-md transition-colors"
+              style={{ color: pushEnabled ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+              title={pushEnabled ? "Notifications on — click to disable" : "Enable notifications"}
             >
               {pushLoading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : pushEnabled ? (
-                <Bell className="h-3.5 w-3.5" />
+                <Bell className="h-4 w-4" />
               ) : (
-                <BellOff className="h-3.5 w-3.5" />
-              )}
-              <span className="flex-1 text-left">
-                {pushLoading
-                  ? "Loading..."
-                  : pushEnabled
-                  ? "Notifications ON"
-                  : "Enable Notifications"}
-              </span>
-              {pushEnabled && (
-                <span
-                  className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
-                  style={{
-                    backgroundColor: "rgba(52, 199, 89, 0.12)",
-                    color: "var(--mc-success)",
-                  }}
-                >
-                  LIVE
-                </span>
+                <BellOff className="h-4 w-4" />
               )}
             </button>
           )}
-
           {pushEnabled && (
             <button
               onClick={async () => {
@@ -820,31 +815,29 @@ export function FolderList({
                   } else {
                     alert(`❌ Push test failed: ${data.error || JSON.stringify(data.results)}`);
                   }
-                } catch (e: any) {
-                  alert(`❌ Error: ${e.message}`);
+                } catch (e) {
+                  alert(`❌ Error: ${(e as Error).message}`);
                 }
               }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] transition-all hover:opacity-80"
-              style={{ color: "var(--mc-text-faint)" }}
+              className="p-1.5 rounded-md transition-colors"
+              style={{ color: "var(--mc-text-muted)" }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+              title="Send a test push notification"
             >
-              <span>🧪</span>
-              <span>Test Push</span>
+              <FlaskConical className="h-4 w-4" />
             </button>
           )}
-
           <button
             onClick={handleRefresh}
             disabled={refreshing}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] transition-colors"
-            style={{ color: "var(--mc-text-faint)" }}
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: refreshing ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Refresh domains and counts"
           >
-            <RefreshCw
-              className={`h-3.5 w-3.5 transition-transform duration-500 ${
-                refreshing ? "animate-spin" : ""
-              }`}
-              style={{ color: refreshing ? "var(--mc-accent)" : undefined }}
-            />
-            <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
         </div>
       </div>

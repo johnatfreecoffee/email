@@ -1200,7 +1200,7 @@ export function EmailLayout() {
         style={{
           width: `${folderColWidth}px`,
           borderRight: "1px solid var(--mc-border)",
-          backgroundColor: "var(--mc-bg)",
+          backgroundColor: "var(--mc-sidebar-solid)",
         }}
       >
         <FolderList
