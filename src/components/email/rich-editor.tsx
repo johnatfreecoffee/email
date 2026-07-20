@@ -10,7 +10,9 @@ import { Highlight } from "@tiptap/extension-highlight";
 import { TextAlign } from "@tiptap/extension-text-align";
 import { Link } from "@tiptap/extension-link";
 import { Placeholder } from "@tiptap/extension-placeholder";
+import Image from "@tiptap/extension-image";
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { EditorView } from "@tiptap/pm/view";
 import {
   Bold,
   Italic,
@@ -29,6 +31,59 @@ import {
   Redo2,
   Minus,
 } from "lucide-react";
+
+/** Read image file → data URL and insert into the editor view. */
+function insertImageFile(view: EditorView, file: File): boolean {
+  if (!file.type.startsWith("image/")) return false;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const src = reader.result as string;
+    if (!src || typeof src !== "string") return;
+    const { schema } = view.state;
+    const imageType = schema.nodes.image;
+    if (!imageType) return;
+    const node = imageType.create({ src, alt: file.name || "image" });
+    const tr = view.state.tr.replaceSelectionWith(node).scrollIntoView();
+    view.dispatch(tr);
+  };
+  reader.readAsDataURL(file);
+  return true;
+}
+
+function handleImageClipboard(view: EditorView, event: ClipboardEvent | DragEvent): boolean {
+  const data =
+    "clipboardData" in event && event.clipboardData
+      ? event.clipboardData
+      : "dataTransfer" in event
+        ? event.dataTransfer
+        : null;
+  if (!data) return false;
+
+  // Prefer file items (Cmd+V of a copied image / screenshot)
+  const items = data.items ? Array.from(data.items) : [];
+  for (const item of items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) {
+        event.preventDefault();
+        insertImageFile(view, file);
+        return true;
+      }
+    }
+  }
+
+  // Fallback: files list (some browsers / drag-drop)
+  const files = data.files ? Array.from(data.files) : [];
+  for (const file of files) {
+    if (file.type.startsWith("image/")) {
+      event.preventDefault();
+      insertImageFile(view, file);
+      return true;
+    }
+  }
+
+  return false;
+}
 
 interface RichEditorProps {
   initialContent?: string;
@@ -134,6 +189,13 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
       Highlight.configure({ multicolor: true }),
       TextAlign.configure({ types: ["paragraph"] }),
       Link.configure({ openOnClick: false }),
+      Image.configure({
+        inline: false,
+        allowBase64: true,
+        HTMLAttributes: {
+          class: "compose-inline-image",
+        },
+      }),
       Placeholder.configure({
         placeholder: placeholder || "Write your message...",
       }),
@@ -143,6 +205,11 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
       attributes: {
         class:
           "prose prose-neutral dark:prose-invert max-w-none px-4 py-3 min-h-[200px] focus:outline-none text-[13px] leading-relaxed text-secondary-foreground",
+      },
+      handlePaste: (view, event) => handleImageClipboard(view, event),
+      handleDrop: (view, event) => {
+        if (!event.dataTransfer?.files?.length) return false;
+        return handleImageClipboard(view, event);
       },
     },
     onUpdate: ({ editor }) => {
@@ -361,6 +428,14 @@ export function RichEditor({ initialContent, placeholder, onHtmlChange, onTextCh
           padding-left: 1em;
           margin: 0.5em 0;
           color: #9CA3AF;
+        }
+        .tiptap img.compose-inline-image,
+        .tiptap img {
+          max-width: 100%;
+          height: auto;
+          border-radius: 6px;
+          margin: 0.5em 0;
+          display: block;
         }
       `}</style>
     </div>

@@ -3,7 +3,7 @@
 import React, { useState, useRef } from "react";
 import { X, Send, Loader2, Paperclip, FileText, Image, File, Save } from "lucide-react";
 import type { Editor } from "@tiptap/react";
-import { AddressAutocomplete } from "./address-autocomplete";
+import { AddressAutocomplete, type AddressAutocompleteHandle } from "./address-autocomplete";
 import { RichEditor } from "./rich-editor";
 import type { EmailDomain, EmailMessage } from "./email-layout";
 import { apiFetch } from "@/lib/auth";
@@ -210,6 +210,19 @@ export function ComposeModal({
   const [error, setError] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toRef = useRef<AddressAutocompleteHandle>(null);
+  const ccRef = useRef<AddressAutocompleteHandle>(null);
+  const bccRef = useRef<AddressAutocompleteHandle>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+
+  const focusEditor = () => {
+    const tiptap = document.querySelector(".compose-modal .tiptap") as HTMLElement | null;
+    if (tiptap) {
+      tiptap.focus();
+      return;
+    }
+    editorRef.current?.commands.focus("end");
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -376,7 +389,7 @@ export function ComposeModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-end md:items-center justify-center">
-      <div className="w-full max-w-[640px] bg-card rounded-t-2xl md:rounded-2xl border border-border shadow-2xl flex flex-col max-h-[90vh]">
+      <div className="compose-modal w-full max-w-[640px] bg-card rounded-t-2xl md:rounded-2xl border border-border shadow-2xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 className="text-[15px] font-semibold text-foreground">
@@ -417,14 +430,21 @@ export function ComposeModal({
             <span className="text-[12px] text-muted-foreground w-12 pl-4">To</span>
             <div className="flex-1">
               <AddressAutocomplete
+                ref={toRef}
                 value={to}
                 onChange={setTo}
                 placeholder="recipient@example.com"
                 autoFocus={composeMode === "forward" || composeMode === "new"}
+                onTabNext={() => {
+                  if (showCcBcc) ccRef.current?.focus();
+                  else subjectRef.current?.focus();
+                }}
               />
             </div>
             {!showCcBcc && (
               <button
+                type="button"
+                tabIndex={-1}
                 onClick={() => setShowCcBcc(true)}
                 className="text-[11px] text-muted-foreground hover:text-mc-teal mr-3"
               >
@@ -439,13 +459,27 @@ export function ComposeModal({
               <div className="flex items-center border-b border-border/60">
                 <span className="text-[12px] text-muted-foreground w-12 pl-4">Cc</span>
                 <div className="flex-1">
-                  <AddressAutocomplete value={cc} onChange={setCc} placeholder="Cc recipients" />
+                  <AddressAutocomplete
+                    ref={ccRef}
+                    value={cc}
+                    onChange={setCc}
+                    placeholder="Cc recipients"
+                    onTabNext={() => bccRef.current?.focus()}
+                    onTabPrev={() => toRef.current?.focus()}
+                  />
                 </div>
               </div>
               <div className="flex items-center border-b border-border/60">
                 <span className="text-[12px] text-muted-foreground w-12 pl-4">Bcc</span>
                 <div className="flex-1">
-                  <AddressAutocomplete value={bcc} onChange={setBcc} placeholder="Bcc recipients" />
+                  <AddressAutocomplete
+                    ref={bccRef}
+                    value={bcc}
+                    onChange={setBcc}
+                    placeholder="Bcc recipients"
+                    onTabNext={() => subjectRef.current?.focus()}
+                    onTabPrev={() => ccRef.current?.focus()}
+                  />
                 </div>
               </div>
             </>
@@ -455,6 +489,7 @@ export function ComposeModal({
           <div className="flex items-center border-b border-border/60 px-4 py-2">
             <span className="text-[12px] text-muted-foreground w-12">Subj</span>
             <input
+              ref={subjectRef}
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               placeholder="Subject"
@@ -463,8 +498,12 @@ export function ComposeModal({
                 // Tab from subject → jump straight to editor body (skip toolbar)
                 if (e.key === "Tab" && !e.shiftKey) {
                   e.preventDefault();
-                  const tiptap = document.querySelector(".tiptap") as HTMLElement;
-                  if (tiptap) tiptap.focus();
+                  focusEditor();
+                }
+                if (e.key === "Tab" && e.shiftKey) {
+                  e.preventDefault();
+                  if (showCcBcc) bccRef.current?.focus();
+                  else toRef.current?.focus();
                 }
               }}
             />
