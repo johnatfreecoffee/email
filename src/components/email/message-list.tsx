@@ -3,7 +3,7 @@
 import {
   Search,
   Star,
-  Menu,
+  ChevronLeft,
   Loader2,
   RefreshCw,
   Paperclip,
@@ -659,9 +659,12 @@ export function MessageList({
         <div className="flex items-center gap-2">
           <button
             onClick={onMobileMenuClick}
-            className="md:hidden p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted/40"
+            className="md:hidden flex items-center gap-0.5 -ml-1 pr-1 rounded-lg transition-opacity active:opacity-60"
+            style={{ color: "var(--mc-accent)" }}
+            aria-label="Back to mailboxes"
           >
-            <Menu className="h-4 w-4" />
+            <ChevronLeft className="h-6 w-6 -mr-1" />
+            <span className="text-[15px] mc-touch-exempt">Mailboxes</span>
           </button>
           <div
             className="flex-1 flex items-center gap-1.5 rounded-md px-2 h-7"

@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  ArrowLeft,
+  ChevronLeft,
   Reply,
   ReplyAll,
   Forward,
@@ -37,17 +37,27 @@ interface MessageReaderProps {
   onForward: (msg: EmailMessage) => void;
   onToggleRead: (id: string, isRead: boolean) => void;
   onBack: () => void;
+  /** Label for the mobile back button (the mailbox you came from). */
+  backLabel?: string;
 }
 
-function formatFullDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+// Compact header date — mirrors iOS Mail: bare time today, "Yesterday, …",
+// short month/day this year, full date otherwise. Always one line so it can
+// sit flush-right of a truncating sender name without ever colliding.
+function formatReaderDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgStart = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.floor((todayStart.getTime() - msgStart.getTime()) / 86400000);
+  if (diffDays === 0) return time;
+  if (diffDays === 1) return `Yesterday, ${time}`;
+  if (d.getFullYear() === now.getFullYear()) {
+    return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+  }
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}, ${time}`;
 }
 
 function formatSize(bytes: number): string {
@@ -157,6 +167,7 @@ export function MessageReader({
   onForward,
   onToggleRead,
   onBack,
+  backLabel,
 }: MessageReaderProps) {
   if (!message) {
     return (
@@ -192,6 +203,7 @@ export function MessageReader({
       onForward={onForward}
       onToggleRead={onToggleRead}
       onBack={onBack}
+      backLabel={backLabel}
     />
   );
 }
@@ -210,6 +222,7 @@ function MessageReaderBody({
   onForward,
   onToggleRead,
   onBack,
+  backLabel,
 }: {
   message: EmailMessage;
   toList: string[];
@@ -237,19 +250,14 @@ function MessageReaderBody({
         className="flex items-center gap-0.5 px-3 py-2"
         style={{ borderBottom: "1px solid var(--mc-border)" }}
       >
-        {/* Mobile back button — large touch target */}
+        {/* Mobile back button — iOS Mail style: chevron + mailbox name */}
         <button
           onClick={onBack}
-          className="md:hidden p-2.5 -ml-1 rounded-lg transition-all active:scale-95"
-          style={{ color: "var(--mc-text-muted)" }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
-          }}
+          className="md:hidden flex items-center gap-0.5 pr-2 py-2 -ml-1 rounded-lg transition-all active:opacity-60"
+          style={{ color: "var(--mc-accent)" }}
         >
-          <ArrowLeft className="h-5 w-5" />
+          <ChevronLeft className="h-6 w-6 -mr-1" />
+          <span className="text-[16px] max-w-[9rem] truncate">{backLabel || "Mailboxes"}</span>
         </button>
 
         <div className="flex-1" />
@@ -311,46 +319,74 @@ function MessageReaderBody({
           </div>
 
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[14px] font-semibold" style={{ color: "var(--mc-text)" }}>
-                <CopyableEmail
-                  name={message.from_name || undefined}
-                  email={message.from_address}
-                />
+            {/* Row 1: sender name (truncates) + date (never shrinks) */}
+            <div className="flex items-baseline gap-2">
+              <span
+                className="text-[14px] font-semibold truncate min-w-0 flex-1"
+                style={{ color: "var(--mc-text)" }}
+              >
+                {message.from_name || message.from_address}
               </span>
-              {message.is_catch_all && (
-                <span
-                  className="text-[10px] font-bold px-1.5 py-0.5 rounded"
-                  style={{ backgroundColor: "rgba(255, 149, 0, 0.15)", color: "var(--mc-warning)" }}
-                >
-                  CATCH-ALL
-                </span>
-              )}
-              {message.direction === "outbound" && (
-                <span className="text-[10px] font-bold bg-mc-teal-dim text-mc-teal px-1.5 py-0.5 rounded">
-                  SENT
-                </span>
-              )}
+              <span
+                className="text-[11px] flex-shrink-0 whitespace-nowrap"
+                style={{ color: "var(--mc-text-faint)" }}
+              >
+                {formatReaderDate(message.received_at)}
+              </span>
             </div>
+
+            {(message.is_catch_all || message.direction === "outbound") && (
+              <div className="flex items-center gap-2 mt-1">
+                {message.is_catch_all && (
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded"
+                    style={{ backgroundColor: "rgba(255, 149, 0, 0.15)", color: "var(--mc-warning)" }}
+                  >
+                    CATCH-ALL
+                  </span>
+                )}
+                {message.direction === "outbound" && (
+                  <span className="text-[10px] font-bold bg-mc-teal-dim text-mc-teal px-1.5 py-0.5 rounded">
+                    SENT
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Recipients — collapsed summary with a Details toggle */}
             {!showDetails ? (
-              <div className="text-[12px] mt-1 flex items-center gap-1.5 min-w-0" style={{ color: "var(--mc-text-muted)" }}>
-                <span className="truncate">
+              <button
+                onClick={() => setShowDetails(true)}
+                className="mt-1 flex items-center gap-1.5 min-w-0 max-w-full text-[12px] text-left"
+                style={{ color: "var(--mc-text-muted)" }}
+              >
+                <span className="truncate min-w-0">
                   To: {toList.map((a) => a.replace(/\s*<.*>$/, "")).join(", ")}
                   {ccList ? ` · Cc: ${ccList.length}` : ""}
                 </span>
-                <button
-                  onClick={() => setShowDetails(true)}
-                  className="flex-shrink-0 text-[11px] transition-colors"
-                  style={{ color: "var(--mc-accent)" }}
-                >
+                <span className="flex-shrink-0 text-[11px]" style={{ color: "var(--mc-accent)" }}>
                   Details
-                </button>
-              </div>
+                </span>
+              </button>
             ) : (
               <>
                 <div className="text-[12px] mt-1 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
+                  <span className="flex-shrink-0">From:</span>
+                  <span className="flex-1 min-w-0 break-all">
+                    <CopyableEmail
+                      name={message.from_name || undefined}
+                      email={message.from_address}
+                    />
+                  </span>
+                  <button
+                    onClick={() => setShowDetails(false)}
+                    className="flex-shrink-0 text-[11px] transition-colors"
+                    style={{ color: "var(--mc-accent)" }}
+                  >
+                    Hide
+                  </button>
+                </div>
+                <div className="text-[12px] mt-0.5 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
                   <span className="flex-shrink-0">To:</span>
                   <span className="flex flex-wrap gap-x-1.5 flex-1 min-w-0">
                     {toList.map((addr, i) => (
@@ -360,13 +396,6 @@ function MessageReaderBody({
                       </span>
                     ))}
                   </span>
-                  <button
-                    onClick={() => setShowDetails(false)}
-                    className="flex-shrink-0 text-[11px] transition-colors"
-                    style={{ color: "var(--mc-accent)" }}
-                  >
-                    Hide
-                  </button>
                 </div>
                 {ccList && (
                   <div className="text-[12px] mt-0.5 flex items-start gap-1" style={{ color: "var(--mc-text-muted)" }}>
@@ -384,10 +413,6 @@ function MessageReaderBody({
               </>
             )}
           </div>
-
-          <span className="text-[11px] flex-shrink-0 mt-1" style={{ color: "var(--mc-text-faint)" }}>
-            {formatFullDate(message.received_at)}
-          </span>
         </div>
 
         <h1 className="text-[16px] font-semibold mt-3" style={{ color: "var(--mc-text)" }}>

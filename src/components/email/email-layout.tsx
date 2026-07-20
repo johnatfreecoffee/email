@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type RefObject } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { HelpCircle, X, Bell } from "lucide-react";
 import { FolderList } from "./folder-list";
 import { usePush } from "@/lib/push-notifications";
@@ -13,144 +13,6 @@ import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 
 const API_BASE = "/api/email";
-
-// --- Mobile Bottom Sheet Reader ---
-interface MobileReaderSheetProps {
-  readerRef: RefObject<HTMLDivElement | null>;
-  message: EmailMessage;
-  onClose: () => void;
-  onTrash: (id: string) => void;
-  onArchive: (id: string) => void;
-  onToggleStar: (id: string, starred: boolean) => void;
-  onToggleSpam: (id: string, isSpamNow: boolean) => void;
-  onReply: (msg: EmailMessage) => void;
-  onReplyAll: (msg: EmailMessage) => void;
-  onForward: (msg: EmailMessage) => void;
-  onToggleRead: (id: string, isRead: boolean) => void;
-}
-
-function MobileReaderSheet({
-  readerRef,
-  message,
-  onClose,
-  onTrash,
-  onArchive,
-  onToggleStar,
-  onToggleSpam,
-  onReply,
-  onReplyAll,
-  onForward,
-  onToggleRead,
-}: MobileReaderSheetProps) {
-  const [sheetY, setSheetY] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isClosing, setIsClosing] = useState(false);
-  const startY = useRef(0);
-  const sheetRef = useRef<HTMLDivElement>(null);
-
-  // Swipe down to dismiss
-  const onTouchStart = useCallback((e: React.TouchEvent) => {
-    // Only allow drag from the handle area (top 48px)
-    const rect = sheetRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const touchY = e.touches[0].clientY;
-    if (touchY - rect.top > 48) return; // only drag from handle
-    startY.current = e.touches[0].clientY;
-    setIsDragging(true);
-  }, []);
-
-  const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!isDragging) return;
-    const dy = e.touches[0].clientY - startY.current;
-    if (dy > 0) setSheetY(dy); // only allow downward drag
-  }, [isDragging]);
-
-  const onTouchEnd = useCallback(() => {
-    if (!isDragging) return;
-    setIsDragging(false);
-    if (sheetY > 120) {
-      // Dismiss
-      setIsClosing(true);
-      setTimeout(onClose, 250);
-    } else {
-      setSheetY(0);
-    }
-  }, [isDragging, sheetY, onClose]);
-
-  // Prevent body scroll when sheet is open
-  useEffect(() => {
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = ""; };
-  }, []);
-
-  return (
-    <div className="fixed inset-0 z-50 md:hidden">
-      {/* Backdrop — semi-transparent so list is visible behind */}
-      <div
-        className="absolute inset-0 transition-opacity duration-250"
-        style={{ backgroundColor: "rgba(0,0,0,0.3)", opacity: isClosing ? 0 : 1 }}
-        onClick={onClose}
-      />
-      {/* Sheet */}
-      <div
-        ref={sheetRef}
-        className="absolute left-0 right-0 bottom-0 flex flex-col overflow-hidden"
-        style={{
-          top: "60px",
-          backgroundColor: "var(--mc-bg)",
-          borderTopLeftRadius: "16px",
-          borderTopRightRadius: "16px",
-          boxShadow: "0 -4px 30px rgba(0,0,0,0.4)",
-          transform: isClosing ? "translateY(100%)" : `translateY(${sheetY}px)`,
-          transition: isDragging ? "none" : "transform 0.3s cubic-bezier(0.2, 0, 0, 1)",
-          animation: isClosing ? "none" : "sheetSlideUp 0.3s cubic-bezier(0.2, 0, 0, 1)",
-        }}
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-      >
-        {/* Drag handle + close button */}
-        <div className="flex items-center justify-between px-4 pt-2 pb-1">
-          <div style={{ width: "32px" }} />
-          <div
-            className="w-10 h-1 rounded-full cursor-grab"
-            style={{ backgroundColor: "var(--mc-border)" }}
-          />
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-full transition-colors"
-            style={{ color: "var(--mc-text-faint)" }}
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        {/* Reader content */}
-        <div ref={readerRef} className="flex-1 overflow-y-auto">
-          <MessageReader
-            message={message}
-            onTrash={onTrash}
-            onArchive={onArchive}
-            onToggleStar={onToggleStar}
-            onToggleSpam={onToggleSpam}
-            onReply={onReply}
-            onReplyAll={onReplyAll}
-            onForward={onForward}
-            onToggleRead={onToggleRead}
-            onBack={onClose}
-          />
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes sheetSlideUp {
-          from { transform: translateY(100%); }
-          to { transform: translateY(0); }
-        }
-      `}</style>
-    </div>
-  );
-}
 
 export interface EmailDomain {
   id: string;
@@ -215,6 +77,19 @@ const LIST_W_DEFAULT = 380;
 const LIST_W_MIN = 320;
 const READER_MIN = 400;
 
+// Display names for the mobile reader's "‹ back" button (the mailbox the
+// message was opened from). Falls back to "Mailboxes".
+const FOLDER_LABELS: Record<string, string> = {
+  inbox: "Inbox",
+  sent: "Sent",
+  drafts: "Drafts",
+  spam: "Junk",
+  trash: "Trash",
+  archive: "Archive",
+  starred: "Starred",
+  all: "All Mail",
+};
+
 // Unread counts shape returned by /api/email/unread-counts
 interface UnreadCounts {
   domains: Record<string, number>;
@@ -276,7 +151,10 @@ export function EmailLayout() {
   // that actually drives fetches, debounced 300ms.
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [mobileView, setMobileView] = useState<"folders" | "list" | "reader">("list");
+  // Mobile navigation stack (iOS Mail): mailboxes → list → reader. Each view
+  // slides in from the right over the previous one; back buttons pop it off.
+  const [mobileView, setMobileView] = useState<"folders" | "list" | "reader">("folders");
+  const folderBackLabel = FOLDER_LABELS[activeFolder] || "Mailboxes";
   const [unreadCounts, setUnreadCounts] = useState<UnreadCounts>({ domains: {}, folders: {}, totals: {} });
 
   // Resizable column widths — start with defaults, hydrate from localStorage post-mount to avoid SSR mismatch
@@ -1194,6 +1072,23 @@ export function EmailLayout() {
         @media (min-width: 768px) {
           .mc-email-list-col { width: ${listColWidth}px !important; }
         }
+        /* --- Mobile (< md) iOS Mail navigation stack --- */
+        @media (max-width: 767px) {
+          /* Mailboxes is the full-width root screen */
+          #mc-email-folder-col { width: 100% !important; }
+          /* List + reader are overlays that slide in from the right */
+          .mc-mobile-pane {
+            position: absolute;
+            inset: 0;
+            transition: transform 0.34s cubic-bezier(0.32, 0.72, 0, 1);
+            will-change: transform;
+          }
+          .mc-mobile-pane.mc-pane-off { transform: translateX(100%); }
+        }
+        @media (min-width: 768px) {
+          /* Desktop keeps the flat three-column layout — no transforms */
+          .mc-mobile-pane { position: static; transform: none !important; }
+        }
       `}</style>
       {/* Push notification prompt banner */}
       {showPushBanner && (
@@ -1231,13 +1126,12 @@ export function EmailLayout() {
         </div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
-      {/* Left: Folders + Domains */}
+      <div className="relative flex flex-1 overflow-hidden">
+      {/* Left: Folders + Domains — the mobile root screen (always mounted;
+          the list + reader slide in over it). */}
       <div
         id="mc-email-folder-col"
-        className={`flex-shrink-0 overflow-hidden ${
-          mobileView === "folders" ? "block" : "hidden"
-        } md:block`}
+        className="block flex-shrink-0 overflow-hidden md:block"
         style={{
           width: `${folderColWidth}px`,
           borderRight: "1px solid var(--mc-border)",
@@ -1348,11 +1242,11 @@ export function EmailLayout() {
         />
       </div>
 
-      {/* Center: Message List */}
+      {/* Center: Message List — slides in over the mailboxes on mobile */}
       <div
-        className={`mc-email-list-col w-full flex-shrink-0 overflow-hidden ${
-          mobileView === "list" || mobileView === "reader" ? "block" : "hidden"
-        } md:block`}
+        className={`mc-email-list-col mc-mobile-pane z-20 w-full flex-shrink-0 overflow-hidden md:block ${
+          mobileView === "folders" ? "mc-pane-off" : ""
+        }`}
         style={{
           borderRight: "1px solid var(--mc-border)",
           backgroundColor: "var(--mc-bg-secondary)",
@@ -1392,8 +1286,12 @@ export function EmailLayout() {
               const draft = drafts.find((d: any) => d.id === m.id);
               if (draft) openDraft(draft);
             } else {
-              fetchFullMessage(m.id);
+              // Optimistically show the list row's data so the reader header
+              // is populated the instant the pane slides in; fetchFullMessage
+              // then swaps in the full body and handles mark-as-read.
+              setSelectedMessage(m);
               setMobileView("reader");
+              fetchFullMessage(m.id);
             }
           }}
           onToggleStar={handleToggleStar}
@@ -1483,11 +1381,13 @@ export function EmailLayout() {
         />
       </div>
 
-      {/* Right: Message Reader — desktop inline, mobile bottom sheet */}
-      {/* Desktop reader */}
+      {/* Right: Message Reader — desktop inline column; on mobile a full-screen
+          pane that slides in from the right over the list (iOS Mail push). */}
       <div
         ref={readerRef}
-        className="flex-1 min-w-0 overflow-y-auto hidden md:block"
+        className={`mc-mobile-pane z-30 flex-1 min-w-0 overflow-y-auto md:block ${
+          mobileView === "reader" ? "" : "mc-pane-off"
+        }`}
         style={{ backgroundColor: "var(--mc-bg)" }}
       >
         <MessageReader
@@ -1500,26 +1400,18 @@ export function EmailLayout() {
           onReplyAll={(msg) => openCompose("reply-all", msg)}
           onForward={(msg) => openCompose("forward", msg)}
           onToggleRead={handleToggleRead}
-          onBack={() => { setSelectedMessage(null); }}
+          backLabel={folderBackLabel}
+          onBack={() => {
+            // Mobile: pop back to the list, keeping the message loaded so the
+            // pane slides out smoothly. Desktop: just clear the selection.
+            if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+              setMobileView("list");
+            } else {
+              setSelectedMessage(null);
+            }
+          }}
         />
       </div>
-
-      {/* Mobile bottom sheet reader */}
-      {mobileView === "reader" && selectedMessage && (
-        <MobileReaderSheet
-          readerRef={readerRef}
-          message={selectedMessage}
-          onClose={() => { setMobileView("list"); setSelectedMessage(null); }}
-          onTrash={handleTrash}
-          onArchive={handleArchive}
-          onToggleStar={handleToggleStar}
-          onToggleSpam={handleToggleSpam}
-          onReply={(msg) => openCompose("reply", msg)}
-          onReplyAll={(msg) => openCompose("reply-all", msg)}
-          onForward={(msg) => openCompose("forward", msg)}
-          onToggleRead={handleToggleRead}
-        />
-      )}
 
       {/* Compose Modal */}
       {showCompose && (

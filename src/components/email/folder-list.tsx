@@ -9,7 +9,6 @@ import {
   Archive,
   Plus,
   Pencil,
-  X,
   RefreshCw,
   Settings,
   Bell,
@@ -474,37 +473,26 @@ export function FolderList({
   return (
     <>
       <div className="flex flex-col h-full p-2.5">
-        {/* Mobile top bar — iOS Mail style: title + collapse-all + close.
-            Without this, the hamburger-opened sidebar can only be left by
-            selecting a mailbox. */}
+        {/* Mobile top bar — iOS Mail style: the mailboxes root has a large
+            title + a collapse/expand-all control (no close: it's the root of
+            the navigation stack, reached via the list's "‹ Mailboxes" back). */}
         {onClose && (
           <div className="flex md:hidden items-center justify-between mb-2 -mx-0.5">
-            <span className="text-[17px] font-semibold px-1" style={{ color: "var(--mc-text)" }}>
+            <span className="text-[22px] font-bold px-1" style={{ color: "var(--mc-text)" }}>
               Mailboxes
             </span>
-            <div className="flex items-center gap-0.5">
-              <button
-                onClick={anythingExpanded ? collapseAll : expandAll}
-                className="p-2 rounded-md transition-colors"
-                style={{ color: "var(--mc-text-muted)" }}
-                title={anythingExpanded ? "Collapse all" : "Expand all"}
-              >
-                {anythingExpanded ? (
-                  <ChevronsDownUp className="h-4 w-4" />
-                ) : (
-                  <ChevronsUpDown className="h-4 w-4" />
-                )}
-              </button>
-              <button
-                onClick={onClose}
-                className="p-2 rounded-md transition-colors"
-                style={{ color: "var(--mc-text-muted)" }}
-                title="Close"
-                aria-label="Close mailboxes"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+            <button
+              onClick={anythingExpanded ? collapseAll : expandAll}
+              className="p-2 rounded-md transition-colors"
+              style={{ color: "var(--mc-accent)" }}
+              title={anythingExpanded ? "Collapse all" : "Expand all"}
+            >
+              {anythingExpanded ? (
+                <ChevronsDownUp className="h-4 w-4" />
+              ) : (
+                <ChevronsUpDown className="h-4 w-4" />
+              )}
+            </button>
           </div>
         )}
 
