@@ -21,12 +21,13 @@ import {
   EyeOff,
   Shield,
 } from "lucide-react";
-import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useState, useRef, useCallback, useEffect, memo, useMemo } from "react";
 import type { EmailMessage, EmailDomain } from "./email-layout";
 import { MessageListVirtual } from "./message-list-virtual";
 import { MessageTable } from "./message-table";
 import { formatDate, getDateGroup } from "./format";
 import { useSettings } from "@/lib/settings";
+import { collapseThreads } from "@/lib/email-threads";
 
 // Hook: matches md: breakpoint (768px)
 function useIsDesktop(): boolean {
@@ -429,6 +430,15 @@ const MessageRow = memo(function MessageRow({
                     SENT
                   </span>
                 )}
+                {(msg.thread_count ?? 0) > 1 && (
+                  <span
+                    className="text-[10px] font-semibold px-1 py-0.5 rounded flex-shrink-0 tabular-nums text-muted-foreground"
+                    style={{ border: "1px solid var(--mc-border-subtle)" }}
+                    title={`${msg.thread_count} messages`}
+                  >
+                    {msg.thread_count}
+                  </span>
+                )}
                 <p
                   className={`text-[12px] truncate ${
                     isUnread ? "font-medium text-secondary-foreground" : "text-muted-foreground"
@@ -594,7 +604,22 @@ export function MessageList({
   }, [onRefresh]);
 
   // All quick filters (incl. attachments) are server-side now.
-  const filtered = messages;
+  // Per-domain threading override → global viewing.threadConversations (default on)
+  const threadingOn = useMemo(() => {
+    const globalOn = settings.viewing.threadConversations !== false;
+    const id = domain?.id;
+    if (id && settings.viewing.threadDomainOverrides && id in settings.viewing.threadDomainOverrides) {
+      return !!settings.viewing.threadDomainOverrides[id];
+    }
+    return globalOn;
+  }, [settings.viewing.threadConversations, settings.viewing.threadDomainOverrides, domain?.id]);
+
+  const threadCollapse = useMemo(
+    () => (threadingOn ? collapseThreads(messages) : null),
+    [threadingOn, messages]
+  );
+
+  const filtered = threadCollapse ? threadCollapse.display : messages;
 
   const unreadInView = messages.filter((m) => !m.is_read).length;
 

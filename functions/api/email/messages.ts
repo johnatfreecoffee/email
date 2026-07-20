@@ -155,7 +155,7 @@ export const onRequest = async (context: CFContext) => {
     // Stable sort: id.desc tiebreak (bulk-imported rows share timestamps).
     let path = `/email_messages?order=received_at.desc,id.desc&limit=${limit}`;
     if (!cursorParam) path += `&offset=${offset}`;
-    path += `&select=id,domain_id,address_id,direction,from_address,from_name,to_addresses,subject,is_read,is_starred,is_archived,is_trash,is_draft,is_catch_all,is_spam,spam_score,folder,received_at,body_text`;
+    path += `&select=id,domain_id,address_id,direction,from_address,from_name,to_addresses,subject,is_read,is_starred,is_archived,is_trash,is_draft,is_catch_all,is_spam,spam_score,folder,received_at,body_text,thread_id,in_reply_to,resend_email_id`;
     // !inner embed doubles as a "has at least one attachment" filter.
     if (hasAttachments) path += `,attachments:email_attachments!inner(id,filename,content_type,size_bytes)`;
 

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { EmailDomain, EmailAddress } from "./email-layout";
 import { apiFetch } from "@/lib/auth";
+import { useSettings } from "@/lib/settings";
 import { SettingsSection, SettingsRow, SegmentedControl, MCSwitch } from "./settings/controls";
 
 type Segment = "info" | "addresses" | "catchall" | "danger";
@@ -44,6 +45,11 @@ const inputStyle: React.CSSProperties = {
 
 export function DomainAccountDetail({ domain, onRefresh, onDeleted, initialSegment = "info" }: DomainAccountDetailProps) {
   const [segment, setSegment] = useState<Segment>(initialSegment);
+  const { settings, updateSetting } = useSettings();
+  const domainThreadOn =
+    domain.id in (settings.viewing.threadDomainOverrides || {})
+      ? !!settings.viewing.threadDomainOverrides[domain.id]
+      : settings.viewing.threadConversations !== false;
 
   // Addresses
   const [localAddresses, setLocalAddresses] = useState<EmailAddress[]>(domain.addresses || []);
@@ -250,6 +256,23 @@ export function DomainAccountDetail({ domain, onRefresh, onDeleted, initialSegme
                 <span className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>
                   {domain.created_at ? new Date(domain.created_at).toLocaleDateString() : "—"}
                 </span>
+              }
+            />
+            <SettingsRow
+              label="Organize by conversation"
+              description="Group replies into threads for this account (like Apple Mail)"
+              control={
+                <MCSwitch
+                  checked={domainThreadOn}
+                  onCheckedChange={(next) => {
+                    updateSetting("viewing", {
+                      threadDomainOverrides: {
+                        ...(settings.viewing.threadDomainOverrides || {}),
+                        [domain.id]: next,
+                      },
+                    });
+                  }}
+                />
               }
             />
             <SettingsRow

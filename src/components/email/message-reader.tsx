@@ -28,6 +28,8 @@ const revealedRemote = new Set<string>();
 
 interface MessageReaderProps {
   message: EmailMessage | null;
+  /** Other messages in the same conversation (oldest → newest preferred). */
+  threadMessages?: EmailMessage[];
   onTrash: (id: string) => void;
   onArchive: (id: string) => void;
   onToggleStar: (id: string, starred: boolean) => void;
@@ -37,6 +39,8 @@ interface MessageReaderProps {
   onForward: (msg: EmailMessage) => void;
   onToggleRead: (id: string, isRead: boolean) => void;
   onBack: () => void;
+  /** Jump to another message in the thread */
+  onSelectThreadMessage?: (msg: EmailMessage) => void;
   /** Label for the mobile back button (the mailbox you came from). */
   backLabel?: string;
 }
@@ -158,6 +162,7 @@ function ToolbarButton({
 
 export function MessageReader({
   message,
+  threadMessages,
   onTrash,
   onArchive,
   onToggleStar,
@@ -167,6 +172,7 @@ export function MessageReader({
   onForward,
   onToggleRead,
   onBack,
+  onSelectThreadMessage,
   backLabel,
 }: MessageReaderProps) {
   if (!message) {
@@ -186,11 +192,15 @@ export function MessageReader({
   const toList = Array.isArray(message.to_addresses) ? message.to_addresses : [String(message.to_addresses)];
   const ccList = message.cc_addresses && message.cc_addresses.length > 0 ? message.cc_addresses : null;
   const hasMultipleRecipients = toList.length > 1 || (ccList && ccList.length > 0);
+  const thread = (threadMessages && threadMessages.length > 1
+    ? [...threadMessages].sort((a, b) => +new Date(a.received_at) - +new Date(b.received_at))
+    : null);
 
   return (
     <MessageReaderBody
       key={message.id}
       message={message}
+      thread={thread}
       toList={toList}
       ccList={ccList}
       hasMultipleRecipients={!!hasMultipleRecipients}
@@ -203,6 +213,7 @@ export function MessageReader({
       onForward={onForward}
       onToggleRead={onToggleRead}
       onBack={onBack}
+      onSelectThreadMessage={onSelectThreadMessage}
       backLabel={backLabel}
     />
   );
@@ -210,6 +221,7 @@ export function MessageReader({
 
 function MessageReaderBody({
   message,
+  thread,
   toList,
   ccList,
   hasMultipleRecipients,
@@ -222,15 +234,18 @@ function MessageReaderBody({
   onForward,
   onToggleRead,
   onBack,
+  onSelectThreadMessage,
   backLabel,
 }: {
   message: EmailMessage;
+  thread: EmailMessage[] | null;
   toList: string[];
   ccList: string[] | null;
   hasMultipleRecipients: boolean;
-} & Omit<MessageReaderProps, "message">) {
+} & Omit<MessageReaderProps, "message" | "threadMessages">) {
   // Mail-style collapsed recipient line with a Details toggle
   const [showDetails, setShowDetails] = useState(false);
+  const [threadOpen, setThreadOpen] = useState(true);
 
   // Remote-content blocking (privacy setting). Reveal is per message id,
   // session-only — navigate away and back keeps it revealed; reload re-blocks.
@@ -306,6 +321,53 @@ function MessageReaderBody({
           title={message.is_read ? "Mark as unread (u)" : "Mark as read (u)"}
         />
       </div>
+
+      {/* Conversation thread (when multiple messages share a thread) */}
+      {thread && thread.length > 1 && (
+        <div style={{ borderBottom: "1px solid var(--mc-border)" }}>
+          <button
+            type="button"
+            onClick={() => setThreadOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-2 text-[12px] font-medium"
+            style={{ color: "var(--mc-text-muted)" }}
+          >
+            <span>
+              {thread.length} messages in conversation
+            </span>
+            <span style={{ color: "var(--mc-accent)" }}>{threadOpen ? "Hide" : "Show"}</span>
+          </button>
+          {threadOpen && (
+            <div className="px-3 pb-2 max-h-40 overflow-y-auto space-y-0.5">
+              {thread.map((m) => {
+                const active = m.id === message.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onSelectThreadMessage?.(m)}
+                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[12px] transition-colors"
+                    style={{
+                      backgroundColor: active ? "var(--mc-accent-bg)" : "transparent",
+                      color: active ? "var(--mc-accent)" : "var(--mc-text-secondary)",
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium truncate flex-1">
+                        {m.from_name || m.from_address}
+                        {m.direction === "outbound" ? " (you)" : ""}
+                      </span>
+                      <span className="text-[10px] flex-shrink-0 tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
+                        {formatReaderDate(m.received_at)}
+                      </span>
+                    </div>
+                    <div className="truncate opacity-80">{m.subject || "(no subject)"}</div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Message header */}
       <div className="px-6 py-4" style={{ borderBottom: "1px solid var(--mc-border)" }}>

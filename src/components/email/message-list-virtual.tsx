@@ -441,6 +441,19 @@ export function MessageListVirtual({
                           SENT
                         </span>
                       )}
+                      {(msg.thread_count ?? 0) > 1 && (
+                        <span
+                          className="text-[10px] font-semibold px-1 py-px rounded flex-shrink-0 tabular-nums"
+                          style={{
+                            backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "var(--mc-bg-elevated)",
+                            color: isActive ? "#fff" : "var(--mc-text-muted)",
+                            border: isActive ? "none" : "1px solid var(--mc-border-subtle)",
+                          }}
+                          title={`${msg.thread_count} messages in conversation`}
+                        >
+                          {msg.thread_count}
+                        </span>
+                      )}
                       <span
                         className="flex-1 min-w-0 truncate text-[13px]"
                         style={{ color: secondary, fontWeight: isUnread ? 500 : 400 }}

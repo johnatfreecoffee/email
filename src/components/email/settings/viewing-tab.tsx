@@ -54,6 +54,16 @@ export function ViewingTab() {
 
       <SettingsSection title="Reading">
         <SettingsRow
+          label="Organize by conversation"
+          description="Group replies into threads (like Apple Mail). Default on."
+          control={
+            <MCSwitch
+              checked={v.threadConversations !== false}
+              onCheckedChange={(next) => updateSetting("viewing", { threadConversations: next })}
+            />
+          }
+        />
+        <SettingsRow
           label="Mark messages as read"
           description="When a message is opened or focused"
           control={

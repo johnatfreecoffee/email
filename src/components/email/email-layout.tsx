@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { HelpCircle, X, Bell } from "lucide-react";
 import { FolderList } from "./folder-list";
 import { usePush } from "@/lib/push-notifications";
@@ -12,6 +12,7 @@ import { SettingsModal } from "./settings/settings-modal";
 import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { playNotificationSound } from "@/lib/notification-sound";
+import { collapseThreads, threadKey } from "@/lib/email-threads";
 
 const API_BASE = "/api/email";
 
@@ -59,6 +60,12 @@ export interface EmailMessage {
   spam_score?: number | null;
   folder: string;
   received_at: string;
+  thread_id?: string | null;
+  in_reply_to?: string | null;
+  /** Client-only: conversation size when threading is on */
+  thread_count?: number;
+  /** Client-only: collapse key */
+  thread_key?: string;
   attachments?: Array<{
     id: string;
     filename: string;
@@ -144,6 +151,22 @@ export function EmailLayout() {
   const markReadDelay = settings.viewing.markReadDelaySeconds;
   const [messages, setMessages] = useState<EmailMessage[]>([]);
   const [selectedMessage, setSelectedMessage] = useState<EmailMessage | null>(null);
+
+  const threadingOn = useMemo(() => {
+    const globalOn = settings.viewing.threadConversations !== false;
+    const id = selectedDomain?.id;
+    if (id && settings.viewing.threadDomainOverrides && id in settings.viewing.threadDomainOverrides) {
+      return !!settings.viewing.threadDomainOverrides[id];
+    }
+    return globalOn;
+  }, [settings.viewing.threadConversations, settings.viewing.threadDomainOverrides, selectedDomain?.id]);
+
+  const selectedThreadMessages = useMemo(() => {
+    if (!selectedMessage || !threadingOn) return undefined;
+    const collapsed = collapseThreads(messages);
+    const key = selectedMessage.thread_key || threadKey(selectedMessage);
+    return collapsed.members[key] || [selectedMessage];
+  }, [selectedMessage, messages, threadingOn]);
   const [activeFolder, setActiveFolder] = useState("inbox");
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
@@ -1408,6 +1431,8 @@ export function EmailLayout() {
       >
         <MessageReader
           message={selectedMessage}
+          threadMessages={selectedThreadMessages}
+          onSelectThreadMessage={(msg) => setSelectedMessage(msg)}
           onTrash={handleTrash}
           onArchive={handleArchive}
           onToggleStar={handleToggleStar}

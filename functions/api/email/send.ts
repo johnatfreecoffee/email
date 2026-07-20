@@ -1,4 +1,5 @@
 import { Env, jsonResponse, errorResponse, optionsResponse, supabaseQuery, resendAPI, checkAuth } from "./_shared";
+import { resolveThreadId } from "./_thread";
 
 interface CFContext {
   request: Request;
@@ -95,6 +96,20 @@ export const onRequest = async (context: CFContext) => {
     }
   }
 
+  // Conversation thread
+  let threadId: string | null = null;
+  try {
+    threadId = await resolveThreadId(env, {
+      domainId: resolvedDomainId,
+      subject: body.subject,
+      inReplyTo: body.in_reply_to || null,
+      headers: null,
+    });
+  } catch (e) {
+    console.error("thread resolve failed (non-fatal):", e);
+    threadId = crypto.randomUUID();
+  }
+
   // Store outbound message in DB
   const msgRes = await supabaseQuery(env, "/email_messages", {
     method: "POST",
@@ -112,6 +127,7 @@ export const onRequest = async (context: CFContext) => {
       body_text: body.text || null,
       body_html: body.html || null,
       in_reply_to: body.in_reply_to || null,
+      thread_id: threadId,
       is_read: true,
       folder: "sent",
       received_at: new Date().toISOString(),

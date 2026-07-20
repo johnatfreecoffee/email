@@ -3,6 +3,7 @@ import { broadcastPush } from "./_web-push";
 import { classifySpam, SPAM_FOLDER } from "./_spam";
 import { readSetting, SETTINGS_DEFAULTS } from "./_settings";
 import { fetchActiveRules, applyRuleActions, type DeliveryState } from "./_rules";
+import { resolveThreadId } from "./_thread";
 
 interface CFContext {
   request: Request;
@@ -243,6 +244,18 @@ async function handleEmailSent(
     addressId = addrRes.data[0].id;
   }
 
+  let threadId: string | null = null;
+  try {
+    threadId = await resolveThreadId(env, {
+      domainId: domain.id,
+      subject,
+      inReplyTo: getHeader(headers, "in-reply-to"),
+      headers,
+    });
+  } catch {
+    threadId = crypto.randomUUID();
+  }
+
   await supabaseQuery(env, "/email_messages", {
     method: "POST",
     body: {
@@ -259,6 +272,8 @@ async function handleEmailSent(
       body_text: bodyText,
       body_html: bodyHtml,
       headers,
+      in_reply_to: getHeader(headers, "in-reply-to"),
+      thread_id: threadId,
       is_read: true,
       folder: "sent",
       received_at: createdAt,
@@ -438,6 +453,20 @@ export const onRequest = async (context: CFContext) => {
     console.error("Rules pass threw (non-fatal):", e);
   }
 
+  // Conversation thread (Apple Mail–style grouping)
+  let threadId: string | null = null;
+  try {
+    threadId = await resolveThreadId(env, {
+      domainId: matchedDomain.id,
+      subject: finalSubject,
+      inReplyTo: getHeader(headers, "in-reply-to"),
+      headers,
+    });
+  } catch (e) {
+    console.error("thread resolve failed (non-fatal):", e);
+    threadId = crypto.randomUUID();
+  }
+
   // Insert message
   const msgRes = await supabaseQuery(env, "/email_messages", {
     method: "POST",
@@ -455,6 +484,8 @@ export const onRequest = async (context: CFContext) => {
       body_text: bodyText,
       body_html: bodyHtml,
       headers: headers,
+      in_reply_to: getHeader(headers, "in-reply-to"),
+      thread_id: threadId,
       is_catch_all: isCatchAll,
       folder: delivery.folder,
       is_read: delivery.is_read,

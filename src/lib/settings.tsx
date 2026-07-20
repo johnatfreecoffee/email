@@ -43,6 +43,10 @@ export interface ViewingSettings {
   /** null = never auto-mark read; 0 = immediately; else seconds */
   markReadDelaySeconds: number | null;
   previewLines: 1 | 2;
+  /** Group messages into conversations (Apple Mail style). Default on. */
+  threadConversations: boolean;
+  /** Per-domain overrides for threading. Missing key = use threadConversations. */
+  threadDomainOverrides: Record<string, boolean>;
 }
 export interface ComposingSettings {
   defaultAddressId: string | null;
@@ -81,7 +85,14 @@ export interface EmailSettings {
 export const SETTINGS_DEFAULTS: EmailSettings = {
   sidebar: { collapsedDomains: [], favoritesVisible: true },
   favorites: { v: 2, items: [] },
-  viewing: { desktopView: "stacked", showCatchAllInInbox: false, markReadDelaySeconds: 1.5, previewLines: 2 },
+  viewing: {
+    desktopView: "stacked",
+    showCatchAllInInbox: false,
+    markReadDelaySeconds: 1.5,
+    previewLines: 2,
+    threadConversations: true,
+    threadDomainOverrides: {},
+  },
   composing: { defaultAddressId: null, signaturePlacement: "above" },
   junk: { llmAssist: true, threshold: 0.7 },
   privacy: { blockRemoteContent: false },
@@ -120,6 +131,13 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
       return { ...(r as object), v: 2, items } as EmailSettings[K];
     }
     case "viewing": {
+      const overridesRaw = r.threadDomainOverrides;
+      const overrides: Record<string, boolean> = {};
+      if (overridesRaw && typeof overridesRaw === "object" && !Array.isArray(overridesRaw)) {
+        for (const [k, v] of Object.entries(overridesRaw as Record<string, unknown>)) {
+          if (typeof v === "boolean") overrides[k] = v;
+        }
+      }
       const out: ViewingSettings = {
         ...(r as object),
         desktopView: r.desktopView === "columns" ? "columns" : "stacked",
@@ -127,6 +145,9 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
         markReadDelaySeconds:
           r.markReadDelaySeconds === null ? null : num(r.markReadDelaySeconds, 1.5),
         previewLines: r.previewLines === 1 ? 1 : 2,
+        // Default ON (Apple Mail). Only false when explicitly set.
+        threadConversations: r.threadConversations === false ? false : true,
+        threadDomainOverrides: overrides,
       };
       return out as EmailSettings[K];
     }
