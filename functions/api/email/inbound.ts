@@ -562,12 +562,22 @@ export const onRequest = async (context: CFContext) => {
   // mail that lands in the inbox, unread and unfiled, pings the phone —
   // junk, and rule-filed/-read/-trashed deliveries stay silent (a rule that
   // only flags still notifies).
-  const shouldNotify =
+  let shouldNotify =
     delivery.folder === "inbox" &&
     !delivery.is_read &&
     !delivery.is_spam &&
     !delivery.is_trash &&
     !delivery.is_archived;
+  // Optional: users can silence push for catch-all mail (still delivered and
+  // counted, just no ping). Only query settings when it could matter.
+  if (shouldNotify && isCatchAll) {
+    const notif = await readSetting<{ pushCatchAll: boolean }>(
+      env,
+      "notifications",
+      SETTINGS_DEFAULTS.notifications
+    );
+    if (notif.pushCatchAll === false) shouldNotify = false;
+  }
   if (!shouldNotify) {
     return jsonResponse({ received: true, message_id: message.id, spam: delivery.is_spam }, 200);
   }

@@ -13,6 +13,7 @@ const KNOWN_KEYS = [
   "junk",
   "privacy",
   "signatures",
+  "notifications",
 ] as const;
 
 // Signatures HTML is the big one; everything else is tiny.

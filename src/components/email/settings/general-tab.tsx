@@ -3,10 +3,14 @@
 import { useState } from "react";
 import { usePush } from "@/lib/push-notifications";
 import { apiFetch } from "@/lib/auth";
-import { SettingsSection, SettingsRow, MCSwitch } from "./controls";
+import { useSettings } from "@/lib/settings";
+import { NOTIFICATION_SOUNDS, playNotificationSound } from "@/lib/notification-sound";
+import { SettingsSection, SettingsRow, MCSwitch, SelectRow } from "./controls";
 
 export function GeneralTab() {
   const push = usePush();
+  const { settings, updateSetting } = useSettings();
+  const notif = settings.notifications;
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [bannerReset, setBannerReset] = useState(false);
@@ -27,7 +31,7 @@ export function GeneralTab() {
   return (
     <div>
       <SettingsSection
-        title="Notifications"
+        title="Push notifications"
         footnote="Push alerts arrive even when the app is closed, on every device where notifications are enabled."
       >
         <SettingsRow
@@ -35,6 +39,16 @@ export function GeneralTab() {
           description={push.supported ? undefined : "Not supported in this browser"}
           control={
             <MCSwitch checked={push.enabled} onCheckedChange={() => push.toggle()} disabled={!push.supported || push.loading} />
+          }
+        />
+        <SettingsRow
+          label="Push for catch-all mail"
+          description="When off, mail sent to a catch-all address won't push. Applies to all your devices."
+          control={
+            <MCSwitch
+              checked={notif.pushCatchAll}
+              onCheckedChange={(next) => updateSetting("notifications", { pushCatchAll: next })}
+            />
           }
         />
         <SettingsRow
@@ -67,6 +81,49 @@ export function GeneralTab() {
             >
               {bannerReset ? "Done" : "Reset"}
             </button>
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Sound"
+        footnote="Plays a short alert tone when new mail arrives while the app is open — no push required."
+      >
+        <SettingsRow
+          label="Play sound for new mail"
+          control={
+            <MCSwitch
+              checked={notif.soundOnNewEmail}
+              onCheckedChange={(next) => {
+                // Toggling on doubles as the gesture that unlocks audio.
+                if (next) playNotificationSound(notif.sound);
+                updateSetting("notifications", { soundOnNewEmail: next });
+              }}
+            />
+          }
+        />
+        <SettingsRow
+          label="Alert sound"
+          last
+          control={
+            <div className="flex items-center gap-1.5">
+              <SelectRow
+                options={NOTIFICATION_SOUNDS}
+                value={notif.sound}
+                onChange={(next) => {
+                  updateSetting("notifications", { sound: next });
+                  playNotificationSound(next);
+                }}
+              />
+              <button
+                onClick={() => playNotificationSound(notif.sound)}
+                className="px-2.5 py-1 rounded-md text-[12px] font-medium"
+                style={{ backgroundColor: "var(--mc-bg-elevated)", color: "var(--mc-text)", border: "1px solid var(--mc-border)" }}
+                title="Preview sound"
+              >
+                Play
+              </button>
+            </div>
           }
         />
       </SettingsSection>

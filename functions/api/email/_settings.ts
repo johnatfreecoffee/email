@@ -8,6 +8,8 @@ import { Env, supabaseQuery } from "./_shared";
 export const SETTINGS_DEFAULTS = {
   junk: { llmAssist: true, threshold: 0.7 },
   privacy: { blockRemoteContent: false },
+  // Only server-relevant fields need mirroring here; the client owns the rest.
+  notifications: { pushCatchAll: true },
 } as const;
 
 export async function readSetting<T>(env: Env, key: string, fallback: T): Promise<T> {

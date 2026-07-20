@@ -11,6 +11,7 @@ import { ComposeModal } from "./compose-modal";
 import { SettingsModal } from "./settings/settings-modal";
 import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
+import { playNotificationSound } from "@/lib/notification-sound";
 
 const API_BASE = "/api/email";
 
@@ -373,6 +374,16 @@ export function EmailLayout() {
             ...pendingNewRef.current.map((m) => m.id),
           ]);
           const fresh = rows.filter((m) => !known.has(m.id));
+          // New-mail chime — only for genuinely new inbound, non-spam mail
+          // (never our own sent copies or junk). Fires whether the arrivals
+          // land in place or buffer behind the "N new" chip.
+          if (
+            fresh.length > 0 &&
+            notifSoundRef.current.soundOnNewEmail &&
+            fresh.some((m) => m.direction === "inbound" && !m.is_spam)
+          ) {
+            playNotificationSound(notifSoundRef.current.sound);
+          }
           const byId = new Map(rows.map((m) => [m.id, m]));
           setMessages((prev) => {
             let changed = false;
@@ -530,6 +541,11 @@ export function EmailLayout() {
   const openReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markReadDelayRef = useRef(markReadDelay);
   useEffect(() => { markReadDelayRef.current = markReadDelay; }, [markReadDelay]);
+
+  // New-mail alert sound (in-app; independent of push). Held in a ref so the
+  // poll callback reads the latest setting without being torn down/rebuilt.
+  const notifSoundRef = useRef(settings.notifications);
+  useEffect(() => { notifSoundRef.current = settings.notifications; }, [settings.notifications]);
 
   const fetchFullMessage = useCallback(async (id: string) => {
     try {

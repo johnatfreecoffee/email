@@ -11,6 +11,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { apiFetch, useAuth } from "@/lib/auth";
 import { type FavoriteRef, isValidRef, loadFavorites } from "@/components/email/favorites";
+import { isValidNotificationSound, type NotificationSoundName } from "@/lib/notification-sound";
 
 const API = "/api/email/settings";
 const CACHE_KEY = "email.settings.cache";
@@ -54,6 +55,14 @@ export interface JunkSettings {
 export interface PrivacySettings {
   blockRemoteContent: boolean;
 }
+export interface NotificationsSettings {
+  /** Play an in-app alert tone when new mail arrives while the app is open. */
+  soundOnNewEmail: boolean;
+  /** Which tone to play. */
+  sound: NotificationSoundName;
+  /** When false, catch-all mail does not trigger a push notification. */
+  pushCatchAll: boolean;
+}
 export interface SignaturesSettings {
   byAddressId: Record<string, { html: string; enabled: boolean }>;
 }
@@ -66,6 +75,7 @@ export interface EmailSettings {
   junk: JunkSettings;
   privacy: PrivacySettings;
   signatures: SignaturesSettings;
+  notifications: NotificationsSettings;
 }
 
 export const SETTINGS_DEFAULTS: EmailSettings = {
@@ -76,6 +86,7 @@ export const SETTINGS_DEFAULTS: EmailSettings = {
   junk: { llmAssist: true, threshold: 0.7 },
   privacy: { blockRemoteContent: false },
   signatures: { byAddressId: {} },
+  notifications: { soundOnNewEmail: true, sound: "chime", pushCatchAll: true },
 };
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_DEFAULTS) as Array<keyof EmailSettings>;
@@ -139,6 +150,15 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
       const out: PrivacySettings = {
         ...(r as object),
         blockRemoteContent: bool(r.blockRemoteContent, false),
+      };
+      return out as EmailSettings[K];
+    }
+    case "notifications": {
+      const out: NotificationsSettings = {
+        ...(r as object),
+        soundOnNewEmail: bool(r.soundOnNewEmail, true),
+        sound: isValidNotificationSound(r.sound) ? r.sound : "chime",
+        pushCatchAll: bool(r.pushCatchAll, true),
       };
       return out as EmailSettings[K];
     }
