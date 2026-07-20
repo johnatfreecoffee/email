@@ -32,6 +32,9 @@ export type SettingsTab =
 export interface SidebarSettings {
   collapsedDomains: string[];
   favoritesVisible: boolean;
+  /** Domain ids whose "Addresses" sub-list is expanded. Empty = all collapsed
+   *  (the default — the address list is hidden until the user opens it). */
+  expandedAddresses: string[];
 }
 export interface FavoritesSettings {
   v: 2;
@@ -83,7 +86,7 @@ export interface EmailSettings {
 }
 
 export const SETTINGS_DEFAULTS: EmailSettings = {
-  sidebar: { collapsedDomains: [], favoritesVisible: true },
+  sidebar: { collapsedDomains: [], favoritesVisible: true, expandedAddresses: [] },
   favorites: { v: 2, items: [] },
   viewing: {
     desktopView: "stacked",
@@ -123,6 +126,9 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
           ? r.collapsedDomains.filter((x): x is string => typeof x === "string")
           : [],
         favoritesVisible: bool(r.favoritesVisible, true),
+        expandedAddresses: Array.isArray(r.expandedAddresses)
+          ? r.expandedAddresses.filter((x): x is string => typeof x === "string")
+          : [],
       };
       return out as EmailSettings[K];
     }
@@ -219,6 +225,7 @@ function readLegacy(): Partial<EmailSettings> {
     out.sidebar = {
       collapsedDomains: collapsedRaw ? (JSON.parse(collapsedRaw) as string[]).filter((x) => typeof x === "string") : [],
       favoritesVisible: favVisRaw === null ? true : favVisRaw === "true",
+      expandedAddresses: [],
     };
   } catch {}
   try {

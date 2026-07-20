@@ -259,6 +259,7 @@ export function FolderList({
   const { settings, updateSetting, replaceSetting } = useSettings();
   const collapsedDomains = settings.sidebar.collapsedDomains;
   const favoritesVisible = settings.sidebar.favoritesVisible;
+  const expandedAddresses = settings.sidebar.expandedAddresses;
   const favorites = settings.favorites.items;
 
   const updateFavorites = (next: FavoriteRef[]) => {
@@ -308,17 +309,36 @@ export function FolderList({
     updateSetting("sidebar", { collapsedDomains: next });
   };
 
+  // Addresses sub-list is collapsed by default (id absent from the set);
+  // toggling adds/removes the domain id.
+  const toggleAddresses = (domainId: string) => {
+    const next = expandedAddresses.includes(domainId)
+      ? expandedAddresses.filter((id) => id !== domainId)
+      : [...expandedAddresses, domainId];
+    updateSetting("sidebar", { expandedAddresses: next });
+  };
+
   const toggleFavorites = () => {
     updateSetting("sidebar", { favoritesVisible: !favoritesVisible });
   };
 
   // Collapse All / Expand All — "anything expanded" drives which action shows
   const anythingExpanded =
-    favoritesVisible || domains.some((d) => !collapsedDomains.includes(d.id));
+    favoritesVisible ||
+    domains.some((d) => !collapsedDomains.includes(d.id)) ||
+    expandedAddresses.length > 0;
   const collapseAll = () =>
-    updateSetting("sidebar", { collapsedDomains: domains.map((d) => d.id), favoritesVisible: false });
+    updateSetting("sidebar", {
+      collapsedDomains: domains.map((d) => d.id),
+      favoritesVisible: false,
+      expandedAddresses: [],
+    });
   const expandAll = () =>
-    updateSetting("sidebar", { collapsedDomains: [], favoritesVisible: true });
+    updateSetting("sidebar", {
+      collapsedDomains: [],
+      favoritesVisible: true,
+      expandedAddresses: domains.map((d) => d.id),
+    });
 
   const isAllSelected = selectedDomain === null;
 
@@ -782,35 +802,46 @@ export function FolderList({
                       return items;
                     })}
 
-                    {/* Addresses */}
+                    {/* Addresses — collapsible sub-list, collapsed by default */}
                     {(d.addresses || []).some((a) => a.is_active) && (
                       <>
-                        <div
-                          className="text-[10px] font-semibold pl-[26px] pt-1.5 pb-0.5"
+                        <button
+                          onClick={() => toggleAddresses(d.id)}
+                          className="mc-touch-exempt w-full flex items-center gap-1 pl-[12px] pr-1 pt-1.5 pb-0.5"
                           style={{ color: "var(--mc-text-faint)" }}
+                          title={expandedAddresses.includes(d.id) ? "Hide addresses" : "Show addresses"}
                         >
-                          Addresses
-                        </div>
-                        {d.addresses
-                          .filter((addr) => addr.is_active)
-                          .map((addr) => {
-                            const aRef: FavoriteRef = { kind: "address", domainId: d.id, addressId: addr.id };
-                            return (
-                              <SidebarRow
-                                key={addr.id}
-                                icon={User}
-                                label={addr.address}
-                                active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
-                                depth={1}
-                                onClick={() => {
-                                  onDomainChange(d);
-                                  onAddressChange(addr.id);
-                                  onFolderChange("inbox");
-                                }}
-                                trailing={editing ? <PinButton refItem={aRef} /> : undefined}
-                              />
-                            );
-                          })}
+                          {expandedAddresses.includes(d.id) ? (
+                            <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                          )}
+                          <span className="text-[10px] font-semibold">Addresses</span>
+                          <span className="text-[10px] font-semibold tabular-nums ml-1 opacity-70">
+                            {d.addresses.filter((a) => a.is_active).length}
+                          </span>
+                        </button>
+                        {expandedAddresses.includes(d.id) &&
+                          d.addresses
+                            .filter((addr) => addr.is_active)
+                            .map((addr) => {
+                              const aRef: FavoriteRef = { kind: "address", domainId: d.id, addressId: addr.id };
+                              return (
+                                <SidebarRow
+                                  key={addr.id}
+                                  icon={User}
+                                  label={addr.address}
+                                  active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
+                                  depth={1}
+                                  onClick={() => {
+                                    onDomainChange(d);
+                                    onAddressChange(addr.id);
+                                    onFolderChange("inbox");
+                                  }}
+                                  trailing={editing ? <PinButton refItem={aRef} /> : undefined}
+                                />
+                              );
+                            })}
                       </>
                     )}
                   </div>
