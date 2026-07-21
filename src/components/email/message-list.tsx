@@ -632,22 +632,8 @@ export function MessageList({
     });
   }, []);
 
-  // When selection is a thread child, auto-expand its conversation
-  useEffect(() => {
-    if (!threadCollapse || !selectedId) return;
-    const key = threadCollapse.keyById[selectedId];
-    if (!key) return;
-    const members = threadCollapse.members[key];
-    if (!members || members.length < 2) return;
-    setExpandedThreads((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  }, [selectedId, threadCollapse]);
-
   // Flat list for UI: conversation head + optional expanded children (oldest → newest)
+  // Expand/collapse ONLY via the disclosure control — never auto-expand on row select.
   const filtered = useMemo(() => {
     if (!threadCollapse) return messages;
     const out: EmailMessage[] = [];

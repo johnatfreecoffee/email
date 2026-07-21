@@ -381,13 +381,23 @@ export function MessageListVirtual({
                       : undefined,
                   }}
                 >
-                  {/* Disclosure (thread root) — Apple Mail triangle */}
-                  <div className="w-[20px] flex-shrink-0 flex items-start justify-center pt-[12px]">
+                  {/* Disclosure (thread root) — circled chevron; only this expands */}
+                  <div className="w-[24px] flex-shrink-0 flex items-start justify-center pt-[11px]">
                     {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child ? (
                       <button
                         type="button"
-                        className="p-0.5 rounded"
-                        style={{ color: isActive ? "#fff" : "var(--mc-text-muted)" }}
+                        className="thread-disclosure flex items-center justify-center rounded-full transition-colors"
+                        style={{
+                          width: 18,
+                          height: 18,
+                          color: isActive ? "#fff" : "var(--mc-text-muted)",
+                          border: isActive
+                            ? "1px solid rgba(255,255,255,0.55)"
+                            : "1px solid var(--mc-border)",
+                          backgroundColor: isActive
+                            ? "rgba(255,255,255,0.12)"
+                            : "var(--mc-bg-elevated)",
+                        }}
                         title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
                         aria-expanded={!!msg.thread_expanded}
                         onClick={(e) => {
@@ -396,9 +406,9 @@ export function MessageListVirtual({
                         }}
                       >
                         {msg.thread_expanded ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
+                          <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
                         ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
+                          <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
                         )}
                       </button>
                     ) : null}

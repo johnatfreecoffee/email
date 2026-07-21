@@ -1025,8 +1025,16 @@ const TableRow = memo(function TableRow({
         {isThreadRoot ? (
           <button
             type="button"
-            className="flex-shrink-0 p-0.5 rounded transition-colors"
-            style={{ color: "var(--mc-text-muted)" }}
+            className="thread-disclosure flex-shrink-0 flex items-center justify-center rounded-full transition-colors"
+            style={{
+              width: 18,
+              height: 18,
+              color: isActive ? "#fff" : "var(--mc-text-muted)",
+              border: isActive
+                ? "1px solid rgba(255,255,255,0.55)"
+                : "1px solid var(--mc-border)",
+              backgroundColor: isActive ? "rgba(255,255,255,0.12)" : "var(--mc-bg-elevated)",
+            }}
             title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
             aria-expanded={!!msg.thread_expanded}
             onClick={(e) => {
@@ -1035,9 +1043,9 @@ const TableRow = memo(function TableRow({
             }}
           >
             {msg.thread_expanded ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
             )}
           </button>
         ) : (
