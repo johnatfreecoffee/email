@@ -16,6 +16,7 @@ import {
   Square,
   MinusSquare,
   ChevronDown,
+  ChevronRight,
   AlertOctagon,
   Eye,
   EyeOff,
@@ -619,7 +620,65 @@ export function MessageList({
     [threadingOn, messages]
   );
 
-  const filtered = threadCollapse ? threadCollapse.display : messages;
+  /** Expanded conversation keys (Apple Mail disclosure in the list). */
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(() => new Set());
+
+  const toggleThreadExpand = useCallback((key: string) => {
+    setExpandedThreads((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // When selection is a thread child, auto-expand its conversation
+  useEffect(() => {
+    if (!threadCollapse || !selectedId) return;
+    const key = threadCollapse.keyById[selectedId];
+    if (!key) return;
+    const members = threadCollapse.members[key];
+    if (!members || members.length < 2) return;
+    setExpandedThreads((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, [selectedId, threadCollapse]);
+
+  // Flat list for UI: conversation head + optional expanded children (oldest → newest)
+  const filtered = useMemo(() => {
+    if (!threadCollapse) return messages;
+    const out: EmailMessage[] = [];
+    for (const head of threadCollapse.display) {
+      const key = head.thread_key || threadCollapse.keyById[head.id];
+      const members = (key && threadCollapse.members[key]) || [head];
+      const expanded = !!(key && expandedThreads.has(key));
+      out.push({
+        ...head,
+        thread_key: key,
+        thread_count: members.length,
+        thread_expanded: expanded,
+        is_thread_child: false,
+      });
+      if (expanded && members.length > 1) {
+        const sorted = [...members].sort(
+          (a, b) => +new Date(a.received_at) - +new Date(b.received_at)
+        );
+        for (const m of sorted) {
+          out.push({
+            ...m,
+            thread_key: key,
+            thread_count: 1,
+            is_thread_child: true,
+            thread_expanded: true,
+          });
+        }
+      }
+    }
+    return out;
+  }, [threadCollapse, messages, expandedThreads]);
 
   const unreadInView = messages.filter((m) => !m.is_read).length;
 
@@ -1079,6 +1138,7 @@ export function MessageList({
             loadingMore={loadingMore}
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
+            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : (
           <>

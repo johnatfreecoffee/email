@@ -126,7 +126,7 @@ function CopyableAddress({ address }: { address: string }) {
   return <CopyableEmail email={address} />;
 }
 
-// Toolbar action button — monochrome, Mail-style: gray icon, neutral hover
+// Toolbar action button — monochrome + visible hover toast (native title alone is easy to miss)
 function ToolbarButton({
   onClick,
   icon: Icon,
@@ -140,23 +140,39 @@ function ToolbarButton({
   active?: boolean;
   activeColor?: string;
 }) {
+  // Strip keyboard hint for toast body, keep full string as aria-label
+  const toastLabel = title.replace(/\s*\([^)]*\)\s*$/, "").trim() || title;
   return (
-    <button
-      onClick={onClick}
-      className="p-1.5 rounded-md transition-colors"
-      style={{
-        color: active && activeColor ? activeColor : "var(--mc-text-muted)",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
-      }}
-      title={title}
-    >
-      <Icon className={`h-4 w-4 ${active && activeColor ? "fill-current" : ""}`} />
-    </button>
+    <div className="relative group/tb">
+      <button
+        onClick={onClick}
+        className="p-1.5 rounded-md transition-colors"
+        style={{
+          color: active && activeColor ? activeColor : "var(--mc-text-muted)",
+        }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+        }}
+        title={title}
+        aria-label={title}
+      >
+        <Icon className={`h-4 w-4 ${active && activeColor ? "fill-current" : ""}`} />
+      </button>
+      <span
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 top-full mt-1.5 z-50 px-2 py-1 rounded-md text-[11px] font-medium whitespace-nowrap opacity-0 group-hover/tb:opacity-100 transition-opacity shadow-lg"
+        style={{
+          backgroundColor: "var(--mc-bg-elevated)",
+          color: "var(--mc-text)",
+          border: "1px solid var(--mc-border)",
+        }}
+        role="tooltip"
+      >
+        {toastLabel}
+      </span>
+    </div>
   );
 }
 

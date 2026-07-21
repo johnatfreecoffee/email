@@ -66,6 +66,10 @@ export interface EmailMessage {
   thread_count?: number;
   /** Client-only: collapse key */
   thread_key?: string;
+  /** Client-only: indented child row under an expanded conversation */
+  is_thread_child?: boolean;
+  /** Client-only: conversation is expanded in the list */
+  thread_expanded?: boolean;
   attachments?: Array<{
     id: string;
     filename: string;
@@ -804,6 +808,14 @@ export function EmailLayout() {
     setShowCompose(true);
   }, []);
 
+  // Always clear mode + reply target on close so Compose never resurrects a Reply.
+  const closeCompose = useCallback(() => {
+    setShowCompose(false);
+    setComposeDraft(null);
+    setComposeReplyTo(null);
+    setComposeMode("new");
+  }, []);
+
   // Drafts
   const [drafts, setDrafts] = useState<any[]>([]);
 
@@ -959,7 +971,7 @@ export function EmailLayout() {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
       if (showCompose) {
-        if (e.key === "Escape") setShowCompose(false);
+        if (e.key === "Escape") closeCompose();
         return;
       }
       if (settingsTarget) return; // settings modal owns its own keys
@@ -1240,7 +1252,7 @@ export function EmailLayout() {
           }}
           unreadCount={unreadCount}
           draftsCount={drafts.length}
-          onCompose={() => { setComposeDraft(null); setShowCompose(true); }}
+          onCompose={() => openCompose("new")}
           onRefreshDomains={() => {
             fetchDomains();
             fetchUnreadCounts();
@@ -1432,7 +1444,11 @@ export function EmailLayout() {
         <MessageReader
           message={selectedMessage}
           threadMessages={selectedThreadMessages}
-          onSelectThreadMessage={(msg) => setSelectedMessage(msg)}
+          onSelectThreadMessage={(msg) => {
+            setSelectedMessage(msg);
+            setMobileView("reader");
+            fetchFullMessage(msg.id);
+          }}
           onTrash={handleTrash}
           onArchive={handleArchive}
           onToggleStar={handleToggleStar}
@@ -1457,15 +1473,21 @@ export function EmailLayout() {
       {/* Compose Modal */}
       {showCompose && (
         <ComposeModal
+          key={
+            composeDraft?.id
+              ? `draft-${composeDraft.id}`
+              : composeReplyTo
+                ? `${composeMode}-${composeReplyTo.id}`
+                : `new-${composeMode}`
+          }
           domains={domains}
           selectedDomain={selectedDomain}
           replyTo={composeReplyTo}
           composeMode={composeMode}
           draft={composeDraft}
-          onClose={() => { setShowCompose(false); setComposeDraft(null); }}
+          onClose={closeCompose}
           onSent={() => {
-            setShowCompose(false);
-            setComposeDraft(null);
+            closeCompose();
             loadPage("reset");
             if (activeFolder === "drafts") fetchDrafts();
           }}

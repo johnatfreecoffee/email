@@ -68,38 +68,126 @@ export function ComposeModal({
     }
   }
 
-  // New composes honor the "Send new messages from" setting when set;
-  // replies/forwards keep the existing first-option behavior.
-  const preferred =
-    composeMode === "new" && settings.composing.defaultAddressId
-      ? fromOptions.find((o) => o.addressId === settings.composing.defaultAddressId)
-      : undefined;
-  const defaultFrom = preferred?.value ?? (fromOptions.length > 0 ? fromOptions[0].value : "");
-
   const isReply = composeMode === "reply" || composeMode === "reply-all";
   const isForward = composeMode === "forward";
 
-  // Build initial "to" based on mode
-  const buildInitialTo = () => {
-    if (composeMode === "reply-all" && replyTo) {
-      // Reply all: original sender + all to/cc except our own addresses
-      const ourEmails = new Set(fromOptions.map((o) => o.value.match(/<(.+)>/)?.[1]?.toLowerCase()).filter(Boolean));
-      const allRecipients = [
-        replyTo.from_address,
-        ...(replyTo.to_addresses || []),
-      ].filter((addr) => !ourEmails.has(addr.toLowerCase()));
-      return [...new Set(allRecipients)].join(", ");
+  // New composes honor the "Send new messages from" setting when set.
+  // Replies/forwards prefer the mailbox that received the message so From
+  // matches the address the counterparty wrote to.
+  const preferredNew =
+    composeMode === "new" && settings.composing.defaultAddressId
+      ? fromOptions.find((o) => o.addressId === settings.composing.defaultAddressId)
+      : undefined;
+  const preferredReply =
+    (isReply || isForward) && replyTo
+      ? fromOptions.find((o) => o.addressId && o.addressId === replyTo.address_id) ||
+        fromOptions.find((o) => {
+          const e = (o.value.match(/<([^>]+)>/)?.[1] || "").toLowerCase();
+          return (replyTo.to_addresses || []).some((t) => t.toLowerCase() === e);
+        })
+      : undefined;
+  const defaultFrom =
+    preferredNew?.value ?? preferredReply?.value ?? (fromOptions.length > 0 ? fromOptions[0].value : "");
+
+  // Bare email from "Name <addr@x.com>" or bare addr. Used so we can match
+  // against our From identities without false negatives on display names.
+  const extractEmail = (addr: string | null | undefined): string => {
+    if (!addr) return "";
+    const m = addr.match(/<([^>]+)>/);
+    return (m ? m[1] : addr).trim().toLowerCase();
+  };
+
+  const ourEmails = new Set(
+    fromOptions
+      .map((o) => extractEmail(o.value))
+      .filter(Boolean)
+  );
+
+  // Dedupe by bare email, keep first original string for display.
+  const uniqAddrs = (addrs: string[]): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const a of addrs) {
+      const e = extractEmail(a);
+      if (!e || seen.has(e)) continue;
+      seen.add(e);
+      out.push(a.trim());
     }
-    if (isReply) return replyTo?.from_address || "";
+    return out;
+  };
+
+  // Build initial "to" based on mode.
+  // Important: many of our domains host multiple mailboxes (john@, a.email@, …).
+  // Stripping *every* address we can send from nukes internal mail on Reply All
+  // (from + to both "ours" → empty To). Never drop the primary reply target.
+  const buildInitialTo = () => {
+    if (!replyTo) return "";
+    const outbound = replyTo.direction === "outbound";
+    const fromAddr = replyTo.from_address || "";
+    const toAddrs = Array.isArray(replyTo.to_addresses) ? replyTo.to_addresses : [];
+    const ccAddrs = Array.isArray(replyTo.cc_addresses) ? replyTo.cc_addresses : [];
+
+    // Reply (not all): counterparty only
+    // - inbound → original From (sender)
+    // - outbound/sent → original To (who we wrote to)
+    if (composeMode === "reply") {
+      if (outbound) {
+        const targets = toAddrs.filter((a) => !ourEmails.has(extractEmail(a)));
+        return uniqAddrs(targets.length > 0 ? targets : toAddrs).join(", ");
+      }
+      return fromAddr;
+    }
+
+    if (composeMode === "reply-all") {
+      // Primary reply target must always survive "self" filtering (internal mail).
+      // To gets sender (inbound) / original recipients (sent) + other To's.
+      // Cc stays in Cc (handled below) — not merged into To.
+      const primary = new Set<string>();
+      if (outbound) {
+        for (const a of toAddrs) primary.add(extractEmail(a));
+      } else if (fromAddr) {
+        primary.add(extractEmail(fromAddr));
+      }
+
+      const pool = outbound ? [...toAddrs] : [fromAddr, ...toAddrs];
+
+      const kept = pool.filter((addr) => {
+        const e = extractEmail(addr);
+        if (!e) return false;
+        if (primary.has(e)) return true; // never drop the counterparty
+        return !ourEmails.has(e);
+      });
+
+      // Put primary targets first (sender for inbound / original To for sent).
+      const primaryFirst = [
+        ...kept.filter((a) => primary.has(extractEmail(a))),
+        ...kept.filter((a) => !primary.has(extractEmail(a))),
+      ];
+      return uniqAddrs(primaryFirst).join(", ");
+    }
+
     return "";
   };
 
   const buildInitialCc = () => {
-    if (composeMode === "reply-all" && replyTo?.cc_addresses?.length) {
-      const ourEmails = new Set(fromOptions.map((o) => o.value.match(/<(.+)>/)?.[1]?.toLowerCase()).filter(Boolean));
-      return replyTo.cc_addresses.filter((addr) => !ourEmails.has(addr.toLowerCase())).join(", ");
-    }
-    return "";
+    // Cc is only prefilled on reply-all; skip anyone already in To / our identities.
+    if (composeMode !== "reply-all" || !replyTo) return "";
+    const outbound = replyTo.direction === "outbound";
+    const fromAddr = replyTo.from_address || "";
+    const toAddrs = Array.isArray(replyTo.to_addresses) ? replyTo.to_addresses : [];
+    const ccAddrs = Array.isArray(replyTo.cc_addresses) ? replyTo.cc_addresses : [];
+    if (ccAddrs.length === 0) return "";
+
+    const inTo = new Set<string>();
+    if (!outbound && fromAddr) inTo.add(extractEmail(fromAddr));
+    for (const a of toAddrs) inTo.add(extractEmail(a));
+
+    const kept = ccAddrs.filter((addr) => {
+      const e = extractEmail(addr);
+      if (!e || inTo.has(e)) return false;
+      return !ourEmails.has(e);
+    });
+    return uniqAddrs(kept).join(", ");
   };
 
   const buildInitialSubject = () => {

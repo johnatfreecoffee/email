@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Star, Paperclip, Loader2 } from "lucide-react";
+import { Star, Paperclip, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 import { formatDate, getDateGroup } from "./format";
 
@@ -46,6 +46,8 @@ export interface MessageListVirtualProps {
   onAtTopChange?: (atTop: boolean) => void;
   /** Preview lines under the subject (1 or 2) — drives row height. */
   previewLines?: 1 | 2;
+  /** Expand / collapse a conversation in the list (Apple Mail disclosure). */
+  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 export function MessageListVirtual({
@@ -66,6 +68,7 @@ export function MessageListVirtual({
   onLoadMore,
   onAtTopChange,
   previewLines = 2,
+  onToggleThreadExpand,
 }: MessageListVirtualProps) {
   const rowHeight = previewLines === 1 ? ROW_HEIGHT_1_LINE : ROW_HEIGHT_2_LINES;
   // Interleave date-group headers with message rows; keep a message-index →
@@ -367,7 +370,17 @@ export function MessageListVirtual({
                   backgroundColor: rowBg,
                 }}
               >
-                <div className="flex h-full">
+                <div
+                  className="flex h-full"
+                  style={{
+                    paddingLeft: msg.is_thread_child ? 14 : 0,
+                    borderLeft: msg.is_thread_child
+                      ? isActive
+                        ? "2px solid rgba(255,255,255,0.45)"
+                        : "2px solid var(--mc-accent)"
+                      : undefined,
+                  }}
+                >
                   {/* Unread-dot gutter (click toggles read) */}
                   <div
                     className="w-[24px] flex-shrink-0 flex items-start justify-center pt-[15px]"
@@ -441,18 +454,32 @@ export function MessageListVirtual({
                           SENT
                         </span>
                       )}
-                      {(msg.thread_count ?? 0) > 1 && (
-                        <span
-                          className="text-[10px] font-semibold px-1 py-px rounded flex-shrink-0 tabular-nums"
+                      {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child && (
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-px rounded flex-shrink-0 tabular-nums"
                           style={{
                             backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "var(--mc-bg-elevated)",
                             color: isActive ? "#fff" : "var(--mc-text-muted)",
                             border: isActive ? "none" : "1px solid var(--mc-border-subtle)",
                           }}
-                          title={`${msg.thread_count} messages in conversation`}
+                          title={
+                            msg.thread_expanded
+                              ? "Collapse conversation"
+                              : `Expand ${msg.thread_count} messages`
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
+                          }}
                         >
+                          {msg.thread_expanded ? (
+                            <ChevronDown className="h-3 w-3" />
+                          ) : (
+                            <ChevronRight className="h-3 w-3" />
+                          )}
                           {msg.thread_count}
-                        </span>
+                        </button>
                       )}
                       <span
                         className="flex-1 min-w-0 truncate text-[13px]"

@@ -599,6 +599,28 @@ export const onRequest = async (context: CFContext) => {
     !delivery.is_spam &&
     !delivery.is_trash &&
     !delivery.is_archived;
+
+  // Agent Mail addresses (a.main@, a.noknok@, …) never push — John sends
+  // those as engineering jobs; pings on every outbound-to-agent are noise.
+  // Still store the message so the worker can process it.
+  const isAgentLocal = (local: string | null | undefined) =>
+    !!local && /^a\./i.test(String(local).trim());
+  const matchedLocal =
+    (matchedAddress as { address?: string } | null | undefined)?.address ||
+    null;
+  if (shouldNotify && isAgentLocal(matchedLocal)) {
+    shouldNotify = false;
+  }
+  if (shouldNotify) {
+    for (const raw of toAddresses || []) {
+      const local = String(raw).split("@")[0] || "";
+      if (isAgentLocal(local)) {
+        shouldNotify = false;
+        break;
+      }
+    }
+  }
+
   // Optional: users can silence push for catch-all mail (still delivered and
   // counted, just no ping). Only query settings when it could matter.
   if (shouldNotify && isCatchAll) {
