@@ -75,6 +75,15 @@ const folderDefs = [
   { id: "trash", label: "Trash", icon: Trash2 },
 ];
 
+// Apple Mail mobile primary folders (matches iOS screenshot order)
+const mobilePrimaryFolders = [
+  { id: "inbox", label: "Inbox", icon: Inbox },
+  { id: "drafts", label: "Drafts", icon: FileEdit },
+  { id: "sent", label: "Sent", icon: Send },
+  { id: "spam", label: "Junk", icon: AlertOctagon },
+  { id: "trash", label: "Trash", icon: Trash2 },
+];
+
 // Aggregate (cross-domain) favorite definitions
 const aggregateDefs = [
   { id: "inbox", label: "All Inboxes", icon: Inbox },
@@ -94,7 +103,39 @@ function getDomainHealthDot(d: EmailDomain): string {
   return "var(--mc-text-faint)";
 }
 
-// ---------- Shared row ----------
+/** Friendly account title like "John@ClearHome" from domain + primary address. */
+function accountLabel(d: EmailDomain): string {
+  const primary = (d.addresses || []).find((a) => a.is_active) || d.addresses?.[0];
+  if (primary?.display_name?.trim()) return primary.display_name.trim();
+  const short = d.domain.split(".")[0] || d.domain;
+  const capDomain = short.charAt(0).toUpperCase() + short.slice(1);
+  if (primary?.address) {
+    const local = primary.address.includes("@")
+      ? primary.address.split("@")[0]
+      : primary.address;
+    if (local) {
+      const capLocal = local.charAt(0).toUpperCase() + local.slice(1);
+      return `${capLocal}@${capDomain}`;
+    }
+  }
+  return capDomain;
+}
+
+function formatUpdated(ts: number): string {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return "Updated Just Now";
+  if (sec < 3600) {
+    const m = Math.floor(sec / 60);
+    return m === 1 ? "Updated 1 min ago" : `Updated ${m} min ago`;
+  }
+  if (sec < 86400) {
+    const h = Math.floor(sec / 3600);
+    return h === 1 ? "Updated 1 hour ago" : `Updated ${h} hours ago`;
+  }
+  return "Updated Earlier";
+}
+
+// ---------- Desktop sidebar row ----------
 
 interface SidebarRowProps {
   icon: LucideIcon;
@@ -157,6 +198,98 @@ function SidebarRow({
               {count}
             </span>
           )}
+    </button>
+  );
+}
+
+// ---------- iOS grouped list primitives (mobile) ----------
+
+function IosGroup({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="rounded-[12px] overflow-hidden"
+      style={{
+        backgroundColor: "var(--mc-card)",
+        boxShadow: "0 0.5px 0 rgba(0,0,0,0.04)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+interface IosRowProps {
+  icon: LucideIcon;
+  label: string;
+  count?: number;
+  active?: boolean;
+  onClick?: () => void;
+  showChevron?: boolean;
+  /** Hide bottom hairline (last row) */
+  last?: boolean;
+  trailing?: React.ReactNode;
+  iconColor?: string;
+}
+
+function IosRow({
+  icon: Icon,
+  label,
+  count,
+  active = false,
+  onClick,
+  showChevron = true,
+  last = false,
+  trailing,
+  iconColor,
+}: IosRowProps) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-3 pl-4 pr-3 relative active:opacity-70 transition-opacity"
+      style={{
+        minHeight: 48,
+        backgroundColor: active ? "var(--mc-accent-bg)" : "transparent",
+        color: "var(--mc-text)",
+      }}
+    >
+      <Icon
+        className="h-[22px] w-[22px] flex-shrink-0"
+        strokeWidth={1.75}
+        style={{ color: iconColor || "var(--mc-accent)" }}
+      />
+      <span className="flex-1 text-left text-[17px] truncate leading-tight">{label}</span>
+      {trailing !== undefined ? (
+        trailing
+      ) : (
+        <>
+          {typeof count === "number" && count > 0 && (
+            <span
+              className="text-[17px] tabular-nums flex-shrink-0"
+              style={{ color: "var(--mc-text-muted)" }}
+            >
+              {count}
+            </span>
+          )}
+          {showChevron && (
+            <ChevronRight
+              className="h-[18px] w-[18px] flex-shrink-0 -mr-0.5"
+              strokeWidth={2.25}
+              style={{ color: "var(--mc-text-ghost)" }}
+            />
+          )}
+        </>
+      )}
+      {/* Hairline inset separator */}
+      {!last && (
+        <span
+          className="absolute bottom-0 right-0 pointer-events-none"
+          style={{
+            left: 50,
+            height: "0.5px",
+            backgroundColor: "var(--mc-border)",
+          }}
+        />
+      )}
     </button>
   );
 }
@@ -248,12 +381,20 @@ export function FolderList({
   onCompose,
   onRefreshDomains,
   onOpenSettings,
-  onClose,
+  onClose: _onClose,
   unreadCounts = { domains: {}, folders: {}, totals: {} },
 }: FolderListProps) {
   const [refreshing, setRefreshing] = useState(false);
   const push = usePush();
   const [editing, setEditing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(() => Date.now());
+  // Re-render periodically so "Updated Just Now" ages
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Roaming sidebar state (server-synced via the settings provider)
   const { settings, updateSetting, replaceSetting } = useSettings();
@@ -284,6 +425,11 @@ export function FolderList({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domains]);
 
+  // Bump "Updated …" when counts refresh from parent
+  useEffect(() => {
+    setLastUpdated(Date.now());
+  }, [unreadCounts]);
+
   const favoriteKeys = useMemo(() => new Set(favorites.map(favKey)), [favorites]);
 
   const isPinned = (ref: FavoriteRef) => favoriteKeys.has(favKey(ref));
@@ -299,6 +445,7 @@ export function FolderList({
   const handleRefresh = async () => {
     setRefreshing(true);
     onRefreshDomains();
+    setLastUpdated(Date.now());
     setTimeout(() => setRefreshing(false), 600);
   };
 
@@ -490,69 +637,529 @@ export function FolderList({
     );
   };
 
-  return (
-    <>
-      <div className="flex flex-col h-full p-2.5">
-        {/* Mobile top bar — iOS Mail style: the mailboxes root has a large
-            title + a collapse/expand-all control (no close: it's the root of
-            the navigation stack, reached via the list's "‹ Mailboxes" back). */}
-        {onClose && (
-          <div className="flex md:hidden items-center justify-between mb-2 -mx-0.5">
-            <span className="text-[22px] font-bold px-1" style={{ color: "var(--mc-text)" }}>
-              Mailboxes
-            </span>
-            <button
-              onClick={anythingExpanded ? collapseAll : expandAll}
-              className="p-2 rounded-md transition-colors"
-              style={{ color: "var(--mc-accent)" }}
-              title={anythingExpanded ? "Collapse all" : "Expand all"}
-            >
-              {anythingExpanded ? (
-                <ChevronsDownUp className="h-4 w-4" />
+  const FooterIcons = ({ mobile = false }: { mobile?: boolean }) => (
+    <div
+      className={`flex items-center ${mobile ? "justify-around w-full px-2" : "justify-center gap-1"}`}
+      style={
+        mobile
+          ? {
+              borderTop: "1px solid var(--mc-border)",
+              backgroundColor: "var(--mc-sidebar-solid)",
+              paddingTop: 8,
+              paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+              minHeight: 52,
+            }
+          : undefined
+      }
+    >
+      <ThemeMenu />
+      {push.supported && (
+        <button
+          onClick={() => push.toggle()}
+          disabled={push.loading}
+          className="p-1.5 rounded-md transition-colors"
+          style={{ color: push.enabled ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+          onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+          title={push.enabled ? "Notifications on — click to disable" : "Enable notifications"}
+        >
+          {push.loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : push.enabled ? (
+            <Bell className="h-4 w-4" />
+          ) : (
+            <BellOff className="h-4 w-4" />
+          )}
+        </button>
+      )}
+      <button
+        onClick={handleRefresh}
+        disabled={refreshing}
+        className="p-1.5 rounded-md transition-colors"
+        style={{ color: refreshing ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+        title="Refresh domains and counts"
+      >
+        <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+      </button>
+      <button
+        onClick={() => onOpenSettings()}
+        className="p-1.5 rounded-md transition-colors"
+        style={{ color: "var(--mc-text-muted)" }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+        title="Settings"
+      >
+        <Settings className="h-4 w-4" />
+      </button>
+    </div>
+  );
+
+  // Open a domain's inbox (top-card account row)
+  const openDomainInbox = (d: EmailDomain) => {
+    onDomainChange(d);
+    onFolderChange("inbox");
+  };
+
+  // ---------- Mobile: Apple Mail mailboxes ----------
+  const mobileView = (
+    <div
+      className="flex md:hidden flex-col h-full relative"
+      style={{ backgroundColor: "var(--mc-sidebar-solid)" }}
+    >
+      {/* Header: Edit + large title + updated */}
+      <div className="flex-shrink-0 px-4 pt-1">
+        <div className="flex items-center justify-end h-10">
+          <button
+            onClick={() => setEditing((v) => !v)}
+            className="mc-touch-exempt px-3.5 py-1.5 rounded-full text-[15px] font-medium active:opacity-70"
+            style={{
+              color: "var(--mc-accent)",
+              backgroundColor: "var(--mc-card)",
+              boxShadow: "0 0.5px 1px rgba(0,0,0,0.06)",
+            }}
+          >
+            {editing ? "Done" : "Edit"}
+          </button>
+        </div>
+        <h1
+          className="text-[34px] font-bold tracking-tight leading-none"
+          style={{ color: "var(--mc-text)" }}
+        >
+          Mailboxes
+        </h1>
+        <p className="text-[13px] mt-1.5 mb-1" style={{ color: "var(--mc-text-muted)" }}>
+          {formatUpdated(lastUpdated)}
+        </p>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-28 space-y-5">
+        {/* Top group — All Inboxes + each account (Apple favorites strip) */}
+        <IosGroup>
+          <IosRow
+            icon={Inbox}
+            label="All Inboxes"
+            count={unreadCounts.totals.inbox ?? 0}
+            active={isAllSelected && activeFolder === "inbox" && !catchAllOnly}
+            onClick={() => {
+              onDomainChange(null);
+              onFolderChange("inbox");
+            }}
+            last={domains.length === 0 && !editing}
+          />
+          {domains.map((d, i) => {
+            const count = unreadCounts.domains[d.id] ?? 0;
+            const isLast = i === domains.length - 1 && !editing;
+            return (
+              <IosRow
+                key={d.id}
+                icon={Inbox}
+                label={accountLabel(d)}
+                count={count}
+                active={selectedDomain?.id === d.id && activeFolder === "inbox" && !selectedAddress && !catchAllOnly}
+                onClick={() => openDomainInbox(d)}
+                last={isLast}
+              />
+            );
+          })}
+          {editing && (
+            <IosRow
+              icon={Plus}
+              label="Add Account…"
+              iconColor="var(--mc-text-muted)"
+              showChevron={false}
+              last
+              onClick={() => onOpenSettings({ tab: "accounts" })}
+            />
+          )}
+        </IosGroup>
+
+        {/* Edit mode: manage favorites (drag / rename / remove) */}
+        {editing && (
+          <div>
+            <div className="px-1 mb-2 text-[13px] font-semibold" style={{ color: "var(--mc-text-muted)" }}>
+              Favorites
+            </div>
+            <IosGroup>
+              {favorites.length === 0 ? (
+                <div className="px-4 py-3 text-[14px]" style={{ color: "var(--mc-text-muted)" }}>
+                  Pin folders below with + while editing.
+                </div>
               ) : (
-                <ChevronsUpDown className="h-4 w-4" />
+                <DragDropContext onDragEnd={onDragEnd}>
+                  <Droppable droppableId="favorites-mobile">
+                    {(dropProvided) => (
+                      <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                        {favorites.map((ref, index) => {
+                          const resolved = resolveFavorite(ref);
+                          if (!resolved) return null;
+                          const key = favKey(ref);
+                          const renamable = ref.kind !== "folder";
+                          const isLast = index === favorites.length - 1;
+                          return (
+                            <Draggable key={key} draggableId={key} index={index}>
+                              {(dragProvided, snapshot) => (
+                                <div
+                                  ref={dragProvided.innerRef}
+                                  {...dragProvided.draggableProps}
+                                  className="flex items-center gap-2 pl-3 pr-3 relative"
+                                  style={{
+                                    ...dragProvided.draggableProps.style,
+                                    minHeight: 48,
+                                    opacity: snapshot.isDragging ? 0.9 : 1,
+                                    backgroundColor: snapshot.isDragging
+                                      ? "var(--mc-bg-hover)"
+                                      : "transparent",
+                                  }}
+                                >
+                                  <span
+                                    {...dragProvided.dragHandleProps}
+                                    className="mc-touch-exempt flex-shrink-0 p-1"
+                                    style={{ color: "var(--mc-text-faint)" }}
+                                  >
+                                    <GripVertical className="h-4 w-4" />
+                                  </span>
+                                  <resolved.icon
+                                    className="h-[20px] w-[20px] flex-shrink-0"
+                                    style={{ color: "var(--mc-accent)" }}
+                                  />
+                                  {renamable ? (
+                                    <input
+                                      type="text"
+                                      value={(ref as { label?: string }).label ?? ""}
+                                      placeholder={defaultFavoriteLabel(ref)}
+                                      onChange={(e) => renameFavorite(key, e.target.value)}
+                                      className="flex-1 min-w-0 bg-transparent text-[17px] focus:outline-none"
+                                      style={{ color: "var(--mc-text)" }}
+                                    />
+                                  ) : (
+                                    <span
+                                      className="flex-1 min-w-0 truncate text-[17px]"
+                                      style={{ color: "var(--mc-text)" }}
+                                    >
+                                      {resolved.label}
+                                    </span>
+                                  )}
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateFavorites(favorites.filter((f) => favKey(f) !== key));
+                                    }}
+                                    className="mc-touch-exempt flex-shrink-0 p-1.5 flex items-center justify-center"
+                                    title="Remove"
+                                  >
+                                    <span
+                                      className="h-[22px] w-[22px] rounded-full flex items-center justify-center"
+                                      style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                    >
+                                      <Minus className="h-3.5 w-3.5" />
+                                    </span>
+                                  </span>
+                                  {!isLast && (
+                                    <span
+                                      className="absolute bottom-0 right-0 pointer-events-none"
+                                      style={{
+                                        left: 44,
+                                        height: "0.5px",
+                                        backgroundColor: "var(--mc-border)",
+                                      }}
+                                    />
+                                  )}
+                                </div>
+                              )}
+                            </Draggable>
+                          );
+                        })}
+                        {dropProvided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
+                </DragDropContext>
               )}
-            </button>
+            </IosGroup>
+            <div className="px-1 mt-2 text-[12px]" style={{ color: "var(--mc-text-faint)" }}>
+              Tap + on any folder below to pin it.
+            </div>
           </div>
         )}
 
-        {/* Compose */}
+        {/* Per-account sections (expandable folder cards) */}
+        {domains.map((d) => {
+          const isThisDomain = selectedDomain?.id === d.id;
+          const liveFolderCounts = unreadCounts.folders[d.id] || {};
+          const isCollapsed = collapsedDomains.includes(d.id);
+          const domainTotalUnread = unreadCounts.domains[d.id] ?? 0;
+          const label = accountLabel(d);
+
+          // Build rows for the card
+          type RowSpec = {
+            key: string;
+            icon: LucideIcon;
+            label: string;
+            count: number;
+            active: boolean;
+            onClick: () => void;
+            pinRef?: FavoriteRef;
+          };
+          const rows: RowSpec[] = [];
+
+          for (const f of mobilePrimaryFolders) {
+            const count =
+              f.id === "drafts"
+                ? isThisDomain
+                  ? draftsCount
+                  : 0
+                : liveFolderCounts[f.id] ?? 0;
+            rows.push({
+              key: f.id,
+              icon: f.icon,
+              label: f.label,
+              count,
+              active:
+                isThisDomain &&
+                activeFolder === f.id &&
+                !selectedAddress &&
+                !catchAllOnly,
+              onClick: () => {
+                if (selectedDomain?.id !== d.id) onDomainChange(d);
+                onFolderChange(f.id);
+              },
+              pinRef: { kind: "domain-folder", domainId: d.id, folder: f.id },
+            });
+
+            if (f.id === "inbox" && d.catch_all_enabled && onCatchAllToggle) {
+              rows.push({
+                key: "catchall",
+                icon: Shield,
+                label: "Catch-All",
+                count: liveFolderCounts.catchall ?? 0,
+                active: isThisDomain && catchAllOnly,
+                onClick: () => onCatchAllToggle(d),
+                pinRef: { kind: "catchall", domainId: d.id },
+              });
+            }
+          }
+
+          // Secondary folders (Flagged / Archive) — only in edit mode or if active
+          if (editing || (isThisDomain && (activeFolder === "starred" || activeFolder === "archive"))) {
+            for (const f of folderDefs.filter((x) => x.id === "starred" || x.id === "archive")) {
+              if (rows.some((r) => r.key === f.id)) continue;
+              rows.push({
+                key: f.id,
+                icon: f.icon,
+                label: f.label,
+                count: liveFolderCounts[f.id] ?? 0,
+                active:
+                  isThisDomain &&
+                  activeFolder === f.id &&
+                  !selectedAddress &&
+                  !catchAllOnly,
+                onClick: () => {
+                  if (selectedDomain?.id !== d.id) onDomainChange(d);
+                  onFolderChange(f.id);
+                },
+                pinRef: { kind: "domain-folder", domainId: d.id, folder: f.id },
+              });
+            }
+          }
+
+          return (
+            <div key={d.id}>
+              {/* Section header — tap toggles expand */}
+              <button
+                onClick={() => toggleDomainCollapse(d.id)}
+                className="w-full flex items-center gap-2 px-1 mb-1.5 active:opacity-70"
+                style={{ minHeight: 28 }}
+              >
+                <span
+                  className="flex-1 text-left text-[20px] font-bold truncate"
+                  style={{ color: "var(--mc-text)" }}
+                >
+                  {label}
+                </span>
+                {domainTotalUnread > 0 && (
+                  <span
+                    className="text-[17px] tabular-nums flex-shrink-0"
+                    style={{ color: "var(--mc-text-muted)" }}
+                  >
+                    {domainTotalUnread}
+                  </span>
+                )}
+                {isCollapsed ? (
+                  <ChevronRight
+                    className="h-5 w-5 flex-shrink-0"
+                    strokeWidth={2.25}
+                    style={{ color: "var(--mc-accent)" }}
+                  />
+                ) : (
+                  <ChevronDown
+                    className="h-5 w-5 flex-shrink-0"
+                    strokeWidth={2.25}
+                    style={{ color: "var(--mc-accent)" }}
+                  />
+                )}
+              </button>
+
+              {!isCollapsed && (
+                <IosGroup>
+                  {rows.map((row, i) => (
+                    <IosRow
+                      key={row.key}
+                      icon={row.icon}
+                      label={row.label}
+                      count={row.count}
+                      active={row.active}
+                      onClick={row.onClick}
+                      last={i === rows.length - 1 && !(d.addresses || []).some((a) => a.is_active && editing)}
+                      trailing={
+                        editing && row.pinRef ? (
+                          <PinButton refItem={row.pinRef} />
+                        ) : undefined
+                      }
+                      showChevron={!editing}
+                    />
+                  ))}
+
+                  {/* Addresses (edit / expanded) */}
+                  {(d.addresses || []).some((a) => a.is_active) && (editing || expandedAddresses.includes(d.id)) && (
+                    <>
+                      {!editing && (
+                        <button
+                          onClick={() => toggleAddresses(d.id)}
+                          className="w-full flex items-center gap-2 pl-4 pr-3 text-[13px]"
+                          style={{
+                            minHeight: 36,
+                            color: "var(--mc-text-muted)",
+                            borderTop: "0.5px solid var(--mc-border)",
+                          }}
+                        >
+                          Addresses
+                        </button>
+                      )}
+                      {(editing || expandedAddresses.includes(d.id)) &&
+                        d.addresses
+                          .filter((addr) => addr.is_active)
+                          .map((addr, i, arr) => (
+                            <IosRow
+                              key={addr.id}
+                              icon={User}
+                              label={addr.address}
+                              active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
+                              onClick={() => {
+                                onDomainChange(d);
+                                onAddressChange(addr.id);
+                                onFolderChange("inbox");
+                              }}
+                              last={i === arr.length - 1}
+                              trailing={
+                                editing ? (
+                                  <PinButton
+                                    refItem={{ kind: "address", domainId: d.id, addressId: addr.id }}
+                                  />
+                                ) : undefined
+                              }
+                              showChevron={!editing}
+                            />
+                          ))}
+                    </>
+                  )}
+                  {!editing && (d.addresses || []).some((a) => a.is_active) && !expandedAddresses.includes(d.id) && (
+                    <button
+                      onClick={() => toggleAddresses(d.id)}
+                      className="w-full flex items-center gap-2 pl-4 pr-3 text-[15px] active:opacity-70"
+                      style={{
+                        minHeight: 44,
+                        color: "var(--mc-accent)",
+                        borderTop: "0.5px solid var(--mc-border)",
+                      }}
+                    >
+                      Show Addresses
+                    </button>
+                  )}
+                </IosGroup>
+              )}
+            </div>
+          );
+        })}
+
+        {domains.length === 0 && (
+          <IosGroup>
+            <IosRow
+              icon={Plus}
+              label="Add a domain in Settings"
+              showChevron={false}
+              last
+              onClick={() => onOpenSettings({ tab: "accounts" })}
+            />
+          </IosGroup>
+        )}
+      </div>
+
+      {/* Compose FAB — Apple Mail style, above footer */}
+      <button
+        onClick={onCompose}
+        className="absolute z-20 flex items-center justify-center rounded-full active:scale-95 transition-transform"
+        style={{
+          right: 16,
+          bottom: "calc(60px + env(safe-area-inset-bottom, 0px))",
+          width: 52,
+          height: 52,
+          backgroundColor: "var(--mc-card)",
+          color: "var(--mc-accent)",
+          boxShadow: "0 2px 12px rgba(0,0,0,0.14), 0 0.5px 1px rgba(0,0,0,0.08)",
+        }}
+        title="Compose"
+        aria-label="Compose"
+      >
+        <Pencil className="h-5 w-5" strokeWidth={2} />
+      </button>
+
+      {/* Bottom utility row — keep theme / push / refresh / settings */}
+      <div className="flex-shrink-0">
+        <FooterIcons mobile />
+      </div>
+    </div>
+  );
+
+  // ---------- Desktop: denser sidebar (unchanged behavior) ----------
+  const desktopView = (
+    <div className="hidden md:flex flex-col h-full p-2.5">
+      {/* Compose */}
+      <button
+        onClick={onCompose}
+        className="w-full flex items-center justify-center gap-2 h-8 rounded-md font-medium text-[13px] transition-all mb-3 hover:brightness-110"
+        style={{ backgroundColor: "var(--mc-accent)", color: "#fff" }}
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        Compose
+      </button>
+
+      {/* Mailboxes header — collapse/expand everything at once */}
+      <div className="flex items-center px-1 mb-0.5">
+        <span className="flex-1 text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
+          Mailboxes
+        </span>
         <button
-          onClick={onCompose}
-          className="w-full flex items-center justify-center gap-2 h-8 rounded-md font-medium text-[13px] transition-all mb-3 hover:brightness-110"
-          style={{ backgroundColor: "var(--mc-accent)", color: "#fff" }}
+          onClick={anythingExpanded ? collapseAll : expandAll}
+          className="p-1 rounded transition-colors"
+          style={{ color: "var(--mc-text-faint)" }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--mc-accent)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--mc-text-faint)"; }}
+          title={anythingExpanded ? "Collapse all" : "Expand all"}
         >
-          <Pencil className="h-3.5 w-3.5" />
-          Compose
+          {anythingExpanded ? (
+            <ChevronsDownUp className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronsUpDown className="h-3.5 w-3.5" />
+          )}
         </button>
+      </div>
 
-        {/* Mailboxes header — collapse/expand everything at once (desktop;
-            on mobile these live in the top bar above) */}
-        <div className={`${onClose ? "hidden md:flex" : "flex"} items-center px-1 mb-0.5`}>
-          <span className="flex-1 text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
-            Mailboxes
-          </span>
-          <button
-            onClick={anythingExpanded ? collapseAll : expandAll}
-            className="p-1 rounded transition-colors"
-            style={{ color: "var(--mc-text-faint)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = "var(--mc-accent)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = "var(--mc-text-faint)"; }}
-            title={anythingExpanded ? "Collapse all" : "Expand all"}
-          >
-            {anythingExpanded ? (
-              <ChevronsDownUp className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronsUpDown className="h-3.5 w-3.5" />
-            )}
-          </button>
-        </div>
-
-        {/* One scroll container for the whole mailbox tree — Favorites and
-            domain sections scroll together (matters most in Edit mode, where
-            the Favorites section grows tall). */}
-        <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">
-
+      {/* One scroll container for the whole mailbox tree */}
+      <div className="flex-1 min-h-0 overflow-y-auto -mx-1 px-1">
         {/* Favorites */}
         <div className="mb-1.5">
           <div className="flex items-center px-1 mb-0.5">
@@ -850,7 +1457,6 @@ export function FolderList({
             );
           })}
 
-          {/* Domain adding lives in Settings → Accounts ("+" in the rail) */}
           {domains.length === 0 && (
             <button
               onClick={() => onOpenSettings({ tab: "accounts" })}
@@ -870,56 +1476,22 @@ export function FolderList({
             </button>
           )}
         </div>
-        </div>
-
-        {/* Footer icon row */}
-        <div
-          className="mt-1.5 pt-1.5 flex items-center justify-center gap-1"
-          style={{ borderTop: "1px solid var(--mc-border)" }}
-        >
-          <ThemeMenu />
-          {push.supported && (
-            <button
-              onClick={() => push.toggle()}
-              disabled={push.loading}
-              className="p-1.5 rounded-md transition-colors"
-              style={{ color: push.enabled ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-              title={push.enabled ? "Notifications on — click to disable" : "Enable notifications"}
-            >
-              {push.loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : push.enabled ? (
-                <Bell className="h-4 w-4" />
-              ) : (
-                <BellOff className="h-4 w-4" />
-              )}
-            </button>
-          )}
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="p-1.5 rounded-md transition-colors"
-            style={{ color: refreshing ? "var(--mc-accent)" : "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-            title="Refresh domains and counts"
-          >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          </button>
-          <button
-            onClick={() => onOpenSettings()}
-            className="p-1.5 rounded-md transition-colors"
-            style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
-            title="Settings"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
-        </div>
       </div>
+
+      {/* Footer icon row */}
+      <div
+        className="mt-1.5 pt-1.5 flex items-center justify-center gap-1"
+        style={{ borderTop: "1px solid var(--mc-border)" }}
+      >
+        <FooterIcons />
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {mobileView}
+      {desktopView}
     </>
   );
 }

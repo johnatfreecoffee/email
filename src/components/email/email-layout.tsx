@@ -1182,10 +1182,10 @@ export function EmailLayout() {
           the list + reader slide in over it). */}
       <div
         id="mc-email-folder-col"
-        className="block flex-shrink-0 overflow-hidden md:block"
+        className="block flex-shrink-0 overflow-hidden md:block md:border-r"
         style={{
           width: `${folderColWidth}px`,
-          borderRight: "1px solid var(--mc-border)",
+          borderColor: "var(--mc-border)",
           backgroundColor: "var(--mc-sidebar-solid)",
         }}
       >
@@ -1508,10 +1508,10 @@ export function EmailLayout() {
         />
       )}
 
-      {/* Keyboard shortcuts help button */}
+      {/* Keyboard shortcuts help — desktop only (mobile uses compose FAB) */}
       <button
         onClick={() => setShowShortcuts(true)}
-        className="fixed bottom-4 right-4 z-30 h-8 w-8 rounded-full flex items-center justify-center transition-all"
+        className="hidden md:flex fixed bottom-4 right-4 z-30 h-8 w-8 rounded-full items-center justify-center transition-all"
         style={{
           backgroundColor: "var(--mc-bg-hover)",
           border: "1px solid var(--mc-border)",
