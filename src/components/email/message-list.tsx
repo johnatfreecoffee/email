@@ -634,6 +634,8 @@ export function MessageList({
 
   // Flat list for UI: conversation head + optional expanded children (oldest → newest)
   // Expand/collapse ONLY via the disclosure control — never auto-expand on row select.
+  // IMPORTANT: never re-add the head as a child (same id would overwrite root flags
+  // in MessageTable's byId map and hide the collapse chevron).
   const filtered = useMemo(() => {
     if (!threadCollapse) return messages;
     const out: EmailMessage[] = [];
@@ -653,6 +655,7 @@ export function MessageList({
           (a, b) => +new Date(a.received_at) - +new Date(b.received_at)
         );
         for (const m of sorted) {
+          if (m.id === head.id) continue;
           out.push({
             ...m,
             thread_key: key,

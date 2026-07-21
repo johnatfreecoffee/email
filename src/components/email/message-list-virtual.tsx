@@ -373,7 +373,7 @@ export function MessageListVirtual({
                 <div
                   className="flex h-full"
                   style={{
-                    paddingLeft: msg.is_thread_child ? 12 : 0,
+                    paddingLeft: msg.is_thread_child ? 20 : 0,
                     borderLeft: msg.is_thread_child
                       ? isActive
                         ? "2px solid rgba(255,255,255,0.45)"
@@ -392,10 +392,10 @@ export function MessageListVirtual({
                           height: 18,
                           color: isActive ? "#fff" : "var(--mc-text-muted)",
                           border: isActive
-                            ? "1px solid rgba(255,255,255,0.55)"
-                            : "1px solid var(--mc-border)",
+                            ? "1.5px solid rgba(255,255,255,0.65)"
+                            : "1.5px solid var(--mc-border)",
                           backgroundColor: isActive
-                            ? "rgba(255,255,255,0.12)"
+                            ? "rgba(255,255,255,0.14)"
                             : "var(--mc-bg-elevated)",
                         }}
                         title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
@@ -413,7 +413,7 @@ export function MessageListVirtual({
                       </button>
                     ) : null}
                   </div>
-                  {/* Unread-dot gutter (click toggles read) */}
+                  {/* Unread: solid blue · Read: hollow outline */}
                   <div
                     className="w-[20px] flex-shrink-0 flex items-start justify-center pt-[15px]"
                     onClick={(e) => {
@@ -422,12 +422,19 @@ export function MessageListVirtual({
                     }}
                     title={isUnread ? "Mark as read" : "Mark as unread"}
                   >
-                    {isUnread && (
-                      <span
-                        className="h-[9px] w-[9px] rounded-full"
-                        style={{ backgroundColor: isActive ? "#fff" : "var(--mc-accent)" }}
-                      />
-                    )}
+                    <span
+                      className="h-[9px] w-[9px] rounded-full"
+                      style={
+                        isUnread
+                          ? { backgroundColor: isActive ? "#fff" : "var(--mc-accent)" }
+                          : {
+                              backgroundColor: "transparent",
+                              border: isActive
+                                ? "1.5px solid rgba(255,255,255,0.55)"
+                                : "1.5px solid var(--mc-border)",
+                            }
+                      }
+                    />
                   </div>
 
                   {/* Content */}

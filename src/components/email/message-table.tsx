@@ -279,10 +279,15 @@ export function MessageTable({
 
   // Map the stable ID order back to fresh message objects on every render —
   // so the rows reflect up-to-date is_read / is_starred state without
-  // changing position.
+  // changing position. Prefer non-child (root) metadata when an id collides.
   const sortedMessages = useMemo(() => {
     const byId = new Map<string, EmailMessage>();
-    for (const m of messages) byId.set(m.id, m);
+    for (const m of messages) {
+      const prev = byId.get(m.id);
+      if (!prev || (prev.is_thread_child && !m.is_thread_child)) {
+        byId.set(m.id, m);
+      }
+    }
     const out: EmailMessage[] = [];
     for (const id of sortedIds) {
       const m = byId.get(id);
@@ -985,7 +990,7 @@ const TableRow = memo(function TableRow({
         </button>
       </div>
 
-      {/* Unread dot */}
+      {/* Unread: solid blue dot · Read: hollow outline circle */}
       <div
         className="flex items-center justify-center h-full"
         style={{ width: `${widths.unread}px`, flex: "0 0 auto" }}
@@ -997,18 +1002,23 @@ const TableRow = memo(function TableRow({
             e.stopPropagation();
             onToggleRead?.(msg.id, msg.is_read);
           }}
-          className="p-0.5 rounded-full"
+          className="p-0.5 rounded-full flex items-center justify-center"
           title={isUnread ? "Mark as read" : "Mark as unread"}
           aria-label={isUnread ? "Unread" : "Read"}
         >
-          {isUnread ? (
-            <div
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: "var(--mc-accent)" }}
-            />
-          ) : (
-            <div className="h-2 w-2 rounded-full" style={{ backgroundColor: "transparent" }} />
-          )}
+          <div
+            className="h-2.5 w-2.5 rounded-full"
+            style={
+              isUnread
+                ? { backgroundColor: "var(--mc-accent)" }
+                : {
+                    backgroundColor: "transparent",
+                    border: isActive
+                      ? "1.5px solid rgba(255,255,255,0.55)"
+                      : "1.5px solid var(--mc-border)",
+                  }
+            }
+          />
         </button>
       </div>
 
@@ -1018,7 +1028,7 @@ const TableRow = memo(function TableRow({
         style={{
           width: `${widths.from}px`,
           flex: "0 0 auto",
-          paddingLeft: isChild ? 18 : 4,
+          paddingLeft: isChild ? 28 : 4,
         }}
         role="gridcell"
       >
@@ -1031,9 +1041,9 @@ const TableRow = memo(function TableRow({
               height: 18,
               color: isActive ? "#fff" : "var(--mc-text-muted)",
               border: isActive
-                ? "1px solid rgba(255,255,255,0.55)"
-                : "1px solid var(--mc-border)",
-              backgroundColor: isActive ? "rgba(255,255,255,0.12)" : "var(--mc-bg-elevated)",
+                ? "1.5px solid rgba(255,255,255,0.65)"
+                : "1.5px solid var(--mc-border)",
+              backgroundColor: isActive ? "rgba(255,255,255,0.14)" : "var(--mc-bg-elevated)",
             }}
             title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
             aria-expanded={!!msg.thread_expanded}
@@ -1048,6 +1058,8 @@ const TableRow = memo(function TableRow({
               <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
             )}
           </button>
+        ) : isChild ? (
+          <span className="w-[18px] flex-shrink-0" aria-hidden />
         ) : (
           <span className="w-[18px] flex-shrink-0" aria-hidden />
         )}
@@ -1056,6 +1068,7 @@ const TableRow = memo(function TableRow({
           style={{
             color: isUnread ? "var(--mc-text)" : "var(--mc-text-secondary)",
             fontWeight: isUnread ? 600 : 400,
+            paddingLeft: isChild ? 10 : 0,
           }}
           title={msg.from_name || msg.from_address}
         >
@@ -1066,7 +1079,7 @@ const TableRow = memo(function TableRow({
       {/* Subject (flex) */}
       <div
         className="flex items-center h-full min-w-0 px-2 text-[12px] gap-1.5"
-        style={{ flex: "1 1 auto" }}
+        style={{ flex: "1 1 auto", paddingLeft: isChild ? 12 : undefined }}
         role="gridcell"
       >
         {isThreadRoot && (
