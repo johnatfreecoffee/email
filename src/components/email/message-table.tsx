@@ -24,7 +24,18 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { formatDate } from "./format";
-import { Star, Paperclip, ChevronUp, ChevronDown, CheckSquare, Square, MinusSquare, Loader2 } from "lucide-react";
+import {
+  Star,
+  Paperclip,
+  ChevronUp,
+  ChevronDown,
+  ChevronRight,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  Loader2,
+  MessagesSquare,
+} from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 
 // -------------------- Types --------------------
@@ -148,6 +159,8 @@ export interface MessageTableProps {
   /** Publishes the display order (parent indices, sorted) so the layout's
    *  global keyboard nav can walk what's visually on screen. */
   onDisplayOrderChange?: (order: number[] | null) => void;
+  /** Expand / collapse a conversation (Apple Mail disclosure). */
+  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 // -------------------- Component --------------------
@@ -170,6 +183,7 @@ export function MessageTable({
   onLoadMore,
   onAtTopChange,
   onDisplayOrderChange,
+  onToggleThreadExpand,
 }: MessageTableProps) {
   // --- Sort state ---
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
@@ -209,15 +223,23 @@ export function MessageTable({
   );
 
   const sortedIds = useMemo(() => {
-    const arr = [...messages];
+    // Sort conversation roots only; keep expanded children glued under their parent
+    // (Apple Mail never interleaves threads when a conversation is open).
+    const roots = messages.filter((m) => !m.is_thread_child);
+    const childrenByKey = new Map<string, EmailMessage[]>();
+    for (const m of messages) {
+      if (!m.is_thread_child || !m.thread_key) continue;
+      const list = childrenByKey.get(m.thread_key) || [];
+      list.push(m);
+      childrenByKey.set(m.thread_key, list);
+    }
+
     const dir = sort.direction === "asc" ? 1 : -1;
-    arr.sort((a, b) => {
+    const cmpRoot = (a: EmailMessage, b: EmailMessage) => {
       let cmp = 0;
       switch (sort.column) {
         case "unread": {
-          const au = a.is_read ? 1 : 0;
-          const bu = b.is_read ? 1 : 0;
-          cmp = au - bu;
+          cmp = (a.is_read ? 1 : 0) - (b.is_read ? 1 : 0);
           break;
         }
         case "from": {
@@ -227,24 +249,33 @@ export function MessageTable({
           break;
         }
         case "subject": {
-          const as = (a.subject || "").toLowerCase();
-          const bs = (b.subject || "").toLowerCase();
-          cmp = as.localeCompare(bs);
+          cmp = (a.subject || "").toLowerCase().localeCompare((b.subject || "").toLowerCase());
           break;
         }
         case "date":
         default: {
-          const ad = new Date(a.received_at).getTime() || 0;
-          const bd = new Date(b.received_at).getTime() || 0;
-          cmp = ad - bd;
+          cmp =
+            (new Date(a.received_at).getTime() || 0) - (new Date(b.received_at).getTime() || 0);
           break;
         }
       }
       return cmp * dir;
-    });
-    return arr.map((m) => m.id);
+    };
+
+    const sortedRoots = [...roots].sort(cmpRoot);
+    const out: string[] = [];
+    for (const root of sortedRoots) {
+      out.push(root.id);
+      const key = root.thread_key;
+      if (key && root.thread_expanded) {
+        const kids = childrenByKey.get(key) || [];
+        // children already oldest→newest from list builder
+        for (const k of kids) out.push(k.id);
+      }
+    }
+    return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageIdsKey, sort]);
+  }, [messageIdsKey, sort, messages]);
 
   // Map the stable ID order back to fresh message objects on every render —
   // so the rows reflect up-to-date is_read / is_starred state without
@@ -746,6 +777,7 @@ export function MessageTable({
                 onToggleSelect={handleToggleSelect}
                 onToggleStar={onToggleStar}
                 onToggleRead={onToggleRead}
+                onToggleThreadExpand={onToggleThreadExpand}
               />
             );
           })}
@@ -860,6 +892,7 @@ interface TableRowProps {
   onToggleSelect: (idx: number, e: React.MouseEvent) => void;
   onToggleStar: (id: string, starred: boolean) => void;
   onToggleRead?: (id: string, isRead: boolean) => void;
+  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 const TableRow = memo(function TableRow({
@@ -875,9 +908,12 @@ const TableRow = memo(function TableRow({
   onToggleSelect,
   onToggleStar,
   onToggleRead,
+  onToggleThreadExpand,
 }: TableRowProps) {
   const isUnread = !msg.is_read;
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  const isThreadRoot = !msg.is_thread_child && (msg.thread_count ?? 0) > 1;
+  const isChild = !!msg.is_thread_child;
 
   // Row background:
   //  - Active (in reader): accent background
@@ -976,14 +1012,39 @@ const TableRow = memo(function TableRow({
         </button>
       </div>
 
-      {/* From */}
+      {/* From — indent children; disclosure on thread roots */}
       <div
-        className="flex items-center h-full min-w-0 px-2 text-[12px]"
-        style={{ width: `${widths.from}px`, flex: "0 0 auto" }}
+        className="flex items-center h-full min-w-0 px-1 text-[12px] gap-0.5"
+        style={{
+          width: `${widths.from}px`,
+          flex: "0 0 auto",
+          paddingLeft: isChild ? 18 : 4,
+        }}
         role="gridcell"
       >
+        {isThreadRoot ? (
+          <button
+            type="button"
+            className="flex-shrink-0 p-0.5 rounded transition-colors"
+            style={{ color: "var(--mc-text-muted)" }}
+            title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
+            aria-expanded={!!msg.thread_expanded}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
+            }}
+          >
+            {msg.thread_expanded ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
+          </button>
+        ) : (
+          <span className="w-[18px] flex-shrink-0" aria-hidden />
+        )}
         <span
-          className="truncate"
+          className="truncate min-w-0"
           style={{
             color: isUnread ? "var(--mc-text)" : "var(--mc-text-secondary)",
             fontWeight: isUnread ? 600 : 400,
@@ -1000,6 +1061,20 @@ const TableRow = memo(function TableRow({
         style={{ flex: "1 1 auto" }}
         role="gridcell"
       >
+        {isThreadRoot && (
+          <span
+            className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-0.5 rounded flex-shrink-0 tabular-nums"
+            style={{
+              backgroundColor: isActive ? "rgba(255,255,255,0.22)" : "var(--mc-bg-elevated)",
+              color: isActive ? "#fff" : "var(--mc-text-muted)",
+              border: isActive ? "none" : "1px solid var(--mc-border-subtle)",
+            }}
+            title={`${msg.thread_count} messages in conversation`}
+          >
+            <MessagesSquare className="h-3 w-3" />
+            {msg.thread_count}
+          </span>
+        )}
         {msg.is_catch_all && (
           <span
             className="text-[9px] font-bold px-1 py-0.5 rounded flex-shrink-0"

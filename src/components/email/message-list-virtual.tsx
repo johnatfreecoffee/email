@@ -373,7 +373,7 @@ export function MessageListVirtual({
                 <div
                   className="flex h-full"
                   style={{
-                    paddingLeft: msg.is_thread_child ? 14 : 0,
+                    paddingLeft: msg.is_thread_child ? 12 : 0,
                     borderLeft: msg.is_thread_child
                       ? isActive
                         ? "2px solid rgba(255,255,255,0.45)"
@@ -381,9 +381,31 @@ export function MessageListVirtual({
                       : undefined,
                   }}
                 >
+                  {/* Disclosure (thread root) — Apple Mail triangle */}
+                  <div className="w-[20px] flex-shrink-0 flex items-start justify-center pt-[12px]">
+                    {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child ? (
+                      <button
+                        type="button"
+                        className="p-0.5 rounded"
+                        style={{ color: isActive ? "#fff" : "var(--mc-text-muted)" }}
+                        title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
+                        aria-expanded={!!msg.thread_expanded}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
+                        }}
+                      >
+                        {msg.thread_expanded ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        ) : (
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    ) : null}
+                  </div>
                   {/* Unread-dot gutter (click toggles read) */}
                   <div
-                    className="w-[24px] flex-shrink-0 flex items-start justify-center pt-[15px]"
+                    className="w-[20px] flex-shrink-0 flex items-start justify-center pt-[15px]"
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggleRead?.(msg.id, msg.is_read);
@@ -455,31 +477,17 @@ export function MessageListVirtual({
                         </span>
                       )}
                       {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child && (
-                        <button
-                          type="button"
+                        <span
                           className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-px rounded flex-shrink-0 tabular-nums"
                           style={{
                             backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "var(--mc-bg-elevated)",
                             color: isActive ? "#fff" : "var(--mc-text-muted)",
                             border: isActive ? "none" : "1px solid var(--mc-border-subtle)",
                           }}
-                          title={
-                            msg.thread_expanded
-                              ? "Collapse conversation"
-                              : `Expand ${msg.thread_count} messages`
-                          }
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
-                          }}
+                          title={`${msg.thread_count} messages in conversation`}
                         >
-                          {msg.thread_expanded ? (
-                            <ChevronDown className="h-3 w-3" />
-                          ) : (
-                            <ChevronRight className="h-3 w-3" />
-                          )}
                           {msg.thread_count}
-                        </button>
+                        </span>
                       )}
                       <span
                         className="flex-1 min-w-0 truncate text-[13px]"

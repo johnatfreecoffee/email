@@ -1113,6 +1113,7 @@ export function MessageList({
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
             onDisplayOrderChange={onDisplayOrderChange}
+            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : isDesktop ? (
           <MessageListVirtual
