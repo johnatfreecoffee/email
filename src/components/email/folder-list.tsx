@@ -75,15 +75,6 @@ const folderDefs = [
   { id: "trash", label: "Trash", icon: Trash2 },
 ];
 
-// Apple Mail mobile primary folders (matches iOS screenshot order)
-const mobilePrimaryFolders = [
-  { id: "inbox", label: "Inbox", icon: Inbox },
-  { id: "drafts", label: "Drafts", icon: FileEdit },
-  { id: "sent", label: "Sent", icon: Send },
-  { id: "spam", label: "Junk", icon: AlertOctagon },
-  { id: "trash", label: "Trash", icon: Trash2 },
-];
-
 // Aggregate (cross-domain) favorite definitions
 const aggregateDefs = [
   { id: "inbox", label: "All Inboxes", icon: Inbox },
@@ -101,24 +92,6 @@ function getDomainHealthDot(d: EmailDomain): string {
   if (status === "pending" || status === "not_started") return "var(--mc-warning)";
   if (["active", "verified", "dns_configured"].includes(status)) return "var(--mc-success)";
   return "var(--mc-text-faint)";
-}
-
-/** Friendly account title like "John@ClearHome" from domain + primary address. */
-function accountLabel(d: EmailDomain): string {
-  const primary = (d.addresses || []).find((a) => a.is_active) || d.addresses?.[0];
-  if (primary?.display_name?.trim()) return primary.display_name.trim();
-  const short = d.domain.split(".")[0] || d.domain;
-  const capDomain = short.charAt(0).toUpperCase() + short.slice(1);
-  if (primary?.address) {
-    const local = primary.address.includes("@")
-      ? primary.address.split("@")[0]
-      : primary.address;
-    if (local) {
-      const capLocal = local.charAt(0).toUpperCase() + local.slice(1);
-      return `${capLocal}@${capDomain}`;
-    }
-  }
-  return capDomain;
 }
 
 function formatUpdated(ts: number): string {
@@ -696,13 +669,9 @@ export function FolderList({
     </div>
   );
 
-  // Open a domain's inbox (top-card account row)
-  const openDomainInbox = (d: EmailDomain) => {
-    onDomainChange(d);
-    onFolderChange("inbox");
-  };
-
-  // ---------- Mobile: Apple Mail mailboxes ----------
+  // ---------- Mobile: same tree as desktop, iOS chrome ----------
+  // Favorites on top (edit/pin/reorder) → expandable domains (domain name,
+  // not person names). No extra "account nickname" strip.
   const mobileView = (
     <div
       className="flex md:hidden flex-col h-full relative"
@@ -710,7 +679,19 @@ export function FolderList({
     >
       {/* Header: Edit + large title + updated */}
       <div className="flex-shrink-0 px-4 pt-1">
-        <div className="flex items-center justify-end h-10">
+        <div className="flex items-center justify-end h-10 gap-2">
+          <button
+            onClick={anythingExpanded ? collapseAll : expandAll}
+            className="mc-touch-exempt p-2 rounded-full active:opacity-70"
+            style={{ color: "var(--mc-accent)" }}
+            title={anythingExpanded ? "Collapse all" : "Expand all"}
+          >
+            {anythingExpanded ? (
+              <ChevronsDownUp className="h-5 w-5" />
+            ) : (
+              <ChevronsUpDown className="h-5 w-5" />
+            )}
+          </button>
           <button
             onClick={() => setEditing((v) => !v)}
             className="mc-touch-exempt px-3.5 py-1.5 rounded-full text-[15px] font-medium active:opacity-70"
@@ -735,166 +716,189 @@ export function FolderList({
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-28 space-y-5">
-        {/* Top group — All Inboxes + each account (Apple favorites strip) */}
-        <IosGroup>
-          <IosRow
-            icon={Inbox}
-            label="All Inboxes"
-            count={unreadCounts.totals.inbox ?? 0}
-            active={isAllSelected && activeFolder === "inbox" && !catchAllOnly}
-            onClick={() => {
-              onDomainChange(null);
-              onFolderChange("inbox");
-            }}
-            last={domains.length === 0 && !editing}
-          />
-          {domains.map((d, i) => {
-            const count = unreadCounts.domains[d.id] ?? 0;
-            const isLast = i === domains.length - 1 && !editing;
-            return (
-              <IosRow
-                key={d.id}
-                icon={Inbox}
-                label={accountLabel(d)}
-                count={count}
-                active={selectedDomain?.id === d.id && activeFolder === "inbox" && !selectedAddress && !catchAllOnly}
-                onClick={() => openDomainInbox(d)}
-                last={isLast}
-              />
-            );
-          })}
-          {editing && (
-            <IosRow
-              icon={Plus}
-              label="Add Account…"
-              iconColor="var(--mc-text-muted)"
-              showChevron={false}
-              last
-              onClick={() => onOpenSettings({ tab: "accounts" })}
-            />
-          )}
-        </IosGroup>
-
-        {/* Edit mode: manage favorites (drag / rename / remove) */}
-        {editing && (
-          <div>
-            <div className="px-1 mb-2 text-[13px] font-semibold" style={{ color: "var(--mc-text-muted)" }}>
+        {/* —— Favorites (same data as desktop) —— */}
+        <div>
+          <button
+            onClick={toggleFavorites}
+            className="w-full flex items-center gap-1.5 px-1 mb-1.5 active:opacity-70"
+            style={{ minHeight: 28 }}
+          >
+            {favoritesVisible ? (
+              <ChevronDown className="h-4 w-4 flex-shrink-0" style={{ color: "var(--mc-text-muted)" }} />
+            ) : (
+              <ChevronRight className="h-4 w-4 flex-shrink-0" style={{ color: "var(--mc-text-muted)" }} />
+            )}
+            <span
+              className="flex-1 text-left text-[13px] font-semibold uppercase tracking-wide"
+              style={{ color: "var(--mc-text-muted)" }}
+            >
               Favorites
-            </div>
+            </span>
+          </button>
+
+          {favoritesVisible && (
             <IosGroup>
-              {favorites.length === 0 ? (
+              {editing ? (
+                <>
+                  {favorites.length === 0 ? (
+                    <div className="px-4 py-3 text-[14px]" style={{ color: "var(--mc-text-muted)" }}>
+                      Pin folders below with +.
+                    </div>
+                  ) : (
+                    <DragDropContext onDragEnd={onDragEnd}>
+                      <Droppable droppableId="favorites-mobile">
+                        {(dropProvided) => (
+                          <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+                            {favorites.map((ref, index) => {
+                              const resolved = resolveFavorite(ref);
+                              if (!resolved) return null;
+                              const key = favKey(ref);
+                              const renamable = ref.kind !== "folder";
+                              const isLast =
+                                index === favorites.length - 1 &&
+                                aggregateDefs.every((f) => favoriteKeys.has(`folder:${f.id}`));
+                              return (
+                                <Draggable key={key} draggableId={key} index={index}>
+                                  {(dragProvided, snapshot) => (
+                                    <div
+                                      ref={dragProvided.innerRef}
+                                      {...dragProvided.draggableProps}
+                                      className="flex items-center gap-2 pl-3 pr-3 relative"
+                                      style={{
+                                        ...dragProvided.draggableProps.style,
+                                        minHeight: 48,
+                                        opacity: snapshot.isDragging ? 0.9 : 1,
+                                        backgroundColor: snapshot.isDragging
+                                          ? "var(--mc-bg-hover)"
+                                          : "transparent",
+                                      }}
+                                    >
+                                      <span
+                                        {...dragProvided.dragHandleProps}
+                                        className="mc-touch-exempt flex-shrink-0 p-1"
+                                        style={{ color: "var(--mc-text-faint)" }}
+                                      >
+                                        <GripVertical className="h-4 w-4" />
+                                      </span>
+                                      <resolved.icon
+                                        className="h-[20px] w-[20px] flex-shrink-0"
+                                        style={{ color: "var(--mc-accent)" }}
+                                      />
+                                      {renamable ? (
+                                        <input
+                                          type="text"
+                                          value={(ref as { label?: string }).label ?? ""}
+                                          placeholder={defaultFavoriteLabel(ref)}
+                                          onChange={(e) => renameFavorite(key, e.target.value)}
+                                          className="flex-1 min-w-0 bg-transparent text-[17px] focus:outline-none"
+                                          style={{ color: "var(--mc-text)" }}
+                                        />
+                                      ) : (
+                                        <span
+                                          className="flex-1 min-w-0 truncate text-[17px]"
+                                          style={{ color: "var(--mc-text)" }}
+                                        >
+                                          {resolved.label}
+                                        </span>
+                                      )}
+                                      <span
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          updateFavorites(favorites.filter((f) => favKey(f) !== key));
+                                        }}
+                                        className="mc-touch-exempt flex-shrink-0 p-1.5 flex items-center justify-center"
+                                        title="Remove"
+                                      >
+                                        <span
+                                          className="h-[22px] w-[22px] rounded-full flex items-center justify-center"
+                                          style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
+                                        >
+                                          <Minus className="h-3.5 w-3.5" />
+                                        </span>
+                                      </span>
+                                      {!isLast && (
+                                        <span
+                                          className="absolute bottom-0 right-0 pointer-events-none"
+                                          style={{
+                                            left: 44,
+                                            height: "0.5px",
+                                            backgroundColor: "var(--mc-border)",
+                                          }}
+                                        />
+                                      )}
+                                    </div>
+                                  )}
+                                </Draggable>
+                              );
+                            })}
+                            {dropProvided.placeholder}
+                          </div>
+                        )}
+                      </Droppable>
+                    </DragDropContext>
+                  )}
+                  {/* Aggregates not yet pinned — same as desktop */}
+                  {aggregateDefs.some((f) => !favoriteKeys.has(`folder:${f.id}`)) && (
+                    <div style={{ borderTop: favorites.length ? "0.5px solid var(--mc-border)" : undefined }}>
+                      {aggregateDefs
+                        .filter((f) => !favoriteKeys.has(`folder:${f.id}`))
+                        .map((f, i, arr) => (
+                          <IosRow
+                            key={`add-${f.id}`}
+                            icon={f.icon}
+                            label={f.label}
+                            iconColor="var(--mc-text-faint)"
+                            showChevron={false}
+                            last={i === arr.length - 1}
+                            onClick={() => togglePin({ kind: "folder", folder: f.id })}
+                            trailing={<PinButton refItem={{ kind: "folder", folder: f.id }} />}
+                          />
+                        ))}
+                    </div>
+                  )}
+                </>
+              ) : favorites.length === 0 ? (
                 <div className="px-4 py-3 text-[14px]" style={{ color: "var(--mc-text-muted)" }}>
-                  Pin folders below with + while editing.
+                  Tap Edit to pin favorites.
                 </div>
               ) : (
-                <DragDropContext onDragEnd={onDragEnd}>
-                  <Droppable droppableId="favorites-mobile">
-                    {(dropProvided) => (
-                      <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
-                        {favorites.map((ref, index) => {
-                          const resolved = resolveFavorite(ref);
-                          if (!resolved) return null;
-                          const key = favKey(ref);
-                          const renamable = ref.kind !== "folder";
-                          const isLast = index === favorites.length - 1;
-                          return (
-                            <Draggable key={key} draggableId={key} index={index}>
-                              {(dragProvided, snapshot) => (
-                                <div
-                                  ref={dragProvided.innerRef}
-                                  {...dragProvided.draggableProps}
-                                  className="flex items-center gap-2 pl-3 pr-3 relative"
-                                  style={{
-                                    ...dragProvided.draggableProps.style,
-                                    minHeight: 48,
-                                    opacity: snapshot.isDragging ? 0.9 : 1,
-                                    backgroundColor: snapshot.isDragging
-                                      ? "var(--mc-bg-hover)"
-                                      : "transparent",
-                                  }}
-                                >
-                                  <span
-                                    {...dragProvided.dragHandleProps}
-                                    className="mc-touch-exempt flex-shrink-0 p-1"
-                                    style={{ color: "var(--mc-text-faint)" }}
-                                  >
-                                    <GripVertical className="h-4 w-4" />
-                                  </span>
-                                  <resolved.icon
-                                    className="h-[20px] w-[20px] flex-shrink-0"
-                                    style={{ color: "var(--mc-accent)" }}
-                                  />
-                                  {renamable ? (
-                                    <input
-                                      type="text"
-                                      value={(ref as { label?: string }).label ?? ""}
-                                      placeholder={defaultFavoriteLabel(ref)}
-                                      onChange={(e) => renameFavorite(key, e.target.value)}
-                                      className="flex-1 min-w-0 bg-transparent text-[17px] focus:outline-none"
-                                      style={{ color: "var(--mc-text)" }}
-                                    />
-                                  ) : (
-                                    <span
-                                      className="flex-1 min-w-0 truncate text-[17px]"
-                                      style={{ color: "var(--mc-text)" }}
-                                    >
-                                      {resolved.label}
-                                    </span>
-                                  )}
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      updateFavorites(favorites.filter((f) => favKey(f) !== key));
-                                    }}
-                                    className="mc-touch-exempt flex-shrink-0 p-1.5 flex items-center justify-center"
-                                    title="Remove"
-                                  >
-                                    <span
-                                      className="h-[22px] w-[22px] rounded-full flex items-center justify-center"
-                                      style={{ backgroundColor: "var(--mc-danger)", color: "#fff" }}
-                                    >
-                                      <Minus className="h-3.5 w-3.5" />
-                                    </span>
-                                  </span>
-                                  {!isLast && (
-                                    <span
-                                      className="absolute bottom-0 right-0 pointer-events-none"
-                                      style={{
-                                        left: 44,
-                                        height: "0.5px",
-                                        backgroundColor: "var(--mc-border)",
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                              )}
-                            </Draggable>
-                          );
-                        })}
-                        {dropProvided.placeholder}
-                      </div>
-                    )}
-                  </Droppable>
-                </DragDropContext>
+                favorites.map((ref, i) => {
+                  const resolved = resolveFavorite(ref);
+                  if (!resolved) return null;
+                  return (
+                    <IosRow
+                      key={favKey(ref)}
+                      icon={resolved.icon}
+                      label={resolved.label}
+                      count={resolved.count}
+                      active={resolved.active}
+                      onClick={resolved.onClick}
+                      last={i === favorites.length - 1}
+                    />
+                  );
+                })
               )}
             </IosGroup>
+          )}
+          {editing && favoritesVisible && (
             <div className="px-1 mt-2 text-[12px]" style={{ color: "var(--mc-text-faint)" }}>
-              Tap + on any folder below to pin it.
+              Tap + on any mailbox below to pin it here.
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* Per-account sections (expandable folder cards) */}
+        {/* —— Domains (domain name, expand → same folders as desktop) —— */}
         {domains.map((d) => {
           const isThisDomain = selectedDomain?.id === d.id;
           const liveFolderCounts = unreadCounts.folders[d.id] || {};
           const isCollapsed = collapsedDomains.includes(d.id);
           const domainTotalUnread = unreadCounts.domains[d.id] ?? 0;
-          const label = accountLabel(d);
+          const hasAddresses = (d.addresses || []).some((a) => a.is_active);
+          const addrsExpanded = expandedAddresses.includes(d.id);
 
-          // Build rows for the card
+          // Build folder rows — same set as desktop (folderDefs + catch-all)
           type RowSpec = {
             key: string;
             icon: LucideIcon;
@@ -905,8 +909,7 @@ export function FolderList({
             pinRef?: FavoriteRef;
           };
           const rows: RowSpec[] = [];
-
-          for (const f of mobilePrimaryFolders) {
+          for (const f of folderDefs) {
             const count =
               f.id === "drafts"
                 ? isThisDomain
@@ -929,7 +932,6 @@ export function FolderList({
               },
               pinRef: { kind: "domain-folder", domainId: d.id, folder: f.id },
             });
-
             if (f.id === "inbox" && d.catch_all_enabled && onCatchAllToggle) {
               rows.push({
                 key: "catchall",
@@ -943,46 +945,26 @@ export function FolderList({
             }
           }
 
-          // Secondary folders (Flagged / Archive) — only in edit mode or if active
-          if (editing || (isThisDomain && (activeFolder === "starred" || activeFolder === "archive"))) {
-            for (const f of folderDefs.filter((x) => x.id === "starred" || x.id === "archive")) {
-              if (rows.some((r) => r.key === f.id)) continue;
-              rows.push({
-                key: f.id,
-                icon: f.icon,
-                label: f.label,
-                count: liveFolderCounts[f.id] ?? 0,
-                active:
-                  isThisDomain &&
-                  activeFolder === f.id &&
-                  !selectedAddress &&
-                  !catchAllOnly,
-                onClick: () => {
-                  if (selectedDomain?.id !== d.id) onDomainChange(d);
-                  onFolderChange(f.id);
-                },
-                pinRef: { kind: "domain-folder", domainId: d.id, folder: f.id },
-              });
-            }
-          }
-
           return (
             <div key={d.id}>
-              {/* Section header — tap toggles expand */}
               <button
                 onClick={() => toggleDomainCollapse(d.id)}
                 className="w-full flex items-center gap-2 px-1 mb-1.5 active:opacity-70"
                 style={{ minHeight: 28 }}
               >
+                <div
+                  className="h-2 w-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: getDomainHealthDot(d) }}
+                />
                 <span
-                  className="flex-1 text-left text-[20px] font-bold truncate"
-                  style={{ color: "var(--mc-text)" }}
+                  className="flex-1 text-left text-[13px] font-semibold uppercase tracking-wide truncate"
+                  style={{ color: "var(--mc-text-muted)" }}
                 >
-                  {label}
+                  {d.domain}
                 </span>
                 {domainTotalUnread > 0 && (
                   <span
-                    className="text-[17px] tabular-nums flex-shrink-0"
+                    className="text-[15px] tabular-nums flex-shrink-0"
                     style={{ color: "var(--mc-text-muted)" }}
                   >
                     {domainTotalUnread}
@@ -1005,41 +987,55 @@ export function FolderList({
 
               {!isCollapsed && (
                 <IosGroup>
-                  {rows.map((row, i) => (
-                    <IosRow
-                      key={row.key}
-                      icon={row.icon}
-                      label={row.label}
-                      count={row.count}
-                      active={row.active}
-                      onClick={row.onClick}
-                      last={i === rows.length - 1 && !(d.addresses || []).some((a) => a.is_active && editing)}
-                      trailing={
-                        editing && row.pinRef ? (
-                          <PinButton refItem={row.pinRef} />
-                        ) : undefined
-                      }
-                      showChevron={!editing}
-                    />
-                  ))}
+                  {rows.map((row, i) => {
+                    const isLastFolder = i === rows.length - 1 && !hasAddresses;
+                    return (
+                      <IosRow
+                        key={row.key}
+                        icon={row.icon}
+                        label={row.label}
+                        count={row.count}
+                        active={row.active}
+                        onClick={row.onClick}
+                        last={isLastFolder}
+                        trailing={
+                          editing && row.pinRef ? (
+                            <PinButton refItem={row.pinRef} />
+                          ) : undefined
+                        }
+                        showChevron={!editing}
+                      />
+                    );
+                  })}
 
-                  {/* Addresses (edit / expanded) */}
-                  {(d.addresses || []).some((a) => a.is_active) && (editing || expandedAddresses.includes(d.id)) && (
+                  {hasAddresses && (
                     <>
-                      {!editing && (
-                        <button
-                          onClick={() => toggleAddresses(d.id)}
-                          className="w-full flex items-center gap-2 pl-4 pr-3 text-[13px]"
+                      <button
+                        onClick={() => toggleAddresses(d.id)}
+                        className="w-full flex items-center gap-2 pl-4 pr-3 text-[15px] active:opacity-70 relative"
+                        style={{
+                          minHeight: 44,
+                          color: "var(--mc-text-muted)",
+                        }}
+                      >
+                        <span className="flex-1 text-left">
+                          Addresses ({d.addresses.filter((a) => a.is_active).length})
+                        </span>
+                        {addrsExpanded ? (
+                          <ChevronDown className="h-4 w-4" style={{ color: "var(--mc-text-ghost)" }} />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" style={{ color: "var(--mc-text-ghost)" }} />
+                        )}
+                        <span
+                          className="absolute top-0 right-0 pointer-events-none"
                           style={{
-                            minHeight: 36,
-                            color: "var(--mc-text-muted)",
-                            borderTop: "0.5px solid var(--mc-border)",
+                            left: 50,
+                            height: "0.5px",
+                            backgroundColor: "var(--mc-border)",
                           }}
-                        >
-                          Addresses
-                        </button>
-                      )}
-                      {(editing || expandedAddresses.includes(d.id)) &&
+                        />
+                      </button>
+                      {addrsExpanded &&
                         d.addresses
                           .filter((addr) => addr.is_active)
                           .map((addr, i, arr) => (
@@ -1065,19 +1061,6 @@ export function FolderList({
                             />
                           ))}
                     </>
-                  )}
-                  {!editing && (d.addresses || []).some((a) => a.is_active) && !expandedAddresses.includes(d.id) && (
-                    <button
-                      onClick={() => toggleAddresses(d.id)}
-                      className="w-full flex items-center gap-2 pl-4 pr-3 text-[15px] active:opacity-70"
-                      style={{
-                        minHeight: 44,
-                        color: "var(--mc-accent)",
-                        borderTop: "0.5px solid var(--mc-border)",
-                      }}
-                    >
-                      Show Addresses
-                    </button>
                   )}
                 </IosGroup>
               )}
