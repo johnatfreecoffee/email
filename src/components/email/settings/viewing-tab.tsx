@@ -55,7 +55,7 @@ export function ViewingTab() {
       <SettingsSection title="Reading">
         <SettingsRow
           label="Organize by conversation"
-          description="Group replies into threads (like Apple Mail). Default on."
+          description="Group replies into one row. Click a conversation to open it on the right."
           control={
             <MCSwitch
               checked={v.threadConversations !== false}
@@ -65,7 +65,7 @@ export function ViewingTab() {
         />
         <SettingsRow
           label="Mark messages as read"
-          description="When a message is opened or focused"
+          description="As soon as you land on a row (click or arrows). Immediately is the default."
           control={
             <SelectRow
               value={markReadValue}

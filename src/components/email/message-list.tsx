@@ -16,7 +16,6 @@ import {
   Square,
   MinusSquare,
   ChevronDown,
-  ChevronRight,
   AlertOctagon,
   Eye,
   EyeOff,
@@ -57,6 +56,7 @@ interface MessageListProps {
   onSelectMessage: (msg: EmailMessage) => void;
   onToggleStar: (id: string, starred: boolean) => void;
   onToggleRead?: (id: string, isRead: boolean) => void;
+  selectedThreadKey?: string | null;
   onTrash?: (id: string) => void;
   onArchive?: (id: string) => void;
   onMobileMenuClick: () => void;
@@ -504,6 +504,7 @@ export function MessageList({
   onSelectMessage,
   onToggleStar,
   onToggleRead,
+  selectedThreadKey = null,
   onTrash,
   onArchive,
   onMobileMenuClick,
@@ -620,54 +621,11 @@ export function MessageList({
     [threadingOn, messages]
   );
 
-  /** Expanded conversation keys (Apple Mail disclosure in the list). */
-  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(() => new Set());
-
-  const toggleThreadExpand = useCallback((key: string) => {
-    setExpandedThreads((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
-
-  // Flat list for UI: conversation head + optional expanded children (oldest → newest)
-  // Expand/collapse ONLY via the disclosure control — never auto-expand on row select.
-  // IMPORTANT: never re-add the head as a child (same id would overwrite root flags
-  // in MessageTable's byId map and hide the collapse chevron).
+  // One row per conversation. Thread members open/close in the reader, not here.
   const filtered = useMemo(() => {
     if (!threadCollapse) return messages;
-    const out: EmailMessage[] = [];
-    for (const head of threadCollapse.display) {
-      const key = head.thread_key || threadCollapse.keyById[head.id];
-      const members = (key && threadCollapse.members[key]) || [head];
-      const expanded = !!(key && expandedThreads.has(key));
-      out.push({
-        ...head,
-        thread_key: key,
-        thread_count: members.length,
-        thread_expanded: expanded,
-        is_thread_child: false,
-      });
-      if (expanded && members.length > 1) {
-        const sorted = [...members].sort(
-          (a, b) => +new Date(a.received_at) - +new Date(b.received_at)
-        );
-        for (const m of sorted) {
-          if (m.id === head.id) continue;
-          out.push({
-            ...m,
-            thread_key: key,
-            thread_count: 1,
-            is_thread_child: true,
-            thread_expanded: true,
-          });
-        }
-      }
-    }
-    return out;
-  }, [threadCollapse, messages, expandedThreads]);
+    return threadCollapse.display;
+  }, [threadCollapse, messages]);
 
   const unreadInView = messages.filter((m) => !m.is_read).length;
 
@@ -1083,6 +1041,7 @@ export function MessageList({
           <MessageTable
             messages={filtered}
             selectedId={selectedId}
+            selectedThreadKey={selectedThreadKey}
             focusedIndex={focusedIndex}
             onFocusedIndexChange={onFocusedIndexChange}
             onSelectMessage={onSelectMessage}
@@ -1102,13 +1061,13 @@ export function MessageList({
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
             onDisplayOrderChange={onDisplayOrderChange}
-            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : isDesktop ? (
           <MessageListVirtual
             previewLines={settings.viewing.previewLines}
             messages={filtered}
             selectedId={selectedId}
+            selectedThreadKey={selectedThreadKey}
             focusedIndex={focusedIndex}
             onFocusedIndexChange={onFocusedIndexChange}
             onSelectMessage={onSelectMessage}
@@ -1128,7 +1087,6 @@ export function MessageList({
             loadingMore={loadingMore}
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
-            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : (
           <>
@@ -1139,7 +1097,7 @@ export function MessageList({
                   <MessageRow
                     key={msg.id}
                     msg={msg}
-                    isSelected={selectedId === msg.id}
+                    isSelected={selectedId === msg.id || (!!msg.thread_key && msg.thread_key === selectedThreadKey)}
                     isFocused={focusedIndex === originalIndex}
                     isChecked={selectedIds.has(msg.id)}
                     selectMode={selectMode}

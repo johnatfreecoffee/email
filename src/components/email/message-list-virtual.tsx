@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Star, Paperclip, Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import { Star, Paperclip, Loader2 } from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 import { formatDate, getDateGroup } from "./format";
 
@@ -30,6 +30,7 @@ type Item =
 export interface MessageListVirtualProps {
   messages: EmailMessage[];
   selectedId: string | null;
+  selectedThreadKey?: string | null;
   focusedIndex: number;
   onFocusedIndexChange?: (index: number) => void;
   onSelectMessage: (msg: EmailMessage) => void;
@@ -46,13 +47,12 @@ export interface MessageListVirtualProps {
   onAtTopChange?: (atTop: boolean) => void;
   /** Preview lines under the subject (1 or 2) — drives row height. */
   previewLines?: 1 | 2;
-  /** Expand / collapse a conversation in the list (Apple Mail disclosure). */
-  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 export function MessageListVirtual({
   messages,
   selectedId,
+  selectedThreadKey = null,
   focusedIndex,
   onFocusedIndexChange,
   onSelectMessage,
@@ -68,7 +68,6 @@ export function MessageListVirtual({
   onLoadMore,
   onAtTopChange,
   previewLines = 2,
-  onToggleThreadExpand,
 }: MessageListVirtualProps) {
   const rowHeight = previewLines === 1 ? ROW_HEIGHT_1_LINE : ROW_HEIGHT_2_LINES;
   // Interleave date-group headers with message rows; keep a message-index →
@@ -334,7 +333,7 @@ export function MessageListVirtual({
             }
 
             const { msg, index } = item;
-            const isActive = selectedId === msg.id;
+            const isActive = selectedId === msg.id || (!!msg.thread_key && msg.thread_key === selectedThreadKey);
             const isInSelection = selectedIds.has(msg.id);
             const isFocused = index === focusedIndex;
             const isUnread = !msg.is_read;
@@ -370,52 +369,10 @@ export function MessageListVirtual({
                   backgroundColor: rowBg,
                 }}
               >
-                <div
-                  className="flex h-full"
-                  style={{
-                    paddingLeft: msg.is_thread_child ? 20 : 0,
-                    borderLeft: msg.is_thread_child
-                      ? isActive
-                        ? "2px solid rgba(255,255,255,0.45)"
-                        : "2px solid var(--mc-accent)"
-                      : undefined,
-                  }}
-                >
-                  {/* Disclosure (thread root) — circled chevron; only this expands */}
-                  <div className="w-[24px] flex-shrink-0 flex items-start justify-center pt-[11px]">
-                    {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child ? (
-                      <button
-                        type="button"
-                        className="thread-disclosure flex items-center justify-center rounded-full transition-colors"
-                        style={{
-                          width: 18,
-                          height: 18,
-                          color: isActive ? "#fff" : "var(--mc-text-muted)",
-                          border: isActive
-                            ? "1.5px solid rgba(255,255,255,0.65)"
-                            : "1.5px solid var(--mc-border)",
-                          backgroundColor: isActive
-                            ? "rgba(255,255,255,0.14)"
-                            : "var(--mc-bg-elevated)",
-                        }}
-                        title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
-                        aria-expanded={!!msg.thread_expanded}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
-                        }}
-                      >
-                        {msg.thread_expanded ? (
-                          <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
-                        ) : (
-                          <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
-                        )}
-                      </button>
-                    ) : null}
-                  </div>
+                <div className="flex h-full pl-1">
                   {/* Unread: solid blue · Read: hollow outline */}
                   <div
-                    className="w-[20px] flex-shrink-0 flex items-start justify-center pt-[15px]"
+                    className="w-[28px] flex-shrink-0 flex items-start justify-center pt-[15px] cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggleRead?.(msg.id, msg.is_read);

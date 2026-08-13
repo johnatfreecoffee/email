@@ -29,7 +29,6 @@ import {
   Paperclip,
   ChevronUp,
   ChevronDown,
-  ChevronRight,
   CheckSquare,
   Square,
   MinusSquare,
@@ -137,6 +136,7 @@ function clampNum(n: number, min: number, max: number): number {
 export interface MessageTableProps {
   messages: EmailMessage[];
   selectedId: string | null;
+  selectedThreadKey?: string | null;
   focusedIndex: number;
   onFocusedIndexChange?: (index: number) => void;
   onSelectMessage: (msg: EmailMessage) => void;
@@ -159,8 +159,6 @@ export interface MessageTableProps {
   /** Publishes the display order (parent indices, sorted) so the layout's
    *  global keyboard nav can walk what's visually on screen. */
   onDisplayOrderChange?: (order: number[] | null) => void;
-  /** Expand / collapse a conversation (Apple Mail disclosure). */
-  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 // -------------------- Component --------------------
@@ -168,6 +166,7 @@ export interface MessageTableProps {
 export function MessageTable({
   messages,
   selectedId,
+  selectedThreadKey = null,
   focusedIndex,
   onFocusedIndexChange,
   onSelectMessage,
@@ -183,7 +182,6 @@ export function MessageTable({
   onLoadMore,
   onAtTopChange,
   onDisplayOrderChange,
-  onToggleThreadExpand,
 }: MessageTableProps) {
   // --- Sort state ---
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
@@ -766,7 +764,7 @@ export function MessageTable({
             if (!msg) return null;
             const isFocused = displayIndexByParent.get(focusedIndex) === vItem.index;
             const isInSelection = selectedIds.has(msg.id);
-            const isActive = selectedId === msg.id;
+            const isActive = selectedId === msg.id || (!!msg.thread_key && msg.thread_key === selectedThreadKey);
             return (
               <TableRow
                 key={msg.id}
@@ -782,7 +780,6 @@ export function MessageTable({
                 onToggleSelect={handleToggleSelect}
                 onToggleStar={onToggleStar}
                 onToggleRead={onToggleRead}
-                onToggleThreadExpand={onToggleThreadExpand}
               />
             );
           })}
@@ -897,7 +894,6 @@ interface TableRowProps {
   onToggleSelect: (idx: number, e: React.MouseEvent) => void;
   onToggleStar: (id: string, starred: boolean) => void;
   onToggleRead?: (id: string, isRead: boolean) => void;
-  onToggleThreadExpand?: (threadKey: string) => void;
 }
 
 const TableRow = memo(function TableRow({
@@ -913,12 +909,10 @@ const TableRow = memo(function TableRow({
   onToggleSelect,
   onToggleStar,
   onToggleRead,
-  onToggleThreadExpand,
 }: TableRowProps) {
   const isUnread = !msg.is_read;
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
-  const isThreadRoot = !msg.is_thread_child && (msg.thread_count ?? 0) > 1;
-  const isChild = !!msg.is_thread_child;
+  const isThreadRoot = (msg.thread_count ?? 0) > 1;
 
   // Row background:
   //  - Active (in reader): accent background
@@ -1022,53 +1016,21 @@ const TableRow = memo(function TableRow({
         </button>
       </div>
 
-      {/* From — indent children; disclosure on thread roots */}
+      {/* From */}
       <div
         className="flex items-center h-full min-w-0 px-1 text-[12px] gap-0.5"
         style={{
           width: `${widths.from}px`,
           flex: "0 0 auto",
-          paddingLeft: isChild ? 28 : 4,
+          paddingLeft: 4,
         }}
         role="gridcell"
       >
-        {isThreadRoot ? (
-          <button
-            type="button"
-            className="thread-disclosure flex-shrink-0 flex items-center justify-center rounded-full transition-colors"
-            style={{
-              width: 18,
-              height: 18,
-              color: isActive ? "#fff" : "var(--mc-text-muted)",
-              border: isActive
-                ? "1.5px solid rgba(255,255,255,0.65)"
-                : "1.5px solid var(--mc-border)",
-              backgroundColor: isActive ? "rgba(255,255,255,0.14)" : "var(--mc-bg-elevated)",
-            }}
-            title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
-            aria-expanded={!!msg.thread_expanded}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (msg.thread_key) onToggleThreadExpand?.(msg.thread_key);
-            }}
-          >
-            {msg.thread_expanded ? (
-              <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
-            ) : (
-              <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
-            )}
-          </button>
-        ) : isChild ? (
-          <span className="w-[18px] flex-shrink-0" aria-hidden />
-        ) : (
-          <span className="w-[18px] flex-shrink-0" aria-hidden />
-        )}
         <span
           className="truncate min-w-0"
           style={{
             color: isUnread ? "var(--mc-text)" : "var(--mc-text-secondary)",
             fontWeight: isUnread ? 600 : 400,
-            paddingLeft: isChild ? 10 : 0,
           }}
           title={msg.from_name || msg.from_address}
         >
@@ -1079,7 +1041,7 @@ const TableRow = memo(function TableRow({
       {/* Subject (flex) */}
       <div
         className="flex items-center h-full min-w-0 px-2 text-[12px] gap-1.5"
-        style={{ flex: "1 1 auto", paddingLeft: isChild ? 12 : undefined }}
+        style={{ flex: "1 1 auto" }}
         role="gridcell"
       >
         {isThreadRoot && (

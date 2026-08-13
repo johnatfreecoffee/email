@@ -168,12 +168,24 @@ export function EmailLayout() {
     return globalOn;
   }, [settings.viewing.threadConversations, settings.viewing.threadDomainOverrides, selectedDomain?.id]);
 
+  const threadCollapse = useMemo(() => {
+    if (!threadingOn) return null;
+    return collapseThreads(messages);
+  }, [threadingOn, messages]);
+  const threadCollapseRef = useRef(threadCollapse);
+  useEffect(() => { threadCollapseRef.current = threadCollapse; }, [threadCollapse]);
+
+  const selectedThreadKey = selectedMessage
+    ? (selectedMessage.thread_key || threadKey(selectedMessage))
+    : null;
+
   const selectedThreadMessages = useMemo(() => {
-    if (!selectedMessage || !threadingOn) return undefined;
-    const collapsed = collapseThreads(messages);
-    const key = selectedMessage.thread_key || threadKey(selectedMessage);
-    return collapsed.members[key] || [selectedMessage];
-  }, [selectedMessage, messages, threadingOn]);
+    if (!selectedMessage || !threadCollapse) return undefined;
+    const key = selectedThreadKey || threadKey(selectedMessage);
+    const members = threadCollapse.members[key];
+    if (!members || members.length <= 1) return undefined;
+    return [...members].sort((a, b) => +new Date(a.received_at) - +new Date(b.received_at));
+  }, [selectedMessage, threadCollapse, selectedThreadKey]);
   const [activeFolder, setActiveFolder] = useState("inbox");
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
@@ -516,7 +528,7 @@ export function EmailLayout() {
   const countsReconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleCountsReconcile = useCallback(() => {
     if (countsReconcileTimer.current) clearTimeout(countsReconcileTimer.current);
-    countsReconcileTimer.current = setTimeout(() => fetchUnreadCounts(), 1500);
+    countsReconcileTimer.current = setTimeout(() => fetchUnreadCounts(), 600);
   }, [fetchUnreadCounts]);
 
   // Optimistic count engine. Every mutation reports each affected message as
@@ -566,67 +578,47 @@ export function EmailLayout() {
     scheduleCountsReconcile();
   }, [scheduleCountsReconcile]);
 
-  // Opening a message marks it read after the configured delay (Apple Mail's
-  // "Mark messages as read" setting). null = never; 0 = immediately.
-  const openReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const markReadDelayRef = useRef(markReadDelay);
-  useEffect(() => { markReadDelayRef.current = markReadDelay; }, [markReadDelay]);
-
   // New-mail alert sound (in-app; independent of push). Held in a ref so the
   // poll callback reads the latest setting without being torn down/rebuilt.
   const notifSoundRef = useRef(settings.notifications);
   useEffect(() => { notifSoundRef.current = settings.notifications; }, [settings.notifications]);
 
-  const fetchFullMessage = useCallback(async (id: string) => {
+  const mergeFullMessage = useCallback((id: string, data: EmailMessage) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              body_html: data.body_html,
+              body_text: data.body_text,
+              attachments: data.attachments,
+              preview: data.preview || m.preview,
+            }
+          : m
+      )
+    );
+  }, []);
+
+  const fetchFullMessage = useCallback(async (id: string, opts?: { select?: boolean }) => {
+    const select = opts?.select !== false;
     try {
       const res = await apiFetch(`${API_BASE}/messages?id=${id}`);
       if (res.ok) {
         const data = await res.json();
-        setSelectedMessage(data);
-        if (openReadTimer.current) {
-          clearTimeout(openReadTimer.current);
-          openReadTimer.current = null;
-        }
-        const delay = markReadDelayRef.current;
-        if (!data.is_read && delay !== null) {
-          const markRead = async () => {
-            openReadTimer.current = null;
-            setMessages((prev) =>
-              prev.map((m) => (m.id === id ? { ...m, is_read: true } : m))
-            );
-            setSelectedMessage((prev) => (prev?.id === id ? { ...prev, is_read: true } : prev));
-            applyUnreadTransitions([[data, null]]);
-            await apiFetch(`${API_BASE}/messages`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id, is_read: true }),
-            });
-          };
-          if (delay <= 0) {
-            markRead();
-          } else {
-            openReadTimer.current = setTimeout(markRead, delay * 1000);
-          }
+        mergeFullMessage(id, data);
+        if (select) {
+          setSelectedMessage((prev) => ({
+            ...data,
+            thread_key: prev?.id === id ? prev.thread_key : data.thread_key,
+            thread_count: prev?.id === id ? prev.thread_count : data.thread_count,
+            is_read: prev?.id === id ? prev.is_read : data.is_read,
+          }));
         }
       }
     } catch (e) {
       console.error("Failed to fetch message:", e);
     }
-  }, [applyUnreadTransitions]);
-
-  // Closing the reader before the delay elapses leaves the message unread
-  useEffect(() => {
-    if (!selectedMessage && openReadTimer.current) {
-      clearTimeout(openReadTimer.current);
-      openReadTimer.current = null;
-    }
-    return () => {
-      if (!selectedMessage && openReadTimer.current) {
-        clearTimeout(openReadTimer.current);
-        openReadTimer.current = null;
-      }
-    };
-  }, [selectedMessage]);
+  }, [mergeFullMessage]);
 
   const handleToggleStar = useCallback(async (id: string, starred: boolean) => {
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
@@ -705,19 +697,51 @@ export function EmailLayout() {
       body: JSON.stringify({ ids, ...updates }),
     }), []);
 
+  const membersOf = useCallback((id: string): EmailMessage[] => {
+    const collapse = threadCollapseRef.current;
+    const all = messagesRef.current;
+    const seed = all.find((m) => m.id === id);
+    if (!seed) return [];
+    if (!collapse) return [seed];
+    const key = seed.thread_key || collapse.keyById[id] || threadKey(seed);
+    return collapse.members[key] || [seed];
+  }, []);
+
+  const expandToThreadIds = useCallback((ids: string[]): string[] => {
+    const collapse = threadCollapseRef.current;
+    if (!collapse) return ids;
+    const out = new Set<string>();
+    for (const id of ids) {
+      const key = collapse.keyById[id];
+      const members = key ? collapse.members[key] : null;
+      if (members) members.forEach((m) => out.add(m.id));
+      else out.add(id);
+    }
+    return [...out];
+  }, []);
+
+  const applyReadState = useCallback((ids: string[], nextRead: boolean) => {
+    const idSet = new Set(ids);
+    const toChange = messagesRef.current.filter((m) => idSet.has(m.id) && m.is_read !== nextRead);
+    if (toChange.length === 0) return;
+    applyUnreadTransitions(toChange.map((m) => (nextRead ? [m, null] : [null, m])));
+    const changeIds = new Set(toChange.map((m) => m.id));
+    setMessages((prev) =>
+      prev.map((m) => (changeIds.has(m.id) ? { ...m, is_read: nextRead } : m))
+    );
+    setSelectedMessage((prev) =>
+      prev && changeIds.has(prev.id) ? { ...prev, is_read: nextRead } : prev
+    );
+    void bulkPatch([...changeIds], { is_read: nextRead });
+  }, [applyUnreadTransitions, bulkPatch]);
+
   const handleBulkMarkRead = useCallback(async (ids: string[]) => {
-    const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
-    applyUnreadTransitions(toAdjust.map((m) => [m, null]));
-    setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_read: true } : m));
-    await bulkPatch(ids, { is_read: true });
-  }, [messages, applyUnreadTransitions, bulkPatch]);
+    applyReadState(expandToThreadIds(ids), true);
+  }, [applyReadState, expandToThreadIds]);
 
   const handleBulkMarkUnread = useCallback(async (ids: string[]) => {
-    const toAdjust = messages.filter((m) => ids.includes(m.id) && m.is_read);
-    applyUnreadTransitions(toAdjust.map((m) => [null, m]));
-    setMessages((prev) => prev.map((m) => ids.includes(m.id) ? { ...m, is_read: false } : m));
-    await bulkPatch(ids, { is_read: false });
-  }, [messages, applyUnreadTransitions, bulkPatch]);
+    applyReadState(expandToThreadIds(ids), false);
+  }, [applyReadState, expandToThreadIds]);
 
   const handleBulkTrash = useCallback(async (ids: string[]) => {
     const toAdjust = messages.filter((m) => ids.includes(m.id) && !m.is_read);
@@ -778,26 +802,15 @@ export function EmailLayout() {
     await bulkPatch(ids, { is_spam: false });
   }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
-  const handleToggleRead = useCallback(async (id: string, isRead: boolean) => {
-    // isRead is the CURRENT state; we flip it.
-    const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
-    if (msg) {
-      // unread -> read: leaves the pool. read -> unread: joins it.
-      applyUnreadTransitions([isRead ? [null, msg] : [msg, null]]);
-    }
-    // Optimistic update
-    setMessages((prev) =>
-      prev.map((m) => (m.id === id ? { ...m, is_read: !isRead } : m))
-    );
-    if (selectedMessage?.id === id) {
-      setSelectedMessage((prev) => prev ? { ...prev, is_read: !isRead } : null);
-    }
-    await apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_read: !isRead }),
-    });
-  }, [selectedMessage, messages, applyUnreadTransitions]);
+  const handleToggleRead = useCallback(async (id: string) => {
+    // Flip the whole conversation: any unread → all read; else all unread.
+    const members = membersOf(id);
+    const pool = members.length > 0 ? members : messagesRef.current.filter((m) => m.id === id);
+    const ids = pool.map((m) => m.id);
+    if (ids.length === 0) return;
+    const anyUnread = pool.some((m) => !m.is_read);
+    applyReadState(ids, anyUnread);
+  }, [membersOf, applyReadState]);
 
   // Compose modes
   const [composeMode, setComposeMode] = useState<"new" | "reply" | "reply-all" | "forward">("new");
@@ -926,26 +939,56 @@ export function EmailLayout() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const readerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-mark as read after the configured delay of keyboard focus (like
-  // Apple Mail's "Mark messages as read" preview setting)
+  // Mark the focused conversation read the instant the row is selected
+  // (click or arrows). null = never. 0 = immediately.
   const autoReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (autoReadTimer.current) clearTimeout(autoReadTimer.current);
-    if (markReadDelay === null) return;
+  const selectedIdRef = useRef<string | null>(null);
+  const applyReadStateRef = useRef(applyReadState);
+  const membersOfRef = useRef(membersOf);
+  useEffect(() => { selectedIdRef.current = selectedMessage?.id ?? null; }, [selectedMessage?.id]);
+  useEffect(() => { applyReadStateRef.current = applyReadState; }, [applyReadState]);
+  useEffect(() => { membersOfRef.current = membersOf; }, [membersOf]);
 
-    const currentMessages = activeFolder === "drafts" ? drafts : messages;
-    if (focusedIndex >= 0 && focusedIndex < currentMessages.length) {
-      const msg = currentMessages[focusedIndex];
-      if (msg && !msg.is_read) {
-        autoReadTimer.current = setTimeout(() => {
-          handleToggleRead(msg.id, false); // false = currently unread, will mark read
-        }, Math.max(0, markReadDelay * 1000));
-      }
+  useEffect(() => {
+    if (autoReadTimer.current) {
+      clearTimeout(autoReadTimer.current);
+      autoReadTimer.current = null;
     }
-    return () => {
-      if (autoReadTimer.current) clearTimeout(autoReadTimer.current);
+    if (markReadDelay === null) return;
+    if (!selectedMessage || activeFolder === "drafts") return;
+    const members = membersOfRef.current(selectedMessage.id);
+    const unreadIds = (members.length > 0 ? members : [selectedMessage])
+      .filter((m) => !m.is_read)
+      .map((m) => m.id);
+    if (unreadIds.length === 0) return;
+    const delayMs = Math.max(0, markReadDelay) * 1000;
+    const run = () => {
+      autoReadTimer.current = null;
+      applyReadStateRef.current(unreadIds, true);
     };
-  }, [focusedIndex, activeFolder, drafts, messages, markReadDelay]);
+    if (delayMs <= 0) run();
+    else autoReadTimer.current = setTimeout(run, delayMs);
+    return () => {
+      if (autoReadTimer.current) {
+        clearTimeout(autoReadTimer.current);
+        autoReadTimer.current = null;
+      }
+    };
+    // selectedMessage object is read only when its id changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMessage?.id, markReadDelay, activeFolder]);
+
+  // Arrow-key focus (window handler) opens the row in the reader — same as click.
+  useEffect(() => {
+    if (focusedIndex < 0 || activeFolder === "drafts") return;
+    const list = threadCollapseRef.current?.display ?? messagesRef.current;
+    const msg = list[focusedIndex];
+    if (!msg || selectedIdRef.current === msg.id) return;
+    if (msg.thread_key && selectedThreadKey && msg.thread_key === selectedThreadKey) return;
+    setSelectedMessage(msg);
+    setMobileView("reader");
+    fetchFullMessage(msg.id);
+  }, [focusedIndex, activeFolder, selectedThreadKey, fetchFullMessage]);
 
   // Reset focused index when messages change
   useEffect(() => {
@@ -981,7 +1024,9 @@ export function EmailLayout() {
       }
       if (settingsTarget) return; // settings modal owns its own keys
 
-      const currentMessages = activeFolder === "drafts" ? drafts : messages;
+      const currentMessages = activeFolder === "drafts"
+        ? drafts
+        : (threadCollapseRef.current?.display ?? messages);
 
       switch (e.key) {
         case "ArrowDown":
@@ -1371,6 +1416,7 @@ export function EmailLayout() {
           }}
           onToggleStar={handleToggleStar}
           onToggleRead={handleToggleRead}
+          selectedThreadKey={selectedThreadKey}
           onTrash={handleTrash}
           onArchive={handleArchive}
           onMobileMenuClick={() => setMobileView("folders")}
@@ -1473,6 +1519,7 @@ export function EmailLayout() {
             setMobileView("reader");
             fetchFullMessage(msg.id);
           }}
+          onHydrateMessage={(id) => { void fetchFullMessage(id, { select: false }); }}
           onTrash={handleTrash}
           onArchive={handleArchive}
           onToggleStar={handleToggleStar}

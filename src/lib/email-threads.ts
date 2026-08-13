@@ -13,6 +13,21 @@ export function normalizeSubject(subject: string | null | undefined): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/** Apple Mail-style sender line: "Alice, Bob, Me" in chronological order. */
+export function threadFromLabel(list: EmailMessage[]): string {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const chrono = [...list].sort((a, b) => +new Date(a.received_at) - +new Date(b.received_at));
+  for (const m of chrono) {
+    const label = (m.direction === "outbound" ? "Me" : (m.from_name || m.from_address || "")).trim();
+    const k = label.toLowerCase();
+    if (!label || seen.has(k)) continue;
+    seen.add(k);
+    names.push(label);
+  }
+  return names.join(", ");
+}
+
 export function threadKey(msg: Pick<EmailMessage, "id" | "thread_id" | "subject" | "domain_id">): string {
   if (msg.thread_id) return `t:${msg.thread_id}`;
   const sub = normalizeSubject(msg.subject);
@@ -66,6 +81,7 @@ export function collapseThreads(messages: EmailMessage[]): ThreadCollapse {
     const anyStarred = list.some((m) => m.is_starred);
     const merged: EmailMessage = {
       ...latest,
+      from_name: threadFromLabel(list) || latest.from_name,
       is_read: !anyUnread,
       is_starred: anyStarred || latest.is_starred,
       // surface count for UI

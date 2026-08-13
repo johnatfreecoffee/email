@@ -91,7 +91,7 @@ export const SETTINGS_DEFAULTS: EmailSettings = {
   viewing: {
     desktopView: "stacked",
     showCatchAllInInbox: false,
-    markReadDelaySeconds: 1.5,
+    markReadDelaySeconds: 0,
     previewLines: 2,
     threadConversations: true,
     threadDomainOverrides: {},
@@ -149,7 +149,11 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
         desktopView: r.desktopView === "columns" ? "columns" : "stacked",
         showCatchAllInInbox: bool(r.showCatchAllInInbox, false),
         markReadDelaySeconds:
-          r.markReadDelaySeconds === null ? null : num(r.markReadDelaySeconds, 1.5),
+          r.markReadDelaySeconds === null
+            ? null
+            : r.markReadDelaySeconds === 1.5
+              ? 0 // old default → instant (John: speed is key)
+              : num(r.markReadDelaySeconds, 0),
         previewLines: r.previewLines === 1 ? 1 : 2,
         // Default ON (Apple Mail). Only false when explicitly set.
         threadConversations: r.threadConversations === false ? false : true,

@@ -2,6 +2,8 @@
 
 import {
   ChevronLeft,
+  ChevronDown,
+  ChevronRight,
   Reply,
   ReplyAll,
   Forward,
@@ -18,7 +20,7 @@ import {
   AlertOctagon,
   Shield,
 } from "lucide-react";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { EmailMessage } from "./email-layout";
 import { useSettings } from "@/lib/settings";
 import { stripRemoteContent } from "./remote-content";
@@ -41,6 +43,8 @@ interface MessageReaderProps {
   onBack: () => void;
   /** Jump to another message in the thread */
   onSelectThreadMessage?: (msg: EmailMessage) => void;
+  /** Fetch full body without changing the selected row. */
+  onHydrateMessage?: (id: string) => void;
   /** Label for the mobile back button (the mailbox you came from). */
   backLabel?: string;
 }
@@ -189,6 +193,7 @@ export function MessageReader({
   onToggleRead,
   onBack,
   onSelectThreadMessage,
+  onHydrateMessage,
   backLabel,
 }: MessageReaderProps) {
   if (!message) {
@@ -214,7 +219,7 @@ export function MessageReader({
 
   return (
     <MessageReaderBody
-      key={message.id}
+      key={thread && thread.length > 1 ? `conv:${thread[0].id}:${thread.length}` : message.id}
       message={message}
       thread={thread}
       toList={toList}
@@ -230,6 +235,7 @@ export function MessageReader({
       onToggleRead={onToggleRead}
       onBack={onBack}
       onSelectThreadMessage={onSelectThreadMessage}
+      onHydrateMessage={onHydrateMessage}
       backLabel={backLabel}
     />
   );
@@ -251,6 +257,7 @@ function MessageReaderBody({
   onToggleRead,
   onBack,
   onSelectThreadMessage,
+  onHydrateMessage,
   backLabel,
 }: {
   message: EmailMessage;
@@ -261,7 +268,7 @@ function MessageReaderBody({
 } & Omit<MessageReaderProps, "message" | "threadMessages">) {
   // Mail-style collapsed recipient line with a Details toggle
   const [showDetails, setShowDetails] = useState(false);
-  const [threadOpen, setThreadOpen] = useState(true);
+  const isConversation = !!(thread && thread.length > 1);
 
   // Remote-content blocking (privacy setting). Reveal is per message id,
   // session-only — navigate away and back keeps it revealed; reload re-blocks.
@@ -338,53 +345,18 @@ function MessageReaderBody({
         />
       </div>
 
-      {/* Conversation thread (when multiple messages share a thread) */}
-      {thread && thread.length > 1 && (
-        <div style={{ borderBottom: "1px solid var(--mc-border)" }}>
-          <button
-            type="button"
-            onClick={() => setThreadOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-4 py-2 text-[12px] font-medium"
-            style={{ color: "var(--mc-text-muted)" }}
-          >
-            <span>
-              {thread.length} messages in conversation
-            </span>
-            <span style={{ color: "var(--mc-accent)" }}>{threadOpen ? "Hide" : "Show"}</span>
-          </button>
-          {threadOpen && (
-            <div className="px-3 pb-2 max-h-40 overflow-y-auto space-y-0.5">
-              {thread.map((m) => {
-                const active = m.id === message.id;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => onSelectThreadMessage?.(m)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[12px] transition-colors"
-                    style={{
-                      backgroundColor: active ? "var(--mc-accent-bg)" : "transparent",
-                      color: active ? "var(--mc-accent)" : "var(--mc-text-secondary)",
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium truncate flex-1">
-                        {m.from_name || m.from_address}
-                        {m.direction === "outbound" ? " (you)" : ""}
-                      </span>
-                      <span className="text-[10px] flex-shrink-0 tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
-                        {formatReaderDate(m.received_at)}
-                      </span>
-                    </div>
-                    <div className="truncate opacity-80">{m.subject || "(no subject)"}</div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
+      {isConversation && thread ? (
+        <ConversationStack
+          thread={thread}
+          activeId={message.id}
+          onSelect={onSelectThreadMessage}
+          onHydrate={onHydrateMessage}
+          onReply={onReply}
+          onReplyAll={onReplyAll}
+          onForward={onForward}
+        />
+      ) : (
+        <>
       {/* Message header */}
       <div className="px-6 py-4" style={{ borderBottom: "1px solid var(--mc-border)" }}>
         <div className="flex items-start gap-3">
@@ -683,8 +655,10 @@ function MessageReaderBody({
           </pre>
         )}
       </div>
+        </>
+      )}
 
-      {/* Bottom reply bar */}
+      {/* Bottom reply bar — conversation + single */}
       <div className="px-6 py-3 flex items-center gap-2" style={{ borderTop: "1px solid var(--mc-border)" }}>
         <button
           onClick={() => onReply(message)}
@@ -746,6 +720,265 @@ function MessageReaderBody({
           Forward
         </button>
       </div>
+    </div>
+  );
+}
+
+function ConversationStack({
+  thread,
+  activeId,
+  onSelect,
+  onHydrate,
+  onReply,
+  onReplyAll,
+  onForward,
+}: {
+  thread: EmailMessage[];
+  activeId: string;
+  onSelect?: (msg: EmailMessage) => void;
+  onHydrate?: (id: string) => void;
+  onReply: (msg: EmailMessage) => void;
+  onReplyAll: (msg: EmailMessage) => void;
+  onForward: (msg: EmailMessage) => void;
+}) {
+  const latest = thread[thread.length - 1];
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    const s = new Set<string>();
+    for (const m of thread) if (!m.is_read) s.add(m.id);
+    s.add(latest.id);
+    return s;
+  });
+  const asked = useRef(new Set<string>());
+
+  useEffect(() => {
+    for (const m of thread) {
+      if (!expanded.has(m.id) || m.body_html || asked.current.has(m.id)) continue;
+      asked.current.add(m.id);
+      onHydrate?.(m.id);
+    }
+  }, [thread, expanded, onHydrate]);
+
+  const toggle = (m: EmailMessage) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(m.id)) next.delete(m.id);
+      else next.add(m.id);
+      return next;
+    });
+    onSelect?.(m);
+  };
+
+  return (
+    <>
+      <div className="px-6 pt-4 pb-2" style={{ borderBottom: "1px solid var(--mc-border-subtle)" }}>
+        <h1 className="text-[16px] font-semibold" style={{ color: "var(--mc-text)" }}>
+          {latest.subject || "(no subject)"}
+        </h1>
+        <p className="text-[11px] mt-0.5" style={{ color: "var(--mc-text-faint)" }}>
+          {thread.length} messages
+        </p>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+        {thread.map((m) => (
+          <ConversationCard
+            key={m.id}
+            msg={m}
+            expanded={expanded.has(m.id)}
+            active={m.id === activeId}
+            onToggle={() => toggle(m)}
+            onReply={() => onReply(m)}
+            onReplyAll={() => onReplyAll(m)}
+            onForward={() => onForward(m)}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ConversationCard({
+  msg,
+  expanded,
+  active,
+  onToggle,
+  onReply,
+  onReplyAll,
+  onForward,
+}: {
+  msg: EmailMessage;
+  expanded: boolean;
+  active: boolean;
+  onToggle: () => void;
+  onReply: () => void;
+  onReplyAll: () => void;
+  onForward: () => void;
+}) {
+  const { settings } = useSettings();
+  const [revealed, setRevealed] = useState(() => revealedRemote.has(msg.id));
+  const [showDetails, setShowDetails] = useState(false);
+  const unread = !msg.is_read;
+  const toList = Array.isArray(msg.to_addresses) ? msg.to_addresses : [String(msg.to_addresses || "")];
+  const blockActive = settings.privacy.blockRemoteContent && !revealed && !!msg.body_html;
+  const { html: displayHtml, blocked } = useMemo(() => {
+    if (!msg.body_html) return { html: "", blocked: 0 };
+    if (!blockActive) return { html: msg.body_html, blocked: 0 };
+    return stripRemoteContent(msg.body_html);
+  }, [msg.body_html, blockActive]);
+
+  const snippet = (msg.preview || msg.body_text || "").replace(/\s+/g, " ").trim();
+
+  return (
+    <div
+      className="rounded-xl overflow-hidden"
+      style={{
+        backgroundColor: "var(--mc-bg-elevated)",
+        border: active ? "1px solid var(--mc-accent)" : "1px solid var(--mc-border)",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-start gap-3 px-3.5 py-2.5 text-left"
+      >
+        <div
+          className="h-8 w-8 rounded-full flex items-center justify-center text-[13px] font-semibold flex-shrink-0 mt-0.5"
+          style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}
+        >
+          {(msg.from_name || msg.from_address)[0]?.toUpperCase() || "?"}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            {unread && (
+              <span
+                className="h-2 w-2 rounded-full flex-shrink-0"
+                style={{ backgroundColor: "var(--mc-accent)" }}
+              />
+            )}
+            <span
+              className="truncate text-[13px] flex-1"
+              style={{ color: "var(--mc-text)", fontWeight: unread ? 600 : 500 }}
+            >
+              {msg.direction === "outbound" ? "Me" : (msg.from_name || msg.from_address)}
+            </span>
+            <span className="text-[11px] flex-shrink-0 tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
+              {formatReaderDate(msg.received_at)}
+            </span>
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
+            )}
+          </div>
+          {!expanded && (
+            <p className="text-[12px] truncate mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+              {snippet || "(no preview)"}
+            </p>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-3.5 pb-3">
+          <button
+            type="button"
+            onClick={() => setShowDetails((v) => !v)}
+            className="text-[12px] mb-2"
+            style={{ color: "var(--mc-text-muted)" }}
+          >
+            To: {toList.map((a) => a.replace(/\s*<.*>$/, "")).join(", ") || "—"}
+            <span className="ml-1.5" style={{ color: "var(--mc-accent)" }}>
+              {showDetails ? "Hide" : "Details"}
+            </span>
+          </button>
+          {showDetails && (
+            <div className="text-[12px] mb-2 space-y-0.5" style={{ color: "var(--mc-text-muted)" }}>
+              <div>From: {msg.from_name ? `${msg.from_name} <${msg.from_address}>` : msg.from_address}</div>
+              <div>To: {toList.join(", ")}</div>
+            </div>
+          )}
+
+          {blockActive && blocked > 0 && (
+            <div
+              className="flex items-center gap-2 px-2 py-1.5 mb-2 text-[12px] rounded-md"
+              style={{ backgroundColor: "var(--mc-bg-hover)", color: "var(--mc-text-muted)" }}
+            >
+              <Shield className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1">Remote content blocked</span>
+              <button
+                type="button"
+                onClick={() => {
+                  revealedRemote.add(msg.id);
+                  setRevealed(true);
+                }}
+                className="font-medium"
+                style={{ color: "var(--mc-accent)" }}
+              >
+                Load
+              </button>
+            </div>
+          )}
+
+          {msg.body_html ? (
+            <iframe
+              srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.6;color:#1a1a1a!important;background:#fff!important;margin:0;padding:4px;word-wrap:break-word}a{color:#007AFF!important}img{max-width:100%;height:auto}blockquote{border-left:3px solid #d1d5db;margin:.5em 0;padding:.25em 1em;color:#6b7280!important}</style></head><body>${displayHtml}</body></html>`}
+              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              className="w-full min-h-[120px] rounded-md"
+              style={{ background: "#fff", border: "1px solid var(--mc-border-subtle)" }}
+              onLoad={(e) => {
+                const iframe = e.target as HTMLIFrameElement;
+                const doc = iframe.contentDocument;
+                if (!doc) return;
+                const openExternal = (href: string) => {
+                  if (!href || href.startsWith("javascript:") || href.startsWith("data:")) return;
+                  window.open(href, "_blank", "noopener,noreferrer");
+                };
+                doc.querySelectorAll("a[href]").forEach((node) => {
+                  const a = node as HTMLAnchorElement;
+                  a.setAttribute("target", "_blank");
+                  a.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    openExternal(a.href);
+                  }, true);
+                });
+                iframe.style.height = (doc.body?.scrollHeight || 120) + 16 + "px";
+              }}
+            />
+          ) : (
+            <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed" style={{ color: "var(--mc-text-secondary)" }}>
+              {msg.body_text || "Loading…"}
+            </pre>
+          )}
+
+          <div className="flex items-center gap-2 mt-3">
+            <button
+              type="button"
+              onClick={onReply}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px]"
+              style={{ backgroundColor: "var(--mc-bg-hover)", color: "var(--mc-text-secondary)" }}
+            >
+              <Reply className="h-3 w-3" /> Reply
+            </button>
+            <button
+              type="button"
+              onClick={onReplyAll}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px]"
+              style={{ backgroundColor: "var(--mc-bg-hover)", color: "var(--mc-text-secondary)" }}
+            >
+              <ReplyAll className="h-3 w-3" /> Reply All
+            </button>
+            <button
+              type="button"
+              onClick={onForward}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px]"
+              style={{ backgroundColor: "var(--mc-bg-hover)", color: "var(--mc-text-secondary)" }}
+            >
+              <Forward className="h-3 w-3" /> Forward
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
