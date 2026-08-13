@@ -802,7 +802,7 @@ export function EmailLayout() {
     await bulkPatch(ids, { is_spam: false });
   }, [selectedMessage, messages, applyUnreadTransitions, bulkPatch]);
 
-  const handleToggleRead = useCallback(async (id: string) => {
+  const handleToggleRead = useCallback(async (id: string, _isRead?: boolean) => {
     // Flip the whole conversation: any unread → all read; else all unread.
     const members = membersOf(id);
     const pool = members.length > 0 ? members : messagesRef.current.filter((m) => m.id === id);
