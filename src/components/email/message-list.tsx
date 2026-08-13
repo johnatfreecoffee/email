@@ -57,6 +57,8 @@ interface MessageListProps {
   onToggleStar: (id: string, starred: boolean) => void;
   onToggleRead?: (id: string, isRead: boolean) => void;
   selectedThreadKey?: string | null;
+  /** Flattened list (heads + expanded children) for parent keyboard nav. */
+  onDisplayListChange?: (list: EmailMessage[]) => void;
   onTrash?: (id: string) => void;
   onArchive?: (id: string) => void;
   onMobileMenuClick: () => void;
@@ -505,6 +507,7 @@ export function MessageList({
   onToggleStar,
   onToggleRead,
   selectedThreadKey = null,
+  onDisplayListChange,
   onTrash,
   onArchive,
   onMobileMenuClick,
@@ -621,11 +624,55 @@ export function MessageList({
     [threadingOn, messages]
   );
 
-  // One row per conversation. Thread members open/close in the reader, not here.
+  const [expandedThreads, setExpandedThreads] = useState<Set<string>>(() => new Set());
+
+  const toggleThreadExpand = useCallback((key: string) => {
+    setExpandedThreads((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Conversation head + optional expanded children (oldest → newest).
+  // Expand/collapse ONLY via the disclosure control — never auto-expand on select.
   const filtered = useMemo(() => {
     if (!threadCollapse) return messages;
-    return threadCollapse.display;
-  }, [threadCollapse, messages]);
+    const out: EmailMessage[] = [];
+    for (const head of threadCollapse.display) {
+      const key = head.thread_key || threadCollapse.keyById[head.id];
+      const members = (key && threadCollapse.members[key]) || [head];
+      const expanded = !!(key && expandedThreads.has(key));
+      out.push({
+        ...head,
+        thread_key: key,
+        thread_count: members.length,
+        thread_expanded: expanded,
+        is_thread_child: false,
+      });
+      if (expanded && members.length > 1) {
+        const sorted = [...members].sort(
+          (a, b) => +new Date(a.received_at) - +new Date(b.received_at)
+        );
+        for (const m of sorted) {
+          if (m.id === head.id) continue;
+          out.push({
+            ...m,
+            thread_key: key,
+            thread_count: 1,
+            is_thread_child: true,
+            thread_expanded: true,
+          });
+        }
+      }
+    }
+    return out;
+  }, [threadCollapse, messages, expandedThreads]);
+
+  useEffect(() => {
+    onDisplayListChange?.(filtered);
+  }, [filtered, onDisplayListChange]);
 
   const unreadInView = messages.filter((m) => !m.is_read).length;
 
@@ -1061,6 +1108,7 @@ export function MessageList({
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
             onDisplayOrderChange={onDisplayOrderChange}
+            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : isDesktop ? (
           <MessageListVirtual
@@ -1087,6 +1135,7 @@ export function MessageList({
             loadingMore={loadingMore}
             onLoadMore={onLoadMore}
             onAtTopChange={onAtTopChange}
+            onToggleThreadExpand={toggleThreadExpand}
           />
         ) : (
           <>

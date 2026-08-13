@@ -174,6 +174,10 @@ export function EmailLayout() {
   }, [threadingOn, messages]);
   const threadCollapseRef = useRef(threadCollapse);
   useEffect(() => { threadCollapseRef.current = threadCollapse; }, [threadCollapse]);
+  const navListRef = useRef<EmailMessage[]>([]);
+  const handleDisplayListChange = useCallback((list: EmailMessage[]) => {
+    navListRef.current = list;
+  }, []);
 
   const selectedThreadKey = selectedMessage
     ? (selectedMessage.thread_key || threadKey(selectedMessage))
@@ -981,7 +985,9 @@ export function EmailLayout() {
   // Arrow-key focus (window handler) opens the row in the reader — same as click.
   useEffect(() => {
     if (focusedIndex < 0 || activeFolder === "drafts") return;
-    const list = threadCollapseRef.current?.display ?? messagesRef.current;
+    const list = navListRef.current.length
+      ? navListRef.current
+      : (threadCollapseRef.current?.display ?? messagesRef.current);
     const msg = list[focusedIndex];
     if (!msg || selectedIdRef.current === msg.id) return;
     if (msg.thread_key && selectedThreadKey && msg.thread_key === selectedThreadKey) return;
@@ -1026,7 +1032,7 @@ export function EmailLayout() {
 
       const currentMessages = activeFolder === "drafts"
         ? drafts
-        : (threadCollapseRef.current?.display ?? messages);
+        : (navListRef.current.length ? navListRef.current : (threadCollapseRef.current?.display ?? messages));
 
       switch (e.key) {
         case "ArrowDown":
@@ -1417,6 +1423,7 @@ export function EmailLayout() {
           onToggleStar={handleToggleStar}
           onToggleRead={handleToggleRead}
           selectedThreadKey={selectedThreadKey}
+          onDisplayListChange={handleDisplayListChange}
           onTrash={handleTrash}
           onArchive={handleArchive}
           onMobileMenuClick={() => setMobileView("folders")}
