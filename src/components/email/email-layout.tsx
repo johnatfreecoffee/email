@@ -973,6 +973,8 @@ export function EmailLayout() {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      // Let browser chords through (⌘R refresh, ⌘⇧R hard refresh).
+      if (e.metaKey || e.ctrlKey) return;
       if (showCompose) {
         if (e.key === "Escape") closeCompose();
         return;
@@ -1031,14 +1033,16 @@ export function EmailLayout() {
           break;
         }
         case "r": {
-          if (selectedMessage) {
+          // Plain `r` only — ⌘R / ⌘⇧R stay with the browser.
+          if (!e.shiftKey && selectedMessage) {
             e.preventDefault();
             openCompose("reply", selectedMessage);
           }
           break;
         }
         case "R": {
-          if (selectedMessage) {
+          // Shift+R reply-all. Skip if any other modifier (⌘⇧R = hard refresh).
+          if (e.shiftKey && !e.altKey && selectedMessage) {
             e.preventDefault();
             openCompose("reply-all", selectedMessage);
           }
