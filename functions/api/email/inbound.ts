@@ -4,6 +4,13 @@ import { classifySpam, SPAM_FOLDER } from "./_spam";
 import { readSetting, SETTINGS_DEFAULTS } from "./_settings";
 import { fetchActiveRules, applyRuleActions, type DeliveryState } from "./_rules";
 import { resolveThreadId } from "./_thread";
+import {
+  AGENT_FOLDER,
+  agentDisplayName,
+  isAgentLocal,
+  isAgentRecipient,
+  localPartOf,
+} from "./_agent";
 
 interface CFContext {
   request: Request;
@@ -256,6 +263,8 @@ async function handleEmailSent(
     threadId = crypto.randomUUID();
   }
 
+  const sentFolder = isAgentLocal(fromLocal) ? AGENT_FOLDER : "sent";
+
   await supabaseQuery(env, "/email_messages", {
     method: "POST",
     body: {
@@ -275,7 +284,7 @@ async function handleEmailSent(
       in_reply_to: getHeader(headers, "in-reply-to"),
       thread_id: threadId,
       is_read: true,
-      folder: "sent",
+      folder: sentFolder,
       received_at: createdAt,
     },
   });
@@ -377,6 +386,47 @@ export const onRequest = async (context: CFContext) => {
     return new Response("OK", { status: 200 });
   }
 
+  const matchedLocal =
+    (matchedAddress as { address?: string } | null | undefined)?.address ||
+    localPartOf(toAddresses[0] || "");
+  const isAgent = isAgentRecipient(toAddresses, matchedLocal);
+
+  // Agent mail is never catch-all, even if the local-part wasn't provisioned yet.
+  if (isAgent) {
+    isCatchAll = false;
+    if (!matchedAddress) {
+      const wantLocal = localPartOf(
+        (toAddresses || []).find((a) => isAgentLocal(localPartOf(a))) || toAddresses[0] || ""
+      );
+      if (wantLocal) {
+        try {
+          const existing = await supabaseQuery(
+            env,
+            `/email_addresses?domain_id=eq.${matchedDomain.id}&address=eq.${wantLocal}&limit=1`
+          );
+          if (existing.ok && Array.isArray(existing.data) && existing.data[0]) {
+            matchedAddress = existing.data[0];
+          } else {
+            const created = await supabaseQuery(env, "/email_addresses", {
+              method: "POST",
+              body: {
+                domain_id: matchedDomain.id,
+                address: wantLocal,
+                display_name: agentDisplayName(wantLocal),
+                is_active: true,
+              },
+            });
+            if (created.ok && Array.isArray(created.data) && created.data[0]) {
+              matchedAddress = created.data[0];
+            }
+          }
+        } catch (e) {
+          console.error("ensure agent address failed (non-fatal):", e);
+        }
+      }
+    }
+  }
+
   // Prepend catch-all prefix
   let finalSubject = subject;
   if (isCatchAll && matchedDomain.catch_all_subject_prefix) {
@@ -405,23 +455,28 @@ export const onRequest = async (context: CFContext) => {
   ]);
 
   // Spam classification — heuristics + free LLM. Falls back gracefully if
-  // OpenRouter is unavailable; never fails the webhook.
+  // OpenRouter is unavailable; never fails the webhook. Agent jobs skip
+  // junk entirely so a coding email never lands in spam.
   let spamVerdict;
-  try {
-    spamVerdict = await classifySpam(
-      {
-        subject: finalSubject,
-        body_text: bodyText,
-        from_address: fromAddress.toLowerCase().trim(),
-        headers,
-        is_catch_all: isCatchAll,
-      },
-      env,
-      junkSettings
-    );
-  } catch (e) {
-    console.error("Spam classifier threw (non-fatal):", e);
-    spamVerdict = { is_spam: false, score: 0, reason: "classifier_error" };
+  if (isAgent) {
+    spamVerdict = { is_spam: false, score: 0, reason: "agent_mailbox" };
+  } else {
+    try {
+      spamVerdict = await classifySpam(
+        {
+          subject: finalSubject,
+          body_text: bodyText,
+          from_address: fromAddress.toLowerCase().trim(),
+          headers,
+          is_catch_all: isCatchAll,
+        },
+        env,
+        junkSettings
+      );
+    } catch (e) {
+      console.error("Spam classifier threw (non-fatal):", e);
+      spamVerdict = { is_spam: false, score: 0, reason: "classifier_error" };
+    }
   }
 
   // Delivery rules run AFTER classification and may override it (an explicit
@@ -451,6 +506,17 @@ export const onRequest = async (context: CFContext) => {
     }
   } catch (e) {
     console.error("Rules pass threw (non-fatal):", e);
+  }
+
+  // Agent mail: dedicated folder, always read, never catch-all / junk / push.
+  // Last-writer after rules so a user rule cannot bounce them back to inbox.
+  if (isAgent) {
+    delivery.folder = AGENT_FOLDER;
+    delivery.is_read = true;
+    delivery.is_spam = false;
+    delivery.is_trash = false;
+    delivery.is_archived = false;
+    isCatchAll = false;
   }
 
   // Conversation thread (Apple Mail–style grouping)
@@ -600,26 +666,9 @@ export const onRequest = async (context: CFContext) => {
     !delivery.is_trash &&
     !delivery.is_archived;
 
-  // Agent Mail addresses (a.main@, a.noknok@, …) never push — John sends
-  // those as engineering jobs; pings on every outbound-to-agent are noise.
-  // Still store the message so the worker can process it.
-  const isAgentLocal = (local: string | null | undefined) =>
-    !!local && /^a\./i.test(String(local).trim());
-  const matchedLocal =
-    (matchedAddress as { address?: string } | null | undefined)?.address ||
-    null;
-  if (shouldNotify && isAgentLocal(matchedLocal)) {
-    shouldNotify = false;
-  }
-  if (shouldNotify) {
-    for (const raw of toAddresses || []) {
-      const local = String(raw).split("@")[0] || "";
-      if (isAgentLocal(local)) {
-        shouldNotify = false;
-        break;
-      }
-    }
-  }
+  // Agent Mail (a.* / e.*) never push — jobs stay silent. Worker still
+  // processes the stored row the same way.
+  if (shouldNotify && isAgent) shouldNotify = false;
 
   // Optional: users can silence push for catch-all mail (still delivered and
   // counted, just no ping). Only query settings when it could matter.

@@ -13,6 +13,7 @@ import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { playNotificationSound } from "@/lib/notification-sound";
 import { collapseThreads, threadKey } from "@/lib/email-threads";
+import { AGENT_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 
 const API_BASE = "/api/email";
 
@@ -100,6 +101,7 @@ const FOLDER_LABELS: Record<string, string> = {
   archive: "Archive",
   starred: "Starred",
   all: "All Mail",
+  agent: "Agents",
 };
 
 // Unread counts shape returned by /api/email/unread-counts
@@ -132,6 +134,7 @@ type CountMsg = Pick<EmailMessage, "domain_id" | "folder"> & {
 // archive → spam → sent → inbox (catch-all split) → catchall. Starred is
 // additive on top, trash is its own world — both handled by the applier.
 function primaryBucket(m: CountMsg): "archive" | "spam" | "sent" | "catchall" | "inbox" | null {
+  if (m.folder === AGENT_FOLDER) return null;
   if (m.is_archived) return "archive";
   if (m.folder === "spam" || m.is_spam) return "spam";
   if (m.folder === "sent") return "sent";
@@ -407,7 +410,7 @@ export function EmailLayout() {
           if (
             fresh.length > 0 &&
             notifSoundRef.current.soundOnNewEmail &&
-            fresh.some((m) => m.direction === "inbound" && !m.is_spam)
+            fresh.some((m) => m.direction === "inbound" && !m.is_spam && m.folder !== AGENT_FOLDER)
           ) {
             playNotificationSound(notifSoundRef.current.sound);
           }
@@ -1199,7 +1202,24 @@ export function EmailLayout() {
             setMobileView("list");
             isFirstFetch.current = true;
             setScrollResetSignal((n) => n + 1);
+            if (f !== AGENT_FOLDER) {
+              setSelectedAddress((prev) => {
+                const addr = selectedDomain?.addresses?.find((a) => a.id === prev);
+                return addr && isAgentAddress(addr) ? null : prev;
+              });
+            }
             if (f === "drafts") fetchDrafts();
+          }}
+          onAgentOpen={(domain, addressId) => {
+            setSelectedDomain(domain);
+            setSelectedAddress(addressId);
+            setActiveFolder(AGENT_FOLDER);
+            setCatchAllOnly(false);
+            setActiveFilter("all");
+            setSelectedMessage(null);
+            setMobileView("list");
+            isFirstFetch.current = true;
+            setScrollResetSignal((n) => n + 1);
           }}
           domains={domains}
           selectedDomain={selectedDomain}
@@ -1213,7 +1233,7 @@ export function EmailLayout() {
               try {
                 if (typeof window !== "undefined") {
                   const saved = localStorage.getItem(`mc.email.address.${d.id}`);
-                  if (saved && (d.addresses || []).some((a) => a.id === saved && a.is_active)) {
+                  if (saved && (d.addresses || []).some((a) => a.id === saved && a.is_active && !isAgentAddress(a))) {
                     restored = saved;
                   }
                 }

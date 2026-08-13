@@ -86,6 +86,8 @@ export const onRequest = async (context: CFContext) => {
 
   for (const r of unreadRows) {
     if (!r.domain_id) continue;
+    // Agent folders are silent — never contribute to inbox/domain badges.
+    if (r.folder === "agent") continue;
     if (!folders[r.domain_id]) {
       folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0 };
       domains[r.domain_id] = 0;

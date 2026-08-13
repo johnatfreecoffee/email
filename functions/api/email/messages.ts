@@ -104,11 +104,13 @@ export const onRequest = async (context: CFContext) => {
     if (countOnly) {
       let countPath = `/email_messages?select=id${hasAttachments ? ",attachments:email_attachments!inner(id)" : ""}`;
       if (folder === "starred") {
-        countPath += "&is_starred=eq.true&is_trash=eq.false";
+        countPath += "&is_starred=eq.true&is_trash=eq.false&folder=neq.agent";
       } else if (folder === "trash") {
         countPath += "&is_trash=eq.true";
       } else if (folder === "all") {
-        countPath += "&is_trash=eq.false";
+        countPath += "&is_trash=eq.false&folder=neq.agent";
+      } else if (folder === "agent") {
+        countPath += "&folder=eq.agent&is_trash=eq.false";
       } else {
         countPath += `&folder=eq.${folder}&is_trash=eq.false&is_archived=eq.false`;
       }
@@ -159,13 +161,16 @@ export const onRequest = async (context: CFContext) => {
     // !inner embed doubles as a "has at least one attachment" filter.
     if (hasAttachments) path += `,attachments:email_attachments!inner(id,filename,content_type,size_bytes)`;
 
-    // Apply folder filter
+    // Apply folder filter. Agent mail (folder=agent) is excluded from every
+    // normal view — inbox, All Mail, flagged — and only appears in Agents.
     if (folder === "starred") {
-      path += "&is_starred=eq.true&is_trash=eq.false";
+      path += "&is_starred=eq.true&is_trash=eq.false&folder=neq.agent";
     } else if (folder === "trash") {
       path += "&is_trash=eq.true";
     } else if (folder === "all") {
-      path += "&is_trash=eq.false";
+      path += "&is_trash=eq.false&folder=neq.agent";
+    } else if (folder === "agent") {
+      path += "&folder=eq.agent&is_trash=eq.false";
     } else {
       path += `&folder=eq.${folder}&is_trash=eq.false&is_archived=eq.false`;
     }

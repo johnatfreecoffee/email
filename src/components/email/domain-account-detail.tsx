@@ -371,11 +371,11 @@ export function DomainAccountDetail({ domain, onRefresh, onDeleted, initialSegme
             <div className="text-[13px]" style={{ color: "var(--mc-text-faint)" }}>No addresses yet.</div>
           ) : (
             <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
-              {localAddresses.map((addr, i) => (
+              {localAddresses.filter((a) => !/^[ae]\./i.test(a.address)).map((addr, i, arr) => (
                 <div
                   key={addr.id}
                   className="flex items-center justify-between px-3 py-2"
-                  style={{ borderBottom: i === localAddresses.length - 1 ? "none" : "1px solid var(--mc-border-subtle)" }}
+                  style={{ borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)" }}
                 >
                   <div className="min-w-0">
                     <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
@@ -405,6 +405,52 @@ export function DomainAccountDetail({ domain, onRefresh, onDeleted, initialSegme
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+          {localAddresses.some((a) => /^[ae]\./i.test(a.address)) && (
+            <div className="mt-4">
+              <div className="text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+                Agent mailboxes
+              </div>
+              <div className="text-[11px] mb-2" style={{ color: "var(--mc-text-muted)" }}>
+                Hidden from inbox, catch-all, and All Mail. Live under Agents in the sidebar.
+              </div>
+              <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+                {localAddresses.filter((a) => /^[ae]\./i.test(a.address)).map((addr, i, arr) => (
+                  <div
+                    key={addr.id}
+                    className="flex items-center justify-between px-3 py-2"
+                    style={{ borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)" }}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
+                        {addr.address}@{domain.domain}
+                      </div>
+                      {addr.display_name && (
+                        <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{addr.display_name}</div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => setEditing({ id: addr.id, local: addr.address, display: addr.display_name || "" })}
+                        className="p-1.5 rounded-md"
+                        style={{ color: "var(--mc-text-muted)" }}
+                        title="Edit"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete({ id: addr.id, email: `${addr.address}@${domain.domain}` })}
+                        className="p-1.5 rounded-md"
+                        style={{ color: "var(--mc-danger)" }}
+                        title="Delete"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -457,7 +503,7 @@ export function DomainAccountDetail({ domain, onRefresh, onDeleted, initialSegme
                     >
                       <option value="">— Unattributed —</option>
                       {localAddresses
-                        .filter((a) => a.is_active)
+                        .filter((a) => a.is_active && !/^[ae]\./i.test(a.address))
                         .map((a) => (
                           <option key={a.id} value={a.id}>
                             {a.address}@{domain.domain}

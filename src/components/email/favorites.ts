@@ -12,7 +12,7 @@ const V2_KEY = "email.favorites.v2";
 const LEGACY_KEY = "email-favorite-items";
 const DEFAULT_LEGACY = ["inbox", "sent", "drafts", "starred"];
 
-const FOLDER_IDS = ["inbox", "sent", "drafts", "starred", "archive", "spam", "trash"];
+const FOLDER_IDS = ["inbox", "sent", "drafts", "starred", "archive", "spam", "trash", "agent"];
 
 export function favKey(ref: FavoriteRef): string {
   switch (ref.kind) {

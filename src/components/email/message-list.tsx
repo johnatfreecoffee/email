@@ -768,7 +768,7 @@ export function MessageList({
         {/* Recipient (address) filter — only when a domain is selected and
             has at least one registered address. Stays active as the user
             switches folders within the same domain. */}
-        {domain && (domain.addresses || []).some((a) => a.is_active) && onAddressChange && (
+        {domain && (domain.addresses || []).some((a) => a.is_active && !/^[ae]\./i.test(a.address)) && onAddressChange && (
           <div className="mt-2 relative" data-mc-email-address-dropdown>
             <button
               onClick={() => setShowAddressDropdown((v) => !v)}
@@ -810,7 +810,7 @@ export function MessageList({
                   All recipients
                 </button>
                 {(domain.addresses || [])
-                  .filter((a) => a.is_active)
+                  .filter((a) => a.is_active && !/^[ae]\./i.test(a.address))
                   .map((a) => {
                     const isActive = a.id === selectedAddress;
                     return (

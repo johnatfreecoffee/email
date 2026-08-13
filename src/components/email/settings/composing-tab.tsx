@@ -12,7 +12,7 @@ export function ComposingTab({ domains }: { domains: EmailDomain[] }) {
     { value: "auto", label: "Address of selected mailbox" },
     ...domains.flatMap((d) =>
       (d.addresses || [])
-        .filter((a) => a.is_active)
+        .filter((a) => a.is_active && !/^[ae]\./i.test(a.address))
         .map((a) => ({ value: a.id, label: `${a.address}@${d.domain}` }))
     ),
   ];

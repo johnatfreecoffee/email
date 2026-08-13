@@ -1,5 +1,6 @@
 import { Env, jsonResponse, errorResponse, optionsResponse, supabaseQuery, resendAPI, checkAuth } from "./_shared";
 import { resolveThreadId } from "./_thread";
+import { AGENT_FOLDER, isAgentLocal, localPartOf } from "./_agent";
 
 interface CFContext {
   request: Request;
@@ -129,7 +130,7 @@ export const onRequest = async (context: CFContext) => {
       in_reply_to: body.in_reply_to || null,
       thread_id: threadId,
       is_read: true,
-      folder: "sent",
+      folder: isAgentLocal(localPartOf(fromAddress)) ? AGENT_FOLDER : "sent",
       received_at: new Date().toISOString(),
     },
   });

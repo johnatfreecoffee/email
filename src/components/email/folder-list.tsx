@@ -17,6 +17,7 @@ import {
   ChevronRight,
   ChevronDown,
   User,
+  Bot,
   Shield,
   AlertOctagon,
   SunMoon,
@@ -38,6 +39,7 @@ import { usePush } from "@/lib/push-notifications";
 import { useTheme, type ThemePref } from "@/lib/theme";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { type FavoriteRef, favKey } from "./favorites";
+import { AGENT_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -55,6 +57,7 @@ interface FolderListProps {
   onAddressChange: (addressId: string | null) => void;
   catchAllOnly?: boolean;
   onCatchAllToggle?: (domain: EmailDomain) => void;
+  onAgentOpen?: (domain: EmailDomain, addressId: string | null) => void;
   unreadCount: number;
   draftsCount?: number;
   onCompose: () => void;
@@ -349,6 +352,7 @@ export function FolderList({
   onAddressChange,
   catchAllOnly = false,
   onCatchAllToggle,
+  onAgentOpen,
   unreadCount: _unreadCount,
   draftsCount = 0,
   onCompose,
@@ -361,6 +365,7 @@ export function FolderList({
   const push = usePush();
   const [editing, setEditing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(() => Date.now());
+  const [expandedAgents, setExpandedAgents] = useState<string[]>([]);
   // Re-render periodically so "Updated Just Now" ages
   const [, setTick] = useState(0);
 
@@ -431,6 +436,12 @@ export function FolderList({
 
   // Addresses sub-list is collapsed by default (id absent from the set);
   // toggling adds/removes the domain id.
+  const toggleAgents = (domainId: string) => {
+    setExpandedAgents((prev) =>
+      prev.includes(domainId) ? prev.filter((id) => id !== domainId) : [...prev, domainId]
+    );
+  };
+
   const toggleAddresses = (domainId: string) => {
     const next = expandedAddresses.includes(domainId)
       ? expandedAddresses.filter((id) => id !== domainId)
@@ -488,8 +499,21 @@ export function FolderList({
       }
       case "domain-folder": {
         const d = domains.find((x) => x.id === ref.domainId);
+        if (!d) return null;
+        if (ref.folder === AGENT_FOLDER) {
+          return {
+            icon: Bot,
+            label: ref.label?.trim() || `Agents — ${d.domain}`,
+            active:
+              selectedDomain?.id === d.id &&
+              activeFolder === AGENT_FOLDER &&
+              !selectedAddress &&
+              !catchAllOnly,
+            onClick: () => onAgentOpen?.(d, null),
+          };
+        }
         const def = folderDefs.find((f) => f.id === ref.folder);
-        if (!d || !def) return null;
+        if (!def) return null;
         return {
           icon: def.icon,
           label: ref.label?.trim() || `${def.label} — ${d.domain}`,
@@ -509,11 +533,20 @@ export function FolderList({
         const d = domains.find((x) => x.id === ref.domainId);
         const addr = d?.addresses?.find((a) => a.id === ref.addressId);
         if (!d || !addr) return null;
+        const agent = isAgentAddress(addr);
         return {
-          icon: User,
-          label: ref.label?.trim() || `${addr.address}@${d.domain}`,
-          active: selectedDomain?.id === d.id && selectedAddress === addr.id && !catchAllOnly,
+          icon: agent ? Bot : User,
+          label: ref.label?.trim() || addr.display_name || `${addr.address}@${d.domain}`,
+          active:
+            selectedDomain?.id === d.id &&
+            selectedAddress === addr.id &&
+            !catchAllOnly &&
+            (!agent || activeFolder === AGENT_FOLDER),
           onClick: () => {
+            if (agent && onAgentOpen) {
+              onAgentOpen(d, addr.id);
+              return;
+            }
             onDomainChange(d);
             onAddressChange(addr.id);
             onFolderChange("inbox");
@@ -550,6 +583,7 @@ export function FolderList({
         return aggregateDefs.find((f) => f.id === ref.folder)?.label ?? ref.folder;
       case "domain-folder": {
         const d = domains.find((x) => x.id === ref.domainId);
+        if (ref.folder === AGENT_FOLDER) return d ? `Agents — ${d.domain}` : "";
         const def = folderDefs.find((f) => f.id === ref.folder);
         return d && def ? `${def.label} — ${d.domain}` : "";
       }
@@ -895,8 +929,12 @@ export function FolderList({
           const liveFolderCounts = unreadCounts.folders[d.id] || {};
           const isCollapsed = collapsedDomains.includes(d.id);
           const domainTotalUnread = unreadCounts.domains[d.id] ?? 0;
-          const hasAddresses = (d.addresses || []).some((a) => a.is_active);
+          const peopleAddrs = (d.addresses || []).filter((a) => a.is_active && !isAgentAddress(a));
+          const agentAddrs = (d.addresses || []).filter((a) => a.is_active && isAgentAddress(a));
+          const hasAddresses = peopleAddrs.length > 0;
+          const hasAgents = agentAddrs.length > 0;
           const addrsExpanded = expandedAddresses.includes(d.id);
+          const agentsExpanded = expandedAgents.includes(d.id);
 
           // Build folder rows — same set as desktop (folderDefs + catch-all)
           type RowSpec = {
@@ -988,7 +1026,7 @@ export function FolderList({
               {!isCollapsed && (
                 <IosGroup>
                   {rows.map((row, i) => {
-                    const isLastFolder = i === rows.length - 1 && !hasAddresses;
+                    const isLastFolder = i === rows.length - 1 && !hasAddresses && !hasAgents;
                     return (
                       <IosRow
                         key={row.key}
@@ -1008,6 +1046,78 @@ export function FolderList({
                     );
                   })}
 
+                  {hasAgents && (
+                    <>
+                      <button
+                        onClick={() => toggleAgents(d.id)}
+                        className="w-full flex items-center gap-2 pl-4 pr-3 text-[15px] active:opacity-70 relative"
+                        style={{
+                          minHeight: 44,
+                          color: "var(--mc-text-muted)",
+                        }}
+                      >
+                        <span className="flex-1 text-left">Agents ({agentAddrs.length})</span>
+                        {agentsExpanded ? (
+                          <ChevronDown className="h-4 w-4" style={{ color: "var(--mc-text-ghost)" }} />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" style={{ color: "var(--mc-text-ghost)" }} />
+                        )}
+                        <span
+                          className="absolute top-0 right-0 pointer-events-none"
+                          style={{
+                            left: 50,
+                            height: "0.5px",
+                            backgroundColor: "var(--mc-border)",
+                          }}
+                        />
+                      </button>
+                      <IosRow
+                        icon={Bot}
+                        label="All agents"
+                        active={
+                          isThisDomain &&
+                          activeFolder === AGENT_FOLDER &&
+                          !selectedAddress &&
+                          !catchAllOnly
+                        }
+                        onClick={() => onAgentOpen?.(d, null)}
+                        last={!agentsExpanded && !hasAddresses}
+                        trailing={
+                          editing ? (
+                            <PinButton
+                              refItem={{ kind: "domain-folder", domainId: d.id, folder: AGENT_FOLDER }}
+                            />
+                          ) : undefined
+                        }
+                        showChevron={!editing}
+                      />
+                      {agentsExpanded &&
+                        agentAddrs.map((addr, i, arr) => (
+                          <IosRow
+                            key={addr.id}
+                            icon={Bot}
+                            label={addr.display_name || addr.address}
+                            active={
+                              isThisDomain &&
+                              activeFolder === AGENT_FOLDER &&
+                              selectedAddress === addr.id &&
+                              !catchAllOnly
+                            }
+                            onClick={() => onAgentOpen?.(d, addr.id)}
+                            last={i === arr.length - 1 && !hasAddresses}
+                            trailing={
+                              editing ? (
+                                <PinButton
+                                  refItem={{ kind: "address", domainId: d.id, addressId: addr.id }}
+                                />
+                              ) : undefined
+                            }
+                            showChevron={!editing}
+                          />
+                        ))}
+                    </>
+                  )}
+
                   {hasAddresses && (
                     <>
                       <button
@@ -1019,7 +1129,7 @@ export function FolderList({
                         }}
                       >
                         <span className="flex-1 text-left">
-                          Addresses ({d.addresses.filter((a) => a.is_active).length})
+                          Addresses ({peopleAddrs.length})
                         </span>
                         {addrsExpanded ? (
                           <ChevronDown className="h-4 w-4" style={{ color: "var(--mc-text-ghost)" }} />
@@ -1036,14 +1146,13 @@ export function FolderList({
                         />
                       </button>
                       {addrsExpanded &&
-                        d.addresses
-                          .filter((addr) => addr.is_active)
+                        peopleAddrs
                           .map((addr, i, arr) => (
                             <IosRow
                               key={addr.id}
                               icon={User}
                               label={addr.address}
-                              active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
+                              active={isThisDomain && selectedAddress === addr.id && !catchAllOnly && activeFolder !== AGENT_FOLDER}
                               onClick={() => {
                                 onDomainChange(d);
                                 onAddressChange(addr.id);
@@ -1392,48 +1501,128 @@ export function FolderList({
                       return items;
                     })}
 
-                    {/* Addresses — collapsible sub-list, collapsed by default */}
-                    {(d.addresses || []).some((a) => a.is_active) && (
-                      <>
-                        <button
-                          onClick={() => toggleAddresses(d.id)}
-                          className="mc-touch-exempt w-full flex items-center gap-1 pl-[12px] pr-1 pt-1.5 pb-0.5"
-                          style={{ color: "var(--mc-text-faint)" }}
-                          title={expandedAddresses.includes(d.id) ? "Hide addresses" : "Show addresses"}
-                        >
-                          {expandedAddresses.includes(d.id) ? (
-                            <ChevronDown className="h-3 w-3 flex-shrink-0" />
-                          ) : (
-                            <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                    {/* Agent mailboxes — hidden from inbox / catch-all */}
+                    {(() => {
+                      const agentAddrs = (d.addresses || []).filter((a) => a.is_active && isAgentAddress(a));
+                      const peopleAddrs = (d.addresses || []).filter((a) => a.is_active && !isAgentAddress(a));
+                      const agentsExpanded = expandedAgents.includes(d.id);
+                      return (
+                        <>
+                          {agentAddrs.length > 0 && (
+                            <>
+                              <button
+                                onClick={() => toggleAgents(d.id)}
+                                className="mc-touch-exempt w-full flex items-center gap-1 pl-[12px] pr-1 pt-1.5 pb-0.5"
+                                style={{ color: "var(--mc-text-faint)" }}
+                                title={agentsExpanded ? "Hide agent folders" : "Show agent folders"}
+                              >
+                                {agentsExpanded ? (
+                                  <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                                ) : (
+                                  <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                                )}
+                                <span className="text-[10px] font-semibold">Agents</span>
+                                <span className="text-[10px] font-semibold tabular-nums ml-1 opacity-70">
+                                  {agentAddrs.length}
+                                </span>
+                              </button>
+                              <SidebarRow
+                                icon={Bot}
+                                label="All agents"
+                                active={
+                                  isThisDomain &&
+                                  activeFolder === AGENT_FOLDER &&
+                                  !selectedAddress &&
+                                  !catchAllOnly
+                                }
+                                depth={1}
+                                onClick={() => onAgentOpen?.(d, null)}
+                                trailing={
+                                  editing ? (
+                                    <PinButton
+                                      refItem={{
+                                        kind: "domain-folder",
+                                        domainId: d.id,
+                                        folder: AGENT_FOLDER,
+                                      }}
+                                    />
+                                  ) : undefined
+                                }
+                              />
+                              {agentsExpanded &&
+                                agentAddrs.map((addr) => {
+                                  const aRef: FavoriteRef = {
+                                    kind: "address",
+                                    domainId: d.id,
+                                    addressId: addr.id,
+                                  };
+                                  return (
+                                    <SidebarRow
+                                      key={addr.id}
+                                      icon={Bot}
+                                      label={addr.display_name || addr.address}
+                                      active={
+                                        isThisDomain &&
+                                        activeFolder === AGENT_FOLDER &&
+                                        selectedAddress === addr.id &&
+                                        !catchAllOnly
+                                      }
+                                      depth={1}
+                                      onClick={() => onAgentOpen?.(d, addr.id)}
+                                      trailing={editing ? <PinButton refItem={aRef} /> : undefined}
+                                    />
+                                  );
+                                })}
+                            </>
                           )}
-                          <span className="text-[10px] font-semibold">Addresses</span>
-                          <span className="text-[10px] font-semibold tabular-nums ml-1 opacity-70">
-                            {d.addresses.filter((a) => a.is_active).length}
-                          </span>
-                        </button>
-                        {expandedAddresses.includes(d.id) &&
-                          d.addresses
-                            .filter((addr) => addr.is_active)
-                            .map((addr) => {
-                              const aRef: FavoriteRef = { kind: "address", domainId: d.id, addressId: addr.id };
-                              return (
-                                <SidebarRow
-                                  key={addr.id}
-                                  icon={User}
-                                  label={addr.address}
-                                  active={isThisDomain && selectedAddress === addr.id && !catchAllOnly}
-                                  depth={1}
-                                  onClick={() => {
-                                    onDomainChange(d);
-                                    onAddressChange(addr.id);
-                                    onFolderChange("inbox");
-                                  }}
-                                  trailing={editing ? <PinButton refItem={aRef} /> : undefined}
-                                />
-                              );
-                            })}
-                      </>
-                    )}
+
+                          {peopleAddrs.length > 0 && (
+                            <>
+                              <button
+                                onClick={() => toggleAddresses(d.id)}
+                                className="mc-touch-exempt w-full flex items-center gap-1 pl-[12px] pr-1 pt-1.5 pb-0.5"
+                                style={{ color: "var(--mc-text-faint)" }}
+                                title={expandedAddresses.includes(d.id) ? "Hide addresses" : "Show addresses"}
+                              >
+                                {expandedAddresses.includes(d.id) ? (
+                                  <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                                ) : (
+                                  <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                                )}
+                                <span className="text-[10px] font-semibold">Addresses</span>
+                                <span className="text-[10px] font-semibold tabular-nums ml-1 opacity-70">
+                                  {peopleAddrs.length}
+                                </span>
+                              </button>
+                              {expandedAddresses.includes(d.id) &&
+                                peopleAddrs.map((addr) => {
+                                  const aRef: FavoriteRef = { kind: "address", domainId: d.id, addressId: addr.id };
+                                  return (
+                                    <SidebarRow
+                                      key={addr.id}
+                                      icon={User}
+                                      label={addr.address}
+                                      active={
+                                        isThisDomain &&
+                                        selectedAddress === addr.id &&
+                                        !catchAllOnly &&
+                                        activeFolder !== AGENT_FOLDER
+                                      }
+                                      depth={1}
+                                      onClick={() => {
+                                        onDomainChange(d);
+                                        onAddressChange(addr.id);
+                                        onFolderChange("inbox");
+                                      }}
+                                      trailing={editing ? <PinButton refItem={aRef} /> : undefined}
+                                    />
+                                  );
+                                })}
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 )}
               </div>

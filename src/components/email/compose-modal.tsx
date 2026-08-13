@@ -46,6 +46,9 @@ export function ComposeModal({
   const fromOptions: { label: string; value: string; domainId: string; addressId?: string }[] = [];
   for (const domain of domains) {
     for (const addr of domain.addresses || []) {
+      // Agent mailboxes stay off the From picker for new mail (replies
+      // that landed on an agent identity are added back below).
+      if (/^[ae]\./i.test(addr.address || "")) continue;
       const email = `${addr.address}@${domain.domain}`;
       const displayName = addr.display_name || addr.address;
       fromOptions.push({
@@ -54,6 +57,26 @@ export function ComposeModal({
         domainId: domain.id,
         addressId: addr.id,
       });
+    }
+  }
+
+  if ((composeMode === "reply" || composeMode === "reply-all" || composeMode === "forward") && replyTo) {
+    for (const domain of domains) {
+      for (const addr of domain.addresses || []) {
+        if (!/^[ae]\./i.test(addr.address || "")) continue;
+        const email = `${addr.address}@${domain.domain}`;
+        const hit =
+          replyTo.address_id === addr.id ||
+          (replyTo.to_addresses || []).some((t) => t.toLowerCase() === email.toLowerCase());
+        if (!hit) continue;
+        const displayName = addr.display_name || addr.address;
+        fromOptions.push({
+          label: `${displayName} <${email}>`,
+          value: `${displayName} <${email}>`,
+          domainId: domain.id,
+          addressId: addr.id,
+        });
+      }
     }
   }
 
