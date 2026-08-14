@@ -11,6 +11,7 @@ import {
   isAgentRecipient,
   localPartOf,
 } from "./_agent";
+import { maybeCloudChat } from "./_agent_cloud";
 
 interface CFContext {
   request: Request;
@@ -669,6 +670,23 @@ export const onRequest = async (context: CFContext) => {
   // Agent Mail (a.* / e.*) never push — jobs stay silent. Worker still
   // processes the stored row the same way.
   if (shouldNotify && isAgent) shouldNotify = false;
+
+  if (isAgent && message?.id) {
+    try {
+      await maybeCloudChat(env, {
+        messageId: String(message.id),
+        fromAddress,
+        toAddresses,
+        matchedLocal,
+        subject: finalSubject,
+        bodyText: bodyText || "",
+        domain: String(matchedDomain.domain || ""),
+        resendEmailId: emailId,
+      });
+    } catch (e) {
+      console.error("cloud chat failed (non-fatal):", e);
+    }
+  }
 
   // Optional: users can silence push for catch-all mail (still delivered and
   // counted, just no ping). Only query settings when it could matter.

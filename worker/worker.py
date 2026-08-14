@@ -571,6 +571,42 @@ def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str)
     return False
 
 
+def cloud_already_handled(cfg: dict, mid: str) -> bool:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key or not mid:
+        return False
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/agent_handled_messages?message_id=eq.{mid}&select=via",
+            {"apikey": key, "Authorization": f"Bearer {key}"},
+        )
+        return code == 200 and isinstance(data, list) and len(data) > 0
+    except Exception:
+        return False
+
+
+def cloud_hands(cfg: dict) -> str:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key:
+        return "auto"
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/agent_runtime?id=eq.1&select=hands",
+            {"apikey": key, "Authorization": f"Bearer {key}"},
+        )
+        if code == 200 and isinstance(data, list) and data:
+            h = str(data[0].get("hands") or "auto")
+            if h in ("local", "api", "auto", "box"):
+                return h
+    except Exception:
+        pass
+    return "auto"
+
+
 def heartbeat(cfg: dict) -> None:
     """Tell Settings → Setup that this machine is alive."""
     base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
@@ -584,14 +620,14 @@ def heartbeat(cfg: dict) -> None:
             "PATCH",
             f"{base}/rest/v1/agent_runtime?id=eq.1",
             headers,
-            {"worker_seen_at": now, "updated_at": now, "hands": "local"},
+            {"worker_seen_at": now, "updated_at": now},
         )
         if code in (200, 204) and (data == [] or data is None):
             curl_json(
                 "POST",
                 f"{base}/rest/v1/agent_runtime",
                 headers,
-                {"id": 1, "hands": "local", "worker_seen_at": now, "updated_at": now},
+                {"id": 1, "hands": "auto", "worker_seen_at": now, "updated_at": now},
             )
     except Exception as e:
         log(f"heartbeat failed: {e}")
@@ -652,6 +688,11 @@ def process_once(cfg: dict) -> None:
     log(f"found {len(msgs)} new agent mail(s)")
     for msg in msgs:
         mid = msg["id"]
+        if cloud_already_handled(cfg, str(mid)):
+            log(f"skip already-handled msg={str(mid)[:8]}")
+            processed.add(mid)
+            save_processed(processed)
+            continue
         local = msg["_agent_local"]
         agent = agents.get(local)
         if not agent:
@@ -664,6 +705,15 @@ def process_once(cfg: dict) -> None:
             trust_raw = cfg.get("TRUSTED_SENDERS", "")
             patterns = [p.strip() for p in trust_raw.split(",") if p.strip()]
             auth = {"ok": trusted(from_addr, patterns), "reason": "legacy", "grant": {"enabled": True, "mode": "all"}}
+        if auth.get("ok") and cloud_hands(cfg) == "api":
+            grant = auth.get("grant") or {}
+            perms = grant.get("perms") or {}
+            ask = grant.get("mode") == "ask" or not any(perms.get(k) for k in ("write", "update", "delete"))
+            if ask:
+                log(f"skip ask-only; hands=api msg={str(mid)[:8]}")
+                processed.add(mid)
+                save_processed(processed)
+                continue
         if not auth.get("ok"):
             reason = auth.get("reason") or "unknown"
             log(f"block {reason} from={from_addr} agent={local} msg={str(mid)[:8]}")

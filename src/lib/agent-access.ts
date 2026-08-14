@@ -150,6 +150,11 @@ export function howItWorks() {
         title: "Grok starts with a hidden pre-prompt",
         body: "Only then do we spawn Grok. We prepend a lock the sender never sees, plus tool blocks so it cannot ignore the note.",
       },
+      {
+        n: 6,
+        title: "If this machine is offline",
+        body: "Questions-only senders get a Cloud chat reply (xAI, no file tools). Anyone with write access gets: need This machine or Cloud box. Local worker wins again when it comes back.",
+      },
     ],
     stops: [
       {

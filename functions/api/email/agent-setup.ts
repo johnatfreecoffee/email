@@ -63,6 +63,12 @@ async function pingDomain(env: Env): Promise<Tile> {
   return { id: "domain", ok: ready.length > 0, configured: true, detail: `${rows.length} domain(s)` };
 }
 
+async function pingChat(env: Env): Promise<Tile> {
+  const key = env.XAI_API_KEY;
+  if (!key) return { id: "chat", ok: false, configured: false, detail: "XAI_API_KEY missing" };
+  return { id: "chat", ok: true, configured: true, detail: "ready (questions only when worker is offline)" };
+}
+
 async function pingWorker(env: Env): Promise<Tile> {
   const r = await supabaseQuery(env, "/agent_runtime?id=eq.1");
   if (!r.ok || !Array.isArray(r.data) || !r.data[0]) {
@@ -88,21 +94,19 @@ export const onRequest = async (context: CFContext) => {
   if (authError) return authError;
   if (request.method !== "GET") return errorResponse("method", 405, origin);
 
-  const [resend, supabase, cloudflare, domain, machine] = await Promise.all([
+  const [resend, supabase, cloudflare, domain, machine, chat] = await Promise.all([
     pingResend(env),
     pingSupabase(env),
     pingCloudflare(env),
     pingDomain(env),
     pingWorker(env),
+    pingChat(env),
   ]);
 
   return jsonResponse(
     {
-      tiles: [resend, supabase, cloudflare, domain, machine],
-      coming: [
-        { id: "chat", label: "Cloud chat", detail: "xAI API — questions only, no laptop (P3)" },
-        { id: "box", label: "Cloud box", detail: "Docker worker on Fly/Railway (P4)" },
-      ],
+      tiles: [resend, supabase, cloudflare, domain, machine, chat],
+      coming: [{ id: "box", label: "Cloud box", detail: "Docker worker on Fly/Railway (P4)" }],
     },
     200,
     origin

@@ -467,6 +467,13 @@ const TILE_META: Record<string, { title: string; why: string; help: string; mark
     mark: "⌘",
     color: "#0f172a",
   },
+  chat: {
+    title: "Cloud chat",
+    why: "Questions only when this machine is offline",
+    help: "Set XAI_API_KEY on the Pages project. Cannot edit repos. Code asks wait for This machine or Cloud box.",
+    mark: "G",
+    color: "#007aff",
+  },
 };
 
 function SetupPanel() {

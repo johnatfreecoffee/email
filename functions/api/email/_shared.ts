@@ -10,6 +10,8 @@ export interface Env {
   OPENROUTER_KEY?: string;
   /** Shared-secret gate for the standalone email fork (X-MC-Auth header). */
   MC_API_SECRET?: string;
+  /** xAI HTTP API for questions-only when the local worker is offline. */
+  XAI_API_KEY?: string;
 }
 
 // Validate X-MC-Auth: shared secret → mc_sessions → legacy token.
