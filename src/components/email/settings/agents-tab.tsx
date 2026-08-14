@@ -429,18 +429,59 @@ function AgentRow({
   );
 }
 
+type SetupTile = { id: string; ok: boolean; configured: boolean; detail: string };
+
+const TILE_META: Record<string, { title: string; why: string; help: string; mark: string; color: string }> = {
+  resend: {
+    title: "Resend",
+    why: "Inbound + outbound mail",
+    help: "Set RESEND_API_KEY. Point the inbound webhook at /api/email/inbound.",
+    mark: "R",
+    color: "#111827",
+  },
+  supabase: {
+    title: "Supabase",
+    why: "Mail + allowlist database",
+    help: "Set SUPABASE_URL and SUPABASE_SERVICE_KEY. Run migrations/*.sql.",
+    mark: "S",
+    color: "#15803d",
+  },
+  cloudflare: {
+    title: "Cloudflare",
+    why: "DNS auto-config for new domains",
+    help: "Set CLOUDFLARE_API_TOKEN (Zone + DNS). Optional if you add records by hand.",
+    mark: "CF",
+    color: "#f97316",
+  },
+  domain: {
+    title: "Domain",
+    why: "At least one mailbox domain",
+    help: "Settings → Accounts → add and verify a domain.",
+    mark: "@",
+    color: "#007aff",
+  },
+  machine: {
+    title: "This machine",
+    why: "Grok worker that can edit code",
+    help: "./scripts/install-local-worker.sh  (Mac)\n./scripts/install-local-worker-linux.sh",
+    mark: "⌘",
+    color: "#0f172a",
+  },
+};
+
 function SetupPanel() {
-  const [online, setOnline] = useState<boolean | null>(null);
-  const [seen, setSeen] = useState<string | null>(null);
+  const [tiles, setTiles] = useState<SetupTile[]>([]);
+  const [coming, setComing] = useState<Array<{ id: string; label: string; detail: string }>>([]);
+  const [open, setOpen] = useState<string | null>(null);
   const [err, setErr] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const res = await apiFetch("/api/email/agent-runtime");
+      const res = await apiFetch("/api/email/agent-setup");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.statusText);
-      setOnline(!!data.online);
-      setSeen(data.worker_seen_at || null);
+      setTiles(data.tiles || []);
+      setComing(data.coming || []);
       setErr("");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "failed");
@@ -453,38 +494,68 @@ function SetupPanel() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const status = online === null ? "Checking…" : online ? "Online" : "Offline";
-  const color = online === null ? "var(--mc-text-muted)" : online ? "#15803d" : "#dc2626";
-
   return (
     <div>
       <p className="text-[12px] mb-3" style={{ color: "var(--mc-text-muted)" }}>
-        Hands run on a machine, not in the browser. Install the worker, then this tile turns green.
+        Green = connected. Click a tile for what it does and how to hook it up. Keys never show here.
       </p>
-      <div className="rounded-[12px] p-4" style={{ border: "1px solid var(--mc-border)", backgroundColor: "var(--mc-bg-tertiary)" }}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>This machine</div>
-            <div className="text-[12px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
-              Local Grok worker. Can read and change project files.
-            </div>
+      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
+        {tiles.map((t) => {
+          const meta = TILE_META[t.id];
+          if (!meta) return null;
+          const on = open === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setOpen(on ? null : t.id)}
+              className="text-left rounded-[12px] p-3"
+              style={{
+                border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
+                backgroundColor: "var(--mc-bg-tertiary)",
+              }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span
+                  className="h-8 w-8 rounded-lg text-white text-[11px] font-bold flex items-center justify-center"
+                  style={{ backgroundColor: meta.color }}
+                >
+                  {meta.mark}
+                </span>
+                <span
+                  className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                  style={{
+                    color: t.ok ? "#15803d" : "#dc2626",
+                    border: `1px solid ${t.ok ? "#15803d" : "#dc2626"}`,
+                  }}
+                >
+                  {t.ok ? "Connected" : t.configured ? "Error" : "Missing"}
+                </span>
+              </div>
+              <div className="text-[13px] font-semibold mt-2" style={{ color: "var(--mc-text)" }}>{meta.title}</div>
+              <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>{meta.why}</div>
+              <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-faint)" }}>{t.detail}</div>
+            </button>
+          );
+        })}
+        {coming.map((c) => (
+          <div
+            key={c.id}
+            className="rounded-[12px] p-3 opacity-70"
+            style={{ border: "1px dashed var(--mc-border)", backgroundColor: "var(--mc-bg-tertiary)" }}
+          >
+            <div className="text-[10px] font-bold" style={{ color: "var(--mc-text-faint)" }}>Later</div>
+            <div className="text-[13px] font-semibold mt-2" style={{ color: "var(--mc-text)" }}>{c.label}</div>
+            <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>{c.detail}</div>
           </div>
-          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ color, border: `1px solid ${color}` }}>
-            {status}
-          </span>
-        </div>
-        <div className="text-[12px] mt-3" style={{ color: "var(--mc-text-muted)" }}>
-          Last beat: {seen ? new Date(seen).toLocaleString() : "never"}
-        </div>
-        <pre className="am-pre mt-3">{`# from the email repo
-./scripts/install-local-worker.sh     # Mac
-./scripts/install-local-worker-linux.sh
-./scripts/uninstall-local-worker.sh`}</pre>
-        {err && <div className="text-[12px] mt-2" style={{ color: "#dc2626" }}>{err}</div>}
+        ))}
       </div>
-      <p className="text-[11px] mt-3" style={{ color: "var(--mc-text-faint)" }}>
-        Cloud chat and Cloud box tiles come in later phases. Offline here means no code-changing agent until the worker is back.
-      </p>
+      {open && TILE_META[open] && (
+        <div className="mt-3 rounded-[12px] p-3" style={{ border: "1px solid var(--mc-border)" }}>
+          <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{TILE_META[open].title}</div>
+          <div className="text-[12px] mt-1" style={{ color: "var(--mc-text-muted)" }}>{TILE_META[open].help}</div>
+        </div>
+      )}
+      {err && <div className="text-[12px] mt-2" style={{ color: "#dc2626" }}>{err}</div>}
     </div>
   );
 }

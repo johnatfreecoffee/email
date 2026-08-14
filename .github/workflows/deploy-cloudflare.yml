@@ -41,6 +41,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_MC_API_SECRET: ${{ secrets.NEXT_PUBLIC_MC_API_SECRET }}
           NEXT_PUBLIC_VAPID_PUBLIC_KEY: ${{ secrets.NEXT_PUBLIC_VAPID_PUBLIC_KEY }}
+          NEXT_PUBLIC_OWNER_EMAIL: ${{ secrets.NEXT_PUBLIC_OWNER_EMAIL }}
+          NEXT_PUBLIC_OWNER_PASSWORD: ${{ secrets.NEXT_PUBLIC_OWNER_PASSWORD }}
 
       - name: Bundle Pages Functions with static export
         run: rm -rf out/functions && cp -R functions out/functions

@@ -20,9 +20,11 @@ const AUTH_VERSION_KEY = "mc-auth-version";
 const SHARED_SECRET =
   typeof process !== "undefined" ? process.env.NEXT_PUBLIC_MC_API_SECRET || "" : "";
 
-/** Single-tenant login credentials (UI gate; API still uses MC_API_SECRET). */
-const LOGIN_EMAIL = "john@freecoffee.dev";
-const LOGIN_PASSWORD = "[redacted]";
+/** Single-tenant login (UI gate; API still uses MC_API_SECRET). Set in env — never commit values. */
+const LOGIN_EMAIL = (
+  (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OWNER_EMAIL : "") || ""
+).toLowerCase().trim();
+const LOGIN_PASSWORD = (typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OWNER_PASSWORD : "") || "";
 
 export interface MCUser {
   id: string;
@@ -136,6 +138,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!enteredEmail || !enteredPassword) {
         setError("Enter email and password");
+        return;
+      }
+
+      if (!LOGIN_EMAIL || !LOGIN_PASSWORD) {
+        setError("App is misconfigured (missing owner login env)");
         return;
       }
 
