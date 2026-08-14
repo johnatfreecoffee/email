@@ -26,7 +26,7 @@ interface AgentUser {
   agents: Record<string, Grant>;
 }
 
-type SubTab = "active" | "archived" | "how";
+type SubTab = "active" | "archived" | "how" | "setup";
 
 const chip = (on: boolean): React.CSSProperties => ({
   border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
@@ -54,7 +54,7 @@ export function AgentsTab() {
   const [nerr, setNerr] = useState("");
 
   const load = useCallback(async () => {
-    if (tab === "how") {
+    if (tab === "how" || tab === "setup") {
       setLoading(false);
       return;
     }
@@ -161,6 +161,15 @@ export function AgentsTab() {
     );
   }
 
+  if (tab === "setup") {
+    return (
+      <div>
+        <SubTabs tab={tab} setTab={setTab} />
+        <SetupPanel />
+      </div>
+    );
+  }
+
   return (
     <div>
       <SubTabs tab={tab} setTab={setTab} />
@@ -234,6 +243,7 @@ function SubTabs({ tab, setTab }: { tab: SubTab; setTab: (t: SubTab) => void }) 
   const items: Array<[SubTab, string]> = [
     ["active", "Users"],
     ["archived", "Archive"],
+    ["setup", "Setup"],
     ["how", "How it works"],
   ];
   return (
@@ -415,6 +425,66 @@ function AgentRow({
       </div>
       <pre className="am-pre">{live.prompt}</pre>
       <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-muted)" }}>{live.flags}</div>
+    </div>
+  );
+}
+
+function SetupPanel() {
+  const [online, setOnline] = useState<boolean | null>(null);
+  const [seen, setSeen] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/email/agent-runtime");
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      setOnline(!!data.online);
+      setSeen(data.worker_seen_at || null);
+      setErr("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "failed");
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 15000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const status = online === null ? "Checking…" : online ? "Online" : "Offline";
+  const color = online === null ? "var(--mc-text-muted)" : online ? "#15803d" : "#dc2626";
+
+  return (
+    <div>
+      <p className="text-[12px] mb-3" style={{ color: "var(--mc-text-muted)" }}>
+        Hands run on a machine, not in the browser. Install the worker, then this tile turns green.
+      </p>
+      <div className="rounded-[12px] p-4" style={{ border: "1px solid var(--mc-border)", backgroundColor: "var(--mc-bg-tertiary)" }}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>This machine</div>
+            <div className="text-[12px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+              Local Grok worker. Can read and change project files.
+            </div>
+          </div>
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ color, border: `1px solid ${color}` }}>
+            {status}
+          </span>
+        </div>
+        <div className="text-[12px] mt-3" style={{ color: "var(--mc-text-muted)" }}>
+          Last beat: {seen ? new Date(seen).toLocaleString() : "never"}
+        </div>
+        <pre className="am-pre mt-3">{`# from the email repo
+./scripts/install-local-worker.sh     # Mac
+./scripts/install-local-worker-linux.sh
+./scripts/uninstall-local-worker.sh`}</pre>
+        {err && <div className="text-[12px] mt-2" style={{ color: "#dc2626" }}>{err}</div>}
+      </div>
+      <p className="text-[11px] mt-3" style={{ color: "var(--mc-text-faint)" }}>
+        Cloud chat and Cloud box tiles come in later phases. Offline here means no code-changing agent until the worker is back.
+      </p>
     </div>
   );
 }

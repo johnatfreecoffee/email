@@ -571,6 +571,32 @@ def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str)
     return False
 
 
+def heartbeat(cfg: dict) -> None:
+    """Tell Settings → Setup that this machine is alive."""
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    try:
+        code, data = curl_json(
+            "PATCH",
+            f"{base}/rest/v1/agent_runtime?id=eq.1",
+            headers,
+            {"worker_seen_at": now, "updated_at": now, "hands": "local"},
+        )
+        if code in (200, 204) and (data == [] or data is None):
+            curl_json(
+                "POST",
+                f"{base}/rest/v1/agent_runtime",
+                headers,
+                {"id": 1, "hands": "local", "worker_seen_at": now, "updated_at": now},
+            )
+    except Exception as e:
+        log(f"heartbeat failed: {e}")
+
+
 def fetch_allowlist(cfg: dict) -> dict | None:
     """Prefer Settings → Agents (Supabase). Fall back to local JSON."""
     if not access:
@@ -739,6 +765,7 @@ def main() -> int:
     try:
         while True:
             try:
+                heartbeat(cfg)
                 process_once(cfg)
             except Exception as e:
                 log(f"loop error: {e}")
