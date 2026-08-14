@@ -65,8 +65,8 @@ cat > "$PLIST" <<EOF
 EOF
 
 launchctl bootout "gui/${UID_NUM}/${LABEL}" 2>/dev/null || true
-launchctl bootstrap "gui/${UID_NUM}" "$PLIST"
-launchctl kickstart -k "gui/${UID_NUM}/${LABEL}"
+launchctl bootstrap "gui/${UID_NUM}" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+launchctl kickstart -k "gui/${UID_NUM}/${LABEL}" 2>/dev/null || true
 
 echo "installed $LIB"
 echo "label $LABEL"

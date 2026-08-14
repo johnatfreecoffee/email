@@ -50,6 +50,8 @@ Then Settings → **Agents → Users**: add people, pick agents, Questions only 
 
 Grok Build that edits repos **cannot** run on Cloudflare Pages. Pages stores mail and knobs. A machine (this laptop or a cloud box) does the work.
 
+Laptop closed: **Cloud chat** (questions only, `XAI_API_KEY`) or a **Cloud box** (`worker/BOX.md`). Do not expose the box to the public internet.
+
 ## License
 
 MIT — see `LICENSE`.

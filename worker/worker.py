@@ -13,7 +13,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path.home() / "Library" / "AgentMail"
+ROOT = Path(os.environ.get("AGENTMAIL_HOME") or (Path.home() / "Library" / "AgentMail"))
 CONFIG = ROOT / "config.env"
 AGENTS_JSON = ROOT / "agents.json"
 STATE_DIR = ROOT / "state"
@@ -23,6 +23,7 @@ SESSIONS = STATE_DIR / "sessions.json"
 LOCK = STATE_DIR / "worker.lock"
 LOG_FILE = LOG_DIR / "worker.log"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / "bin"))
 try:
     import access
@@ -571,6 +572,52 @@ def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str)
     return False
 
 
+def claim_message(cfg: dict, mid: str, via: str) -> bool:
+    """Insert handled row first so local + box + cloud-chat cannot double-run."""
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key or not mid:
+        return True
+    try:
+        code, data = curl_json(
+            "POST",
+            f"{base}/rest/v1/agent_handled_messages",
+            {
+                "apikey": key,
+                "Authorization": f"Bearer {key}",
+                "Prefer": "return=representation",
+            },
+            {"message_id": mid, "via": via},
+        )
+        if code in (200, 201):
+            return True
+        if code == 409:
+            return False
+        # unique violation sometimes 400 + 23505
+        if isinstance(data, dict) and data.get("code") == "23505":
+            return False
+        log(f"claim unexpected code={code}")
+        return True
+    except Exception as e:
+        log(f"claim failed: {e}")
+        return True
+
+
+def release_claim(cfg: dict, mid: str) -> None:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key or not mid:
+        return
+    try:
+        curl_json(
+            "DELETE",
+            f"{base}/rest/v1/agent_handled_messages?message_id=eq.{mid}",
+            {"apikey": key, "Authorization": f"Bearer {key}"},
+        )
+    except Exception:
+        pass
+
+
 def cloud_already_handled(cfg: dict, mid: str) -> bool:
     base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
     key = cfg.get("SUPABASE_SERVICE_KEY") or ""
@@ -614,20 +661,23 @@ def heartbeat(cfg: dict) -> None:
     if not base or not key:
         return
     now = datetime.now(timezone.utc).isoformat()
+    via = (os.environ.get("AGENTMAIL_VIA") or "local").strip().lower()
+    field = "box_seen_at" if via == "box" else "worker_seen_at"
     headers = {"apikey": key, "Authorization": f"Bearer {key}"}
     try:
+        body = {field: now, "updated_at": now}
         code, data = curl_json(
             "PATCH",
             f"{base}/rest/v1/agent_runtime?id=eq.1",
             headers,
-            {"worker_seen_at": now, "updated_at": now},
+            body,
         )
         if code in (200, 204) and (data == [] or data is None):
             curl_json(
                 "POST",
                 f"{base}/rest/v1/agent_runtime",
                 headers,
-                {"id": 1, "hands": "auto", "worker_seen_at": now, "updated_at": now},
+                {"id": 1, "hands": "auto", field: now, "updated_at": now},
             )
     except Exception as e:
         log(f"heartbeat failed: {e}")
@@ -726,6 +776,12 @@ def process_once(cfg: dict) -> None:
             processed.add(mid)
             save_processed(processed)
             continue
+        via = (os.environ.get("AGENTMAIL_VIA") or "local").strip().lower()
+        if not claim_message(cfg, str(mid), via):
+            log(f"skip claimed msg={str(mid)[:8]}")
+            processed.add(mid)
+            save_processed(processed)
+            continue
         try:
             sid, rec, is_new = resolve_session(sessions, agent, msg)
             reply, meta = run_grok(cfg, agent, msg, sid, is_new, grant=auth.get("grant"))
@@ -775,6 +831,7 @@ def process_once(cfg: dict) -> None:
         except Exception as e:
             log(f"process error msg={str(mid)[:8]}: {e}")
             traceback.print_exc()
+            release_claim(cfg, str(mid))
         finally:
             processed.add(mid)
             save_processed(processed)

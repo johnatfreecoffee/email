@@ -474,6 +474,13 @@ const TILE_META: Record<string, { title: string; why: string; help: string; mark
     mark: "G",
     color: "#007aff",
   },
+  box: {
+    title: "Cloud box",
+    why: "Docker worker that can edit git clones",
+    help: "Privileged VM. See worker/BOX.md and worker/fly.toml. Not created unless you opt in. Same allowlist + claim lock as This machine.",
+    mark: "□",
+    color: "#334155",
+  },
 };
 
 function SetupPanel() {

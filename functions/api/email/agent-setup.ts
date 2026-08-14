@@ -63,6 +63,18 @@ async function pingDomain(env: Env): Promise<Tile> {
   return { id: "domain", ok: ready.length > 0, configured: true, detail: `${rows.length} domain(s)` };
 }
 
+async function pingBox(env: Env): Promise<Tile> {
+  const r = await supabaseQuery(env, "/agent_runtime?id=eq.1");
+  if (!r.ok || !Array.isArray(r.data) || !r.data[0]) {
+    return { id: "box", ok: false, configured: false, detail: "no heartbeat yet" };
+  }
+  const seen = (r.data[0] as { box_seen_at?: string }).box_seen_at;
+  if (!seen) return { id: "box", ok: false, configured: false, detail: "not running — see worker/BOX.md" };
+  const t = Date.parse(seen);
+  const stale = Number.isNaN(t) || Date.now() - t > STALE_MS;
+  return { id: "box", ok: !stale, configured: true, detail: stale ? "offline" : "online" };
+}
+
 async function pingChat(env: Env): Promise<Tile> {
   const key = env.XAI_API_KEY;
   if (!key) return { id: "chat", ok: false, configured: false, detail: "XAI_API_KEY missing" };
@@ -94,19 +106,19 @@ export const onRequest = async (context: CFContext) => {
   if (authError) return authError;
   if (request.method !== "GET") return errorResponse("method", 405, origin);
 
-  const [resend, supabase, cloudflare, domain, machine, chat] = await Promise.all([
+  const [resend, supabase, cloudflare, domain, machine, chat, box] = await Promise.all([
     pingResend(env),
     pingSupabase(env),
     pingCloudflare(env),
     pingDomain(env),
     pingWorker(env),
     pingChat(env),
+    pingBox(env),
   ]);
 
   return jsonResponse(
     {
-      tiles: [resend, supabase, cloudflare, domain, machine, chat],
-      coming: [{ id: "box", label: "Cloud box", detail: "Docker worker on Fly/Railway (P4)" }],
+      tiles: [resend, supabase, cloudflare, domain, machine, chat, box],
     },
     200,
     origin

@@ -1,0 +1,27 @@
+# Template only. Do not `fly launch` unless you want to pay for a machine.
+#   fly apps create agentmail-box
+#   fly secrets set SUPABASE_URL=... SUPABASE_SERVICE_KEY=... RESEND_API_KEY=...
+#   fly secrets set AGENT_MAIL_DOMAIN=example.com
+#   fly secrets set AGENT_GIT_MAP=a.dev=https://github.com/you/repo.git
+#   fly deploy
+
+app = "agentmail-box"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  AGENTMAIL_VIA = "box"
+  AGENTMAIL_HOME = "/data"
+  POLL_SECONDS = "30"
+
+[processes]
+  worker = "/opt/agentmail/docker-entrypoint.sh"
+
+[[mounts]]
+  source = "agentmail_data"
+  destination = "/data"
+
+[checks]
+  # no public HTTP — this is a background worker

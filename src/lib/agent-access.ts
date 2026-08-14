@@ -155,6 +155,11 @@ export function howItWorks() {
         title: "If this machine is offline",
         body: "Questions-only senders get a Cloud chat reply (xAI, no file tools). Anyone with write access gets: need This machine or Cloud box. Local worker wins again when it comes back.",
       },
+      {
+        n: 7,
+        title: "Cloud box (optional)",
+        body: "Same worker in Docker, workspace = git clone. Heartbeats separately. A claim row means local and box cannot both run the same email.",
+      },
     ],
     stops: [
       {

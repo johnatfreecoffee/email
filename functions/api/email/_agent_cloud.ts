@@ -148,6 +148,9 @@ export async function maybeCloudChat(
   const auth = await loadGrant(env, args.fromAddress, local);
   if (auth.reason === "unknown" || auth.reason === "archived") return;
 
+  const claimed = await markHandled(env, args.messageId, "cloud-pending");
+  if (!claimed) return;
+
   const display = agentDisplayName(local);
   const fromHeader = `${display} <${local}@${args.domain}>`;
   const subj = args.subject.startsWith("Re:") ? args.subject : `Re: ${args.subject}`;
@@ -163,7 +166,6 @@ export async function maybeCloudChat(
       text,
       inReplyTo: args.resendEmailId,
     });
-    if (sent) await markHandled(env, args.messageId, "deny-no-agent");
     return;
   }
 
@@ -182,7 +184,6 @@ export async function maybeCloudChat(
       text,
       inReplyTo: args.resendEmailId,
     });
-    if (sent) await markHandled(env, args.messageId, "need-machine");
     return;
   }
 
@@ -198,16 +199,14 @@ export async function maybeCloudChat(
       text: "Cloud chat is not configured (missing XAI_API_KEY) and the local worker is offline.",
       inReplyTo: args.resendEmailId,
     });
-    if (sent) await markHandled(env, args.messageId, "cloud-unconfigured");
     return;
   }
 
-  const sent = await sendAgentMail(env, {
+  await sendAgentMail(env, {
     fromHeader,
     to: args.fromAddress,
     subject: subj,
     text: reply,
     inReplyTo: args.resendEmailId,
   });
-  if (sent) await markHandled(env, args.messageId, "cloud-chat");
 }
