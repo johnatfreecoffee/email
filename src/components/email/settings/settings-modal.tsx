@@ -15,6 +15,7 @@ import {
   Signature,
   ListFilter,
   Hand,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 import type { EmailDomain } from "../email-layout";
@@ -29,10 +30,12 @@ import { ComposingTab } from "./composing-tab";
 import { SignaturesTab } from "./signatures-tab";
 import { JunkTab } from "./junk-tab";
 import { PrivacyTab } from "./privacy-tab";
+import { AgentsTab } from "./agents-tab";
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "accounts", label: "Accounts", icon: AtSign },
+  { id: "agents", label: "Agents", icon: Bot },
   { id: "junk", label: "Junk Mail", icon: AlertOctagon },
   { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "viewing", label: "Viewing", icon: Eye },
@@ -80,7 +83,11 @@ export function SettingsModal({
       onClick={onClose}
     >
       <div
-        className="flex flex-col w-full h-full md:h-[min(560px,90vh)] md:w-[min(720px,95vw)] md:rounded-xl overflow-hidden"
+        className={`flex flex-col w-full h-full md:rounded-xl overflow-hidden ${
+          activeTab === "agents"
+            ? "md:h-[min(760px,94vh)] md:w-[min(960px,96vw)]"
+            : "md:h-[min(560px,90vh)] md:w-[min(720px,95vw)]"
+        }`}
         style={{
           backgroundColor: "var(--mc-bg-elevated)",
           border: "1px solid var(--mc-border)",
@@ -142,6 +149,7 @@ export function SettingsModal({
           {activeTab === "accounts" && (
             <AccountsTab domains={domains} initialDomainId={initialDomainId} onRefreshDomains={onRefreshDomains} />
           )}
+          {activeTab === "agents" && <AgentsTab />}
           {activeTab === "junk" && <JunkTab />}
           {activeTab === "appearance" && <AppearanceTab />}
           {activeTab === "viewing" && <ViewingTab />}

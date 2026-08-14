@@ -21,6 +21,7 @@ const REFRESH_STALE_MS = 60_000;
 export type SettingsTab =
   | "general"
   | "accounts"
+  | "agents"
   | "junk"
   | "appearance"
   | "viewing"
