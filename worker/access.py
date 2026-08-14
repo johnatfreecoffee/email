@@ -95,7 +95,7 @@ def load_agent_catalog() -> list[dict]:
         out.append(
             {
                 "local_part": local,
-                "email": a.get("email") or f"{local}@freecoffee.dev",
+                "email": a.get("email") or f"{local}@{(doc.get('domain') or 'example.com')}",
                 "display_name": a.get("display_name") or local,
             }
         )
@@ -135,55 +135,12 @@ def save_store(data: dict) -> None:
     tmp.replace(USERS_PATH)
 
 
-def seed_owner_user() -> dict:
-    """John — all agents, full code access. Idempotent."""
-    catalog = load_agent_catalog()
-    agents = {
-        a["local_part"]: default_grant(enabled=True, mode="all") for a in catalog
-    }
-    return {
-        "id": str(uuid.uuid4()),
-        "first_name": "John",
-        "last_name": "Romano",
-        "email": "johnfrankromanojr@gmail.com",
-        "archived": False,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "agents": agents,
-    }
-
-
-def seed_secondary_john() -> dict:
-    catalog = load_agent_catalog()
-    agents = {
-        a["local_part"]: default_grant(enabled=True, mode="all") for a in catalog
-    }
-    return {
-        "id": str(uuid.uuid4()),
-        "first_name": "John",
-        "last_name": "Romano",
-        "email": "john@freecoffee.dev",
-        "archived": False,
-        "created_at": now_iso(),
-        "updated_at": now_iso(),
-        "agents": agents,
-    }
-
-
 def ensure_store() -> dict:
-    """Create the allowlist if missing; seed John so we don't lock him out."""
+    """Create an empty local allowlist file if missing. Cloud grants are source of truth."""
     fh = _lock()
     try:
         data = load_store()
-        emails = {normalize_email(u.get("email", "")) for u in data.get("users") or []}
-        changed = False
-        if "johnfrankromanojr@gmail.com" not in emails:
-            data.setdefault("users", []).append(seed_owner_user())
-            changed = True
-        if "john@freecoffee.dev" not in emails:
-            data.setdefault("users", []).append(seed_secondary_john())
-            changed = True
-        if changed or not USERS_PATH.exists():
+        if not USERS_PATH.exists():
             save_store(data)
         return data
     finally:
@@ -377,7 +334,7 @@ def how_it_works() -> dict:
             {
                 "n": 1,
                 "title": "Email hits an agent mailbox",
-                "body": "Someone writes a.noknok@freecoffee.dev (or any a.*/e.* agent). The worker on this Mac picks it up.",
+                "body": "Someone writes an a.* / e.* agent address. The worker on the hands machine picks it up.",
             },
             {
                 "n": 2,

@@ -147,7 +147,7 @@ def extract_local(to_field) -> str | None:
             addr = item.get("email") or item.get("address") or item.get("addr") or ""
         else:
             addr = str(item)
-        m = re.search(r"([a-z0-9._+-]+)@freecoffee\.dev", addr, re.I)
+        m = re.search(r"([ae]\.[a-z0-9._+-]+)@", addr, re.I)
         if not m:
             continue
         local = m.group(1).lower()
@@ -532,7 +532,7 @@ Rules:
 
 
 def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str) -> bool:
-    from_addr = f"{agent['local_part']}@freecoffee.dev"
+    from_addr = agent.get("email") or f"{agent['local_part']}@{(load_agents().get('domain') or 'localhost')}"
     from_header = f"{agent['display_name']} <{from_addr}>"
     to_addr = msg.get("from_address")
     if not to_addr:
@@ -661,7 +661,7 @@ def process_once(cfg: dict) -> None:
         if access:
             auth = access.authorize(from_addr, local, cloud_store)
         else:
-            trust_raw = cfg.get("TRUSTED_SENDERS", "@freecoffee.dev")
+            trust_raw = cfg.get("TRUSTED_SENDERS", "")
             patterns = [p.strip() for p in trust_raw.split(",") if p.strip()]
             auth = {"ok": trusted(from_addr, patterns), "reason": "legacy", "grant": {"enabled": True, "mode": "all"}}
         if not auth.get("ok"):

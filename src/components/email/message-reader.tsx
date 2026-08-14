@@ -481,9 +481,12 @@ function MessageReaderBody({
           </div>
           <div className="flex flex-wrap gap-2">
             {message.attachments.map((att) => {
-              const supabaseUrl = typeof window !== "undefined" 
-                ? (document.querySelector('meta[name="supabase-url"]')?.getAttribute("content") || "https://YOUR_PROJECT_REF.supabase.co")
-                : "https://YOUR_PROJECT_REF.supabase.co";
+              const supabaseUrl =
+                (typeof window !== "undefined"
+                  ? document.querySelector('meta[name="supabase-url"]')?.getAttribute("content")
+                  : null) ||
+                process.env.NEXT_PUBLIC_SUPABASE_URL ||
+                "";
               const downloadUrl = `${supabaseUrl}/storage/v1/object/public/email-attachments/${att.storage_path}`;
               const isImage = att.content_type?.startsWith("image/");
               return (
