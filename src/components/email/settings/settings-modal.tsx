@@ -16,6 +16,8 @@ import {
   ListFilter,
   Hand,
   Bot,
+  Wrench,
+  HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 import type { EmailDomain } from "../email-layout";
@@ -31,11 +33,15 @@ import { SignaturesTab } from "./signatures-tab";
 import { JunkTab } from "./junk-tab";
 import { PrivacyTab } from "./privacy-tab";
 import { AgentsTab } from "./agents-tab";
+import { SetupTab } from "./setup-tab";
+import { HowToTab } from "./howto-tab";
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
   { id: "general", label: "General", icon: SlidersHorizontal },
   { id: "accounts", label: "Accounts", icon: AtSign },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "setup", label: "Setup", icon: Wrench },
+  { id: "howto", label: "How it works", icon: HelpCircle },
   { id: "junk", label: "Junk Mail", icon: AlertOctagon },
   { id: "appearance", label: "Appearance", icon: SunMoon },
   { id: "viewing", label: "Viewing", icon: Eye },
@@ -84,7 +90,7 @@ export function SettingsModal({
     >
       <div
         className={`flex flex-col w-full h-full md:rounded-xl overflow-hidden ${
-          activeTab === "agents"
+          activeTab === "agents" || activeTab === "setup" || activeTab === "howto"
             ? "md:h-[min(760px,94vh)] md:w-[min(960px,96vw)]"
             : "md:h-[min(560px,90vh)] md:w-[min(720px,95vw)]"
         }`}
@@ -149,7 +155,13 @@ export function SettingsModal({
           {activeTab === "accounts" && (
             <AccountsTab domains={domains} initialDomainId={initialDomainId} onRefreshDomains={onRefreshDomains} />
           )}
-          {activeTab === "agents" && <AgentsTab />}
+          {activeTab === "agents" && (
+            <AgentsTab domains={domains} onRefreshDomains={onRefreshDomains} />
+          )}
+          {activeTab === "setup" && (
+            <SetupTab domains={domains} onOpenTab={setActiveTab} onRefreshDomains={onRefreshDomains} />
+          )}
+          {activeTab === "howto" && <HowToTab />}
           {activeTab === "junk" && <JunkTab />}
           {activeTab === "appearance" && <AppearanceTab />}
           {activeTab === "viewing" && <ViewingTab />}

@@ -22,6 +22,8 @@ export type SettingsTab =
   | "general"
   | "accounts"
   | "agents"
+  | "setup"
+  | "howto"
   | "junk"
   | "appearance"
   | "viewing"

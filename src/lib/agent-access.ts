@@ -128,7 +128,7 @@ export function howItWorks() {
       {
         n: 1,
         title: "Email hits an agent mailbox",
-        body: "Someone writes an a.* / e.* address. The worker on the hands machine picks it up.",
+        body: "Someone writes an a.* / e.* mailbox you created under Agents → Mailboxes. The worker picks it up.",
       },
       {
         n: 2,

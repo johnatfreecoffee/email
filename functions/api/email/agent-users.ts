@@ -80,16 +80,36 @@ function publicUser(
   };
 }
 
-async function loadCatalog(env: Env): Promise<Array<{ local_part: string; display_name: string }>> {
-  const res = await supabaseQuery(env, "/email_addresses?select=address,display_name&order=address.asc");
-  const out: Array<{ local_part: string; display_name: string }> = [];
+async function loadCatalog(env: Env): Promise<Array<{
+  local_part: string;
+  display_name: string;
+  is_active: boolean;
+  mailbox: string;
+}>> {
+  const res = await supabaseQuery(
+    env,
+    "/email_addresses?select=id,address,display_name,is_active,domain_id&order=address.asc"
+  );
+  const domains = await supabaseQuery(env, "/email_domains?select=id,domain");
+  const domainById = new Map(
+    (Array.isArray(domains.data) ? domains.data : []).map((d: { id: string; domain: string }) => [d.id, d.domain])
+  );
+  const out: Array<{ local_part: string; display_name: string; is_active: boolean; mailbox: string }> = [];
   if (res.ok && Array.isArray(res.data)) {
-    for (const a of res.data as Array<{ address?: string; display_name?: string | null }>) {
+    for (const a of res.data as Array<{
+      address?: string;
+      display_name?: string | null;
+      is_active?: boolean;
+      domain_id?: string;
+    }>) {
       const local = String(a.address || "").toLowerCase();
       if (!isAgentLocal(local)) continue;
+      const domain = domainById.get(String(a.domain_id || "")) || "";
       out.push({
         local_part: local,
         display_name: a.display_name || agentDisplayName(local),
+        is_active: a.is_active !== false,
+        mailbox: domain ? `${local}@${domain}` : local,
       });
     }
   }

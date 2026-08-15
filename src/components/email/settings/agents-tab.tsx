@@ -1,20 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import {
   type Grant,
   type GrantMode,
   blankGrant,
-  howItWorks,
   normalizeGrant,
   previewFromGrant,
 } from "@/lib/agent-access";
+import type { EmailDomain } from "../email-layout";
 
 interface AgentInfo {
+  id?: string;
   local_part: string;
   display_name: string;
+  is_active?: boolean;
+  mailbox?: string;
+  domain_id?: string;
+  domain?: string;
 }
 
 interface AgentUser {
@@ -26,7 +31,14 @@ interface AgentUser {
   agents: Record<string, Grant>;
 }
 
-type SubTab = "active" | "access" | "archived" | "how" | "setup";
+type SubTab = "mailboxes" | "active" | "access" | "archived";
+
+const AM_CSS = `
+  .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; box-sizing:border-box; }
+  .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
+  .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
+  .am-pre { margin:8px 0 0; padding:10px 12px; border-radius:10px; background:#111827; color:#e5e7eb; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; overflow-x:hidden; max-width:100%; max-height:220px; overflow-y:auto; }
+`;
 
 const chip = (on: boolean): React.CSSProperties => ({
   border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
@@ -38,8 +50,14 @@ const chip = (on: boolean): React.CSSProperties => ({
   fontWeight: on ? 600 : 500,
 });
 
-export function AgentsTab() {
-  const [tab, setTab] = useState<SubTab>("active");
+export function AgentsTab({
+  domains = [],
+  onRefreshDomains,
+}: {
+  domains?: EmailDomain[];
+  onRefreshDomains?: () => void;
+}) {
+  const [tab, setTab] = useState<SubTab>("mailboxes");
   const [users, setUsers] = useState<AgentUser[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,18 +72,18 @@ export function AgentsTab() {
   const [nerr, setNerr] = useState("");
 
   const load = useCallback(async () => {
-    if (tab === "how" || tab === "setup") {
-      setLoading(false);
-      return;
-    }
     setLoading(true);
     setError("");
     try {
-      const res = await apiFetch(`/api/email/agent-users?tab=${tab === "archived" ? "archived" : "active"}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
+      const [people, boxes] = await Promise.all([
+        apiFetch(`/api/email/agent-users?tab=${tab === "archived" ? "archived" : "active"}`),
+        apiFetch("/api/email/agent-mailboxes"),
+      ]);
+      const data = await people.json();
+      const box = await boxes.json();
+      if (!people.ok) throw new Error(data.error || people.statusText);
       setUsers(data.users || []);
-      setAgents(data.agents || []);
+      setAgents((box.agents || data.agents || []) as AgentInfo[]);
       setNeedsMigration(!!data.needs_migration);
     } catch (e) {
       setError(e instanceof Error ? e.message : "failed to load");
@@ -152,20 +170,29 @@ export function AgentsTab() {
     await load();
   }
 
-  if (tab === "how") {
+  if (tab === "mailboxes") {
     return (
       <div>
         <SubTabs tab={tab} setTab={setTab} />
-        <HowPanel />
-      </div>
-    );
-  }
-
-  if (tab === "setup") {
-    return (
-      <div>
-        <SubTabs tab={tab} setTab={setTab} />
-        <SetupPanel />
+        {loading ? (
+          <div className="flex justify-center py-10" style={{ color: "var(--mc-text-muted)" }}>
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="text-[13px]" style={{ color: "#dc2626" }}>{error}</div>
+        ) : (
+          <MailboxesPanel
+            agents={agents}
+            domains={domains}
+            onAgents={setAgents}
+            onError={setError}
+            onRefresh={() => {
+              void load();
+              onRefreshDomains?.();
+            }}
+          />
+        )}
+        <style>{AM_CSS}</style>
       </div>
     );
   }
@@ -188,11 +215,7 @@ export function AgentsTab() {
             onError={setError}
           />
         )}
-        <style>{`
-          .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; }
-          .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
-          .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
-        `}</style>
+        <style>{AM_CSS}</style>
       </div>
     );
   }
@@ -256,23 +279,17 @@ export function AgentsTab() {
           ))}
         </div>
       )}
-      <style>{`
-        .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; }
-        .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
-        .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
-        .am-pre { margin:8px 0 0; padding:10px 12px; border-radius:10px; background:#111827; color:#e5e7eb; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow:auto; max-height:220px; }
-      `}</style>
+      <style>{AM_CSS}</style>
     </div>
   );
 }
 
 function SubTabs({ tab, setTab }: { tab: SubTab; setTab: (t: SubTab) => void }) {
   const items: Array<[SubTab, string]> = [
+    ["mailboxes", "Mailboxes"],
     ["active", "Users"],
     ["access", "Access"],
-    ["archived", "Archive"],
-    ["setup", "Setup"],
-    ["how", "How it works"],
+    ["archived", "People archive"],
   ];
   return (
     <div className="flex gap-1 mb-4 p-1 rounded-[10px] w-fit" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
@@ -376,6 +393,158 @@ function UserCard({
   );
 }
 
+function MailboxesPanel({
+  agents,
+  domains,
+  onAgents,
+  onError,
+  onRefresh,
+}: {
+  agents: AgentInfo[];
+  domains: EmailDomain[];
+  onAgents: (next: AgentInfo[]) => void;
+  onError: (msg: string) => void;
+  onRefresh: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [domainId, setDomainId] = useState(domains[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    if (!domainId && domains[0]?.id) setDomainId(domains[0].id);
+  }, [domains, domainId]);
+
+  const shown = agents.filter((a) => {
+    const n = q.toLowerCase().trim();
+    if (!n) return true;
+    return `${a.display_name} ${a.local_part} ${a.mailbox || ""}`.toLowerCase().includes(n);
+  });
+  const active = shown.filter((a) => a.is_active !== false);
+  const archived = shown.filter((a) => a.is_active === false);
+
+  async function create() {
+    setErr("");
+    if (!domainId) {
+      setErr("Add a domain in Accounts first.");
+      return;
+    }
+    if (!name.trim() && !slug.trim()) {
+      setErr("Give them a name, like Marketing.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await apiFetch("/api/email/agent-mailboxes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, name: name.trim() || slug.trim(), slug: slug.trim() || name.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Couldn't create that agent");
+        return;
+      }
+      onAgents(data.agents || []);
+      setName("");
+      setSlug("");
+      onRefresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setActive(a: AgentInfo, on: boolean) {
+    if (!a.id) return;
+    const res = await apiFetch(`/api/email/agent-mailboxes?id=${a.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_active: on }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      onError(data.error || "Couldn't update");
+      return;
+    }
+    onAgents(data.agents || []);
+    onRefresh();
+  }
+
+  return (
+    <div className="min-w-0">
+      <p className="text-[12px] mb-3 leading-5" style={{ color: "var(--mc-text-muted)" }}>
+        Each agent is a mailbox. Active ones show under Agents in the sidebar. Archived ones stay on this list so you can turn them back on.
+      </p>
+      <div className="mb-3 grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 1.2fr auto" }}>
+        <input className="am-in" placeholder="Name — Marketing" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="am-in" placeholder="Short id — marketing" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} />
+        <select className="am-in" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
+          {!domains.length && <option value="">Add a domain first</option>}
+          {domains.map((d) => (
+            <option key={d.id} value={d.id}>{d.domain}</option>
+          ))}
+        </select>
+        <button className="am-btn" disabled={busy || !domains.length} onClick={() => void create()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
+        </button>
+      </div>
+      {err && <p className="text-[12px] mb-2" style={{ color: "#dc2626" }}>{err}</p>}
+      <input className="am-in w-full mb-3" placeholder="Search agents" value={q} onChange={(e) => setQ(e.target.value)} />
+
+      <p className="text-[11px] font-semibold mb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+        Active ({active.length})
+      </p>
+      <AgentMailboxList rows={active} empty="No active agents yet. Create one above." onArchive={(a) => void setActive(a, false)} />
+
+      <p className="text-[11px] font-semibold mt-4 mb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+        Archived ({archived.length})
+      </p>
+      <AgentMailboxList rows={archived} empty="Nothing archived." restore onArchive={(a) => void setActive(a, true)} />
+    </div>
+  );
+}
+
+function AgentMailboxList({
+  rows,
+  empty,
+  restore,
+  onArchive,
+}: {
+  rows: AgentInfo[];
+  empty: string;
+  restore?: boolean;
+  onArchive: (a: AgentInfo) => void;
+}) {
+  if (!rows.length) {
+    return <p className="text-[12px] py-2" style={{ color: "var(--mc-text-muted)" }}>{empty}</p>;
+  }
+  return (
+    <div className="grid gap-2">
+      {rows.map((a) => (
+        <div
+          key={a.id || a.local_part}
+          className="flex items-center justify-between gap-3 rounded-[10px] px-3 py-2.5 min-w-0"
+          style={{
+            border: "1px solid var(--mc-border)",
+            backgroundColor: "var(--mc-bg-elevated)",
+            opacity: restore ? 0.75 : 1,
+          }}
+        >
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>{a.display_name}</div>
+            <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{a.mailbox || a.local_part}</div>
+          </div>
+          <button className="am-ghost flex-shrink-0" onClick={() => onArchive(a)}>
+            {restore ? "Restore" : "Archive"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function AccessByAgent({
   users,
   agents,
@@ -448,8 +617,13 @@ function AccessByAgent({
                 }}
               >
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{a.display_name}</div>
-                  <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{a.local_part}</div>
+                  <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                    {a.display_name}
+                    {a.is_active === false ? (
+                      <span className="ml-1.5 text-[10px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>archived</span>
+                    ) : null}
+                  </div>
+                  <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{a.mailbox || a.local_part}</div>
                 </div>
                 <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: "var(--mc-bg-active)", color: "var(--mc-accent)" }}>
                   {allowed.length ? `${allowed.length} ${allowed.length === 1 ? "person" : "people"}` : "owner only until you add someone"}
@@ -586,201 +760,8 @@ function AgentRow({
         What Grok sees (hidden from the sender)
       </div>
       <pre className="am-pre">{live.prompt}</pre>
-      <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-muted)" }}>{live.flags}</div>
+      <div className="text-[11px] mt-1 break-all" style={{ color: "var(--mc-text-muted)" }}>{live.flags}</div>
     </div>
   );
 }
 
-type SetupTile = { id: string; ok: boolean; configured: boolean; detail: string };
-
-const TILE_META: Record<string, { title: string; why: string; help: string; mark: string; color: string }> = {
-  resend: {
-    title: "Resend",
-    why: "Inbound + outbound mail",
-    help: "Set RESEND_API_KEY. Point the inbound webhook at /api/email/inbound.",
-    mark: "R",
-    color: "#111827",
-  },
-  supabase: {
-    title: "Supabase",
-    why: "Mail + allowlist database",
-    help: "Set SUPABASE_URL and SUPABASE_SERVICE_KEY. Run migrations/*.sql.",
-    mark: "S",
-    color: "#15803d",
-  },
-  cloudflare: {
-    title: "Cloudflare",
-    why: "DNS auto-config for new domains",
-    help: "Set CLOUDFLARE_API_TOKEN (Zone + DNS). Optional if you add records by hand.",
-    mark: "CF",
-    color: "#f97316",
-  },
-  domain: {
-    title: "Domain",
-    why: "At least one mailbox domain",
-    help: "Settings → Accounts → add and verify a domain.",
-    mark: "@",
-    color: "#007aff",
-  },
-  machine: {
-    title: "This machine",
-    why: "Grok worker that can edit code",
-    help: "./scripts/install-local-worker.sh  (Mac)\n./scripts/install-local-worker-linux.sh",
-    mark: "⌘",
-    color: "#0f172a",
-  },
-  chat: {
-    title: "Cloud chat",
-    why: "Questions only when this machine is offline",
-    help: "Set XAI_API_KEY on the Pages project. Cannot edit repos. Code asks wait for This machine or Cloud box.",
-    mark: "G",
-    color: "#007aff",
-  },
-  box: {
-    title: "Cloud box",
-    why: "Docker worker that can edit git clones",
-    help: "Privileged VM. See worker/BOX.md and worker/fly.toml. Not created unless you opt in. Same allowlist + claim lock as This machine.",
-    mark: "□",
-    color: "#334155",
-  },
-};
-
-function SetupPanel() {
-  const [tiles, setTiles] = useState<SetupTile[]>([]);
-  const [coming, setComing] = useState<Array<{ id: string; label: string; detail: string }>>([]);
-  const [open, setOpen] = useState<string | null>(null);
-  const [err, setErr] = useState("");
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await apiFetch("/api/email/agent-setup");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || res.statusText);
-      setTiles(data.tiles || []);
-      setComing(data.coming || []);
-      setErr("");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "failed");
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 15000);
-    return () => clearInterval(t);
-  }, [refresh]);
-
-  return (
-    <div>
-      <p className="text-[12px] mb-3" style={{ color: "var(--mc-text-muted)" }}>
-        Green = connected. Click a tile for what it does and how to hook it up. Keys never show here.
-      </p>
-      <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-        {tiles.map((t) => {
-          const meta = TILE_META[t.id];
-          if (!meta) return null;
-          const on = open === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setOpen(on ? null : t.id)}
-              className="text-left rounded-[12px] p-3"
-              style={{
-                border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
-                backgroundColor: "var(--mc-bg-tertiary)",
-              }}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span
-                  className="h-8 w-8 rounded-lg text-white text-[11px] font-bold flex items-center justify-center"
-                  style={{ backgroundColor: meta.color }}
-                >
-                  {meta.mark}
-                </span>
-                <span
-                  className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
-                  style={{
-                    color: t.ok ? "#15803d" : "#dc2626",
-                    border: `1px solid ${t.ok ? "#15803d" : "#dc2626"}`,
-                  }}
-                >
-                  {t.ok ? "Connected" : t.configured ? "Error" : "Missing"}
-                </span>
-              </div>
-              <div className="text-[13px] font-semibold mt-2" style={{ color: "var(--mc-text)" }}>{meta.title}</div>
-              <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>{meta.why}</div>
-              <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-faint)" }}>{t.detail}</div>
-            </button>
-          );
-        })}
-        {coming.map((c) => (
-          <div
-            key={c.id}
-            className="rounded-[12px] p-3 opacity-70"
-            style={{ border: "1px dashed var(--mc-border)", backgroundColor: "var(--mc-bg-tertiary)" }}
-          >
-            <div className="text-[10px] font-bold" style={{ color: "var(--mc-text-faint)" }}>Later</div>
-            <div className="text-[13px] font-semibold mt-2" style={{ color: "var(--mc-text)" }}>{c.label}</div>
-            <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>{c.detail}</div>
-          </div>
-        ))}
-      </div>
-      {open && TILE_META[open] && (
-        <div className="mt-3 rounded-[12px] p-3" style={{ border: "1px solid var(--mc-border)" }}>
-          <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{TILE_META[open].title}</div>
-          <div className="text-[12px] mt-1" style={{ color: "var(--mc-text-muted)" }}>{TILE_META[open].help}</div>
-        </div>
-      )}
-      {err && <div className="text-[12px] mt-2" style={{ color: "#dc2626" }}>{err}</div>}
-    </div>
-  );
-}
-
-function HowPanel() {
-  const how = howItWorks();
-  return (
-    <div>
-      <h3 className="text-[13px] font-semibold mb-2" style={{ color: "var(--mc-text)" }}>The flow</h3>
-      <div className="grid gap-2 mb-4">
-        {how.flow.map((s) => (
-          <div key={s.n} className="flex gap-3 rounded-[10px] p-3" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
-            <div className="h-6 w-6 rounded-full flex items-center justify-center text-[12px] font-bold text-white flex-shrink-0" style={{ backgroundColor: "var(--mc-accent)" }}>
-              {s.n}
-            </div>
-            <div>
-              <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{s.title}</div>
-              <div className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>{s.body}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <h3 className="text-[13px] font-semibold mb-2" style={{ color: "var(--mc-text)" }}>When it never hits Grok</h3>
-      <div className="grid gap-2 mb-4 md:grid-cols-3">
-        {how.stops.map((s) => (
-          <div key={s.id} className="rounded-[10px] p-3" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
-            <div className="text-[11px] font-bold mb-1" style={{ color: "#dc2626" }}>Grok does not run</div>
-            <div className="text-[13px] font-semibold mb-1" style={{ color: "var(--mc-text)" }}>{s.title}</div>
-            <pre className="am-pre">{s.reply}</pre>
-          </div>
-        ))}
-      </div>
-      <h3 className="text-[13px] font-semibold mb-2" style={{ color: "var(--mc-text)" }}>The actual pre-prompt Grok gets</h3>
-      <div className="grid gap-3">
-        {([
-          ["Questions only", how.previews.ask],
-          ["Custom (read + write)", how.previews.custom],
-          ["All", how.previews.all],
-        ] as const).map(([title, p]) => (
-          <div key={title} className="rounded-[10px] p-3" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
-            <div className="flex items-center gap-2 mb-1">
-              <Bot className="h-4 w-4" style={{ color: "var(--mc-accent)" }} />
-              <span className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{title}</span>
-            </div>
-            <pre className="am-pre">{p.prompt}</pre>
-            <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-muted)" }}>{p.flags}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}

@@ -65,6 +65,7 @@ export const onRequest = async (context: CFContext) => {
     const body = await request.json() as {
       display_name?: string | null;
       address?: string;
+      is_active?: boolean;
     };
 
     const updates: Record<string, any> = {};
@@ -72,6 +73,10 @@ export const onRequest = async (context: CFContext) => {
     if (body.display_name !== undefined) {
       const trimmed = (body.display_name || "").trim();
       updates.display_name = trimmed.length > 0 ? trimmed : null;
+    }
+
+    if (typeof body.is_active === "boolean") {
+      updates.is_active = body.is_active;
     }
 
     if (body.address !== undefined) {
