@@ -26,7 +26,7 @@ interface AgentUser {
   agents: Record<string, Grant>;
 }
 
-type SubTab = "active" | "archived" | "how" | "setup";
+type SubTab = "active" | "access" | "archived" | "how" | "setup";
 
 const chip = (on: boolean): React.CSSProperties => ({
   border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
@@ -170,6 +170,33 @@ export function AgentsTab() {
     );
   }
 
+  if (tab === "access") {
+    return (
+      <div>
+        <SubTabs tab={tab} setTab={setTab} />
+        {loading ? (
+          <div className="flex justify-center py-10" style={{ color: "var(--mc-text-muted)" }}>
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="text-[13px]" style={{ color: "#dc2626" }}>{error}</div>
+        ) : (
+          <AccessByAgent
+            users={users}
+            agents={agents}
+            onUsers={setUsers}
+            onError={setError}
+          />
+        )}
+        <style>{`
+          .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; }
+          .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
+          .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
+        `}</style>
+      </div>
+    );
+  }
+
   return (
     <div>
       <SubTabs tab={tab} setTab={setTab} />
@@ -242,6 +269,7 @@ export function AgentsTab() {
 function SubTabs({ tab, setTab }: { tab: SubTab; setTab: (t: SubTab) => void }) {
   const items: Array<[SubTab, string]> = [
     ["active", "Users"],
+    ["access", "Access"],
     ["archived", "Archive"],
     ["setup", "Setup"],
     ["how", "How it works"],
@@ -344,6 +372,140 @@ function UserCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AccessByAgent({
+  users,
+  agents,
+  onUsers,
+  onError,
+}: {
+  users: AgentUser[];
+  agents: AgentInfo[];
+  onUsers: (next: AgentUser[] | ((prev: AgentUser[]) => AgentUser[])) => void;
+  onError: (msg: string) => void;
+}) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function saveGrant(user: AgentUser, local: string, grant: Grant) {
+    const key = `${user.id}:${local}`;
+    setBusy(key);
+    const agentsMap: Record<string, Grant> = {};
+    for (const a of agents) agentsMap[a.local_part] = blankGrant();
+    Object.assign(agentsMap, user.agents || {});
+    for (const k of Object.keys(agentsMap)) agentsMap[k] = normalizeGrant(agentsMap[k]);
+    agentsMap[local] = grant;
+    const res = await apiFetch(`/api/email/agent-users?id=${user.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...user, agents: agentsMap }),
+    });
+    const data = await res.json();
+    setBusy(null);
+    if (!res.ok) {
+      onError(data.error || "save failed");
+      return;
+    }
+    onUsers((prev) => prev.map((u) => (u.id === user.id ? data.user : u)));
+  }
+
+  if (!agents.length) {
+    return (
+      <div className="text-center py-10 text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
+        No agent mailboxes yet. Add an a.* or e.* address under Accounts.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-[12px] mb-3" style={{ color: "var(--mc-text-muted)" }}>
+        Who can email each agent. Same list as Users — flip either place. Off = Grok never starts. Only listed people can write these mailboxes.
+      </p>
+      <div className="grid gap-2">
+        {agents.map((a) => {
+          const allowed = users.filter((u) => u.agents?.[a.local_part]?.enabled);
+          const isOpen = open.has(a.local_part);
+          return (
+            <div
+              key={a.local_part}
+              className="rounded-[10px] overflow-hidden"
+              style={{ border: "1px solid var(--mc-border)", backgroundColor: "var(--mc-bg-elevated)" }}
+            >
+              <button
+                type="button"
+                className="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left"
+                onClick={() => {
+                  setOpen((s) => {
+                    const n = new Set(s);
+                    if (n.has(a.local_part)) n.delete(a.local_part);
+                    else n.add(a.local_part);
+                    return n;
+                  });
+                }}
+              >
+                <div className="min-w-0">
+                  <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{a.display_name}</div>
+                  <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{a.local_part}</div>
+                </div>
+                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0" style={{ backgroundColor: "var(--mc-bg-active)", color: "var(--mc-accent)" }}>
+                  {allowed.length ? `${allowed.length} ${allowed.length === 1 ? "person" : "people"}` : "owner only until you add someone"}
+                </span>
+              </button>
+              {isOpen && (
+                <div className="px-3 pb-3" style={{ borderTop: "1px solid var(--mc-border)" }}>
+                  {!users.length ? (
+                    <p className="text-[12px] py-3" style={{ color: "var(--mc-text-muted)" }}>
+                      No people on Users yet. Add someone on the Users tab, then turn them on here.
+                    </p>
+                  ) : (
+                    <ul className="divide-y" style={{ borderColor: "var(--mc-border)" }}>
+                      {users.map((u) => {
+                        const g = normalizeGrant(u.agents?.[a.local_part] || blankGrant());
+                        const rowBusy = busy === `${u.id}:${a.local_part}`;
+                        return (
+                          <li key={u.id} className="flex items-start justify-between gap-3 py-2.5">
+                            <label className="flex items-start gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={g.enabled}
+                                disabled={rowBusy}
+                                onChange={(e) => void saveGrant(u, a.local_part, { ...g, enabled: e.target.checked })}
+                              />
+                              <span className="min-w-0">
+                                <span className="block text-[13px] font-medium" style={{ color: "var(--mc-text)" }}>
+                                  {u.first_name} {u.last_name}
+                                </span>
+                                <span className="block text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{u.email}</span>
+                              </span>
+                            </label>
+                            <div className="flex flex-wrap gap-1 justify-end" style={{ opacity: g.enabled ? 1 : 0.4, pointerEvents: g.enabled && !rowBusy ? "auto" : "none" }}>
+                              {(["ask", "custom", "all"] as GrantMode[]).map((m) => (
+                                <button
+                                  key={m}
+                                  type="button"
+                                  style={chip(g.mode === m)}
+                                  onClick={() => void saveGrant(u, a.local_part, applyMode(g, m))}
+                                >
+                                  {m === "ask" ? "Questions" : m === "all" ? "All" : "Custom"}
+                                </button>
+                              ))}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

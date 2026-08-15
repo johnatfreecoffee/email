@@ -133,7 +133,7 @@ export function howItWorks() {
       {
         n: 2,
         title: "Are they on Users?",
-        body: "From-address is checked against Settings → Agents. Not on the list → stop. Grok never starts. No reply.",
+        body: "From-address is checked against Settings → Agents (Users or Access). Not on the list → stop. Grok never starts. No reply.",
       },
       {
         n: 3,
@@ -143,7 +143,7 @@ export function howItWorks() {
       {
         n: 4,
         title: "Is this agent checked for them?",
-        body: "On the list but this agent unchecked → Grok still does not start. They get a short denial email. Other checked agents still work.",
+        body: "On the list but this agent off (Users or Access tab) → Grok still does not start. They get a short denial email. Other checked agents still work.",
       },
       {
         n: 5,
