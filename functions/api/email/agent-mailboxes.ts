@@ -101,7 +101,13 @@ export const onRequest = async (context: CFContext) => {
   if (request.method === "PATCH") {
     const id = url.searchParams.get("id") || "";
     if (!id) return errorResponse("id required", 400, origin);
-    const body = (await request.json()) as { display_name?: string; is_active?: boolean };
+    let body: { display_name?: string; is_active?: boolean } = {};
+    try {
+      const parsed = await request.json();
+      if (parsed && typeof parsed === "object") body = parsed as { display_name?: string; is_active?: boolean };
+    } catch {
+      return errorResponse("invalid json", 400, origin);
+    }
     const updates: Record<string, unknown> = {};
     if (typeof body.display_name === "string") {
       const t = body.display_name.trim();

@@ -216,7 +216,6 @@ export const onRequest = async (context: CFContext) => {
   }
 
   if (request.method === "POST") {
-    const body = (await request.json()) as Record<string, unknown>;
     const action = String(url.searchParams.get("action") || "");
     const id = url.searchParams.get("id") || "";
 
@@ -232,6 +231,14 @@ export const onRequest = async (context: CFContext) => {
       const user = await loadUserBundle(env, id, catalogLocals);
       if (!user) return errorResponse("user not found", 404, origin);
       return jsonResponse({ user }, 200, origin);
+    }
+
+    let body: Record<string, unknown> = {};
+    try {
+      const parsed = await request.json();
+      if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
+    } catch {
+      return errorResponse("invalid json", 400, origin);
     }
 
     const first = String(body.first_name || "").trim();
@@ -264,7 +271,13 @@ export const onRequest = async (context: CFContext) => {
   if (request.method === "PUT") {
     const id = url.searchParams.get("id") || "";
     if (!UUID_RE.test(id)) return errorResponse("id required", 400, origin);
-    const body = (await request.json()) as Record<string, unknown>;
+    let body: Record<string, unknown> = {};
+    try {
+      const parsed = await request.json();
+      if (parsed && typeof parsed === "object") body = parsed as Record<string, unknown>;
+    } catch {
+      return errorResponse("invalid json", 400, origin);
+    }
     const first = String(body.first_name || "").trim();
     const last = String(body.last_name || "").trim();
     const email = normalizeEmail(body.email);

@@ -226,7 +226,9 @@ export function AgentsTab({
   }
 
   async function archiveOrRestore(id: string, action: "archive" | "restore") {
-    await apiFetch(`/api/email/agent-users?id=${id}&action=${action}`, { method: "POST" });
+    window.clearTimeout(saveTimers.current[id]);
+    setError("");
+    const snapshot = users;
     setUsers((prev) => prev.filter((u) => u.id !== id));
     setDrafts((prev) => {
       const next = { ...prev };
@@ -238,7 +240,22 @@ export function AgentsTab({
       n.delete(id);
       return n;
     });
-    await load(true);
+    try {
+      const res = await apiFetch(`/api/email/agent-users?id=${id}&action=${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUsers(snapshot);
+        setError(data.error || `Couldn't ${action}`);
+        return;
+      }
+    } catch (e) {
+      setUsers(snapshot);
+      setError(e instanceof Error ? e.message : `Couldn't ${action}`);
+    }
   }
 
   if (tab === "setup") {
@@ -664,18 +681,20 @@ function MailboxesPanel({
 
   async function setActive(a: AgentInfo, on: boolean) {
     if (!a.id) return;
+    const snapshot = agents;
+    onAgents(agents.map((row) => (row.id === a.id ? { ...row, is_active: on } : row)));
     const res = await apiFetch(`/api/email/agent-mailboxes?id=${a.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_active: on }),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      onAgents(snapshot);
       onError(data.error || "Couldn't update");
       return;
     }
-    onAgents(data.agents || []);
-    onRefresh();
+    if (Array.isArray(data.agents)) onAgents(data.agents);
   }
 
   return (
