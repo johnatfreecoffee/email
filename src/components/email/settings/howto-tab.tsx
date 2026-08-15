@@ -7,6 +7,9 @@ export function HowToTab() {
   const how = howItWorks();
   return (
     <div className="min-w-0 max-w-full overflow-x-hidden">
+      <p className="text-[13px] mb-3 leading-5" style={{ color: "var(--mc-text-muted)" }}>
+        This app is your mail. Settings → Setup walks every integration (database, Resend, domain, sign-in, worker). Agents are optional mailboxes on top.
+      </p>
       <p className="text-[13px] mb-4 leading-5" style={{ color: "var(--mc-text-muted)" }}>
         An agent is just a mailbox. Someone emails it. If they are allowed, Grok answers. If they are not, nothing happens.
       </p>

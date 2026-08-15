@@ -37,9 +37,9 @@ Point Resend’s inbound webhook at `https://YOUR_PAGES_URL/api/email/inbound`.
 # copy worker/config.env.example → ~/Library/AgentMail/config.env
 ```
 
-Open the app → Settings → **Agents → Setup**. Tiles should go green.
+Open the app → Settings → **Setup**. It walks the whole stack (database, Resend, domain, sign-in, then this computer / cloud box / cloud questions if you want agents). Tiles go green as each piece connects.
 
-Then Settings → **Agents → Users**: add people, pick agents, Questions only / Custom / All.
+Then Settings → **Agents**: create mailboxes, add people, pick Questions only / Custom / All.
 
 ## How mail becomes an agent turn
 
@@ -51,6 +51,8 @@ Then Settings → **Agents → Users**: add people, pick agents, Questions only 
 Grok Build that edits repos **cannot** run on Cloudflare Pages. Pages stores mail and knobs. A machine (this laptop or a cloud box) does the work.
 
 Laptop closed: **Cloud chat** (questions only, `XAI_API_KEY`) or a **Cloud box** (`worker/BOX.md`). Do not expose the box to the public internet.
+
+Change the run path any time in Settings → Setup.
 
 ## License
 

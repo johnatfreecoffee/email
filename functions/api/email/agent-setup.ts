@@ -98,6 +98,43 @@ async function pingWorker(env: Env): Promise<Tile> {
   };
 }
 
+async function pingAuth(env: Env): Promise<Tile> {
+  if (!env.MC_API_SECRET) return { id: "auth", ok: false, configured: false, detail: "MC_API_SECRET missing" };
+  return { id: "auth", ok: true, configured: true, detail: "sign-in secret set" };
+}
+
+async function pingPush(env: Env): Promise<Tile> {
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) {
+    return { id: "push", ok: false, configured: false, detail: "VAPID keys missing — optional" };
+  }
+  return { id: "push", ok: true, configured: true, detail: "web push ready" };
+}
+
+async function pingMigrations(env: Env): Promise<Tile> {
+  const r = await supabaseQuery(env, "/agent_senders?select=id&limit=1");
+  const code = (r.data as { code?: string } | null)?.code;
+  if (code === "PGRST205" || code === "42P01" || r.status === 404) {
+    return { id: "migrations", ok: false, configured: false, detail: "run migrations/*.sql in Supabase" };
+  }
+  if (!r.ok) return { id: "migrations", ok: false, configured: true, detail: "tables not reachable" };
+  return { id: "migrations", ok: true, configured: true, detail: "email + agent tables present" };
+}
+
+async function pingInbound(env: Env): Promise<Tile> {
+  if (!env.RESEND_API_KEY) return { id: "inbound", ok: false, configured: false, detail: "needs Resend first" };
+  const r = await resendAPI(env, "/webhooks");
+  if (!r.ok) return { id: "inbound", ok: false, configured: true, detail: "could not list webhooks" };
+  const list = (r.data as { data?: Array<{ endpoint?: string; events?: string[] }> })?.data || [];
+  const hit = list.find((w) => /\/api\/email\/inbound/i.test(String(w.endpoint || "")));
+  if (!hit) return { id: "inbound", ok: false, configured: false, detail: "point Resend inbound webhook at /api/email/inbound" };
+  return { id: "inbound", ok: true, configured: true, detail: "webhook pointed at this app" };
+}
+
+async function pingJunk(env: Env): Promise<Tile> {
+  if (!env.OPENROUTER_KEY) return { id: "junk", ok: false, configured: false, detail: "OPENROUTER_KEY missing — optional" };
+  return { id: "junk", ok: true, configured: true, detail: "LLM junk assist on" };
+}
+
 export const onRequest = async (context: CFContext) => {
   const { request, env } = context;
   const origin = request.headers.get("Origin") || undefined;
@@ -106,19 +143,25 @@ export const onRequest = async (context: CFContext) => {
   if (authError) return authError;
   if (request.method !== "GET") return errorResponse("method", 405, origin);
 
-  const [resend, supabase, cloudflare, domain, machine, chat, box] = await Promise.all([
-    pingResend(env),
-    pingSupabase(env),
-    pingCloudflare(env),
-    pingDomain(env),
-    pingWorker(env),
-    pingChat(env),
-    pingBox(env),
-  ]);
+  const [supabase, migrations, resend, inbound, cloudflare, domain, auth, push, junk, machine, chat, box] =
+    await Promise.all([
+      pingSupabase(env),
+      pingMigrations(env),
+      pingResend(env),
+      pingInbound(env),
+      pingCloudflare(env),
+      pingDomain(env),
+      pingAuth(env),
+      pingPush(env),
+      pingJunk(env),
+      pingWorker(env),
+      pingChat(env),
+      pingBox(env),
+    ]);
 
   return jsonResponse(
     {
-      tiles: [resend, supabase, cloudflare, domain, machine, chat, box],
+      tiles: [supabase, migrations, resend, inbound, cloudflare, domain, auth, push, junk, machine, chat, box],
     },
     200,
     origin

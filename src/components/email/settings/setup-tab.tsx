@@ -1,58 +1,70 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import type { SettingsTab } from "@/lib/settings";
 import type { EmailDomain } from "../email-layout";
 
-type Hands = "machine" | "box" | "chat";
+type Path = "mail" | "machine" | "box" | "chat";
+type Step = "welcome" | "path" | "database" | "mail" | "domain" | "signin" | "hands" | "extras" | "done";
 type Tile = { id: string; ok: boolean; configured: boolean; detail: string };
 
-const HANDS: Array<{ id: Hands; title: string; body: string; next: string }> = [
+const PATHS: Array<{ id: Path; title: string; body: string }> = [
+  {
+    id: "mail",
+    title: "Mail only",
+    body: "Read and send email in the browser. No agents.",
+  },
   {
     id: "machine",
-    title: "This computer",
-    body: "A small worker on your Mac or Linux box. It can read and edit project folders when you allow it.",
-    next: "Install the worker, then leave this computer on when you want them to work.",
+    title: "Mail + agents on this computer",
+    body: "A worker on your Mac or Linux box answers a.* mail and can edit folders you allow.",
   },
   {
     id: "box",
-    title: "Cloud box",
-    body: "Same worker, in Docker, on a machine that stays on. Good if your laptop sleeps.",
-    next: "See worker/BOX.md. Same allowlist as this computer.",
+    title: "Mail + agents on a cloud box",
+    body: "Same worker in Docker on a machine that stays on. Use this if your laptop sleeps.",
   },
   {
     id: "chat",
-    title: "Questions only (cloud)",
-    body: "Replies when your computer is off. Cannot edit files. Needs an xAI key on the email app.",
-    next: "Set XAI_API_KEY on the Pages project. Code changes wait until This computer or Cloud box is online.",
+    title: "Mail + agents, questions in the cloud",
+    body: "When the worker is off, Grok can still answer questions. It cannot edit files until a worker is online.",
   },
 ];
 
-const TILE_LABEL: Record<string, string> = {
-  resend: "Mail sending",
-  supabase: "Database",
-  cloudflare: "DNS helper",
-  domain: "Your domain",
-  machine: "This computer",
-  chat: "Cloud questions",
-  box: "Cloud box",
+const TILE_META: Record<string, { label: string; required: (p: Path) => boolean; optional?: boolean }> = {
+  supabase: { label: "Database", required: () => true },
+  migrations: { label: "Tables", required: () => true },
+  resend: { label: "Resend", required: () => true },
+  inbound: { label: "Inbound webhook", required: () => true },
+  cloudflare: { label: "Cloudflare DNS", required: () => false, optional: true },
+  domain: { label: "Domain", required: () => true },
+  auth: { label: "Sign-in", required: () => true },
+  push: { label: "Web push", required: () => false, optional: true },
+  junk: { label: "Junk LLM", required: () => false, optional: true },
+  machine: { label: "This computer", required: (p) => p === "machine" },
+  box: { label: "Cloud box", required: (p) => p === "box" },
+  chat: { label: "Cloud questions", required: (p) => p === "chat" },
 };
 
-const SETUP_KEY = "email.agent-setup";
+const SETUP_KEY = "email.stack-setup";
 
-function loadSetup(): { hands: Hands | null; done: boolean } {
+function loadSetup(): { path: Path | null; done: boolean } {
   try {
-    const raw = JSON.parse(localStorage.getItem(SETUP_KEY) || "{}") as { hands?: Hands; done?: boolean };
-    return { hands: raw.hands || null, done: !!raw.done };
+    const raw = JSON.parse(localStorage.getItem(SETUP_KEY) || "{}") as { path?: Path; done?: boolean };
+    return { path: raw.path || null, done: !!raw.done };
   } catch {
-    return { hands: null, done: false };
+    return { path: null, done: false };
   }
 }
 
-function saveSetup(next: { hands: Hands | null; done: boolean }) {
+function saveSetup(next: { path: Path | null; done: boolean }) {
   localStorage.setItem(SETUP_KEY, JSON.stringify(next));
+}
+
+function tile(tiles: Tile[], id: string): Tile | undefined {
+  return tiles.find((t) => t.id === id);
 }
 
 export function SetupTab({
@@ -65,26 +77,17 @@ export function SetupTab({
   onRefreshDomains: () => void;
 }) {
   const saved = loadSetup();
-  const [step, setStep] = useState(saved.done ? 5 : 0);
-  const [hands, setHands] = useState<Hands | null>(saved.hands);
+  const [step, setStep] = useState<Step>(saved.done ? "done" : "welcome");
+  const [path, setPath] = useState<Path | null>(saved.path);
   const [tiles, setTiles] = useState<Tile[]>([]);
-  const [agents, setAgents] = useState<Array<{ id: string; mailbox: string; display_name: string }>>([]);
-  const [domainId, setDomainId] = useState(domains[0]?.id || "");
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
+  const inboundUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/api/email/inbound` : "https://YOUR_PAGES_URL/api/email/inbound";
 
   const refresh = useCallback(async () => {
     try {
-      const [s, a] = await Promise.all([
-        apiFetch("/api/email/agent-setup"),
-        apiFetch("/api/email/agent-mailboxes"),
-      ]);
-      const sd = await s.json();
-      const ad = await a.json();
-      if (s.ok) setTiles(sd.tiles || []);
-      if (a.ok) setAgents(ad.agents || []);
+      const res = await apiFetch("/api/email/agent-setup");
+      const data = await res.json();
+      if (res.ok) setTiles(data.tiles || []);
     } catch {
       /* keep last */
     }
@@ -92,214 +95,295 @@ export function SetupTab({
 
   useEffect(() => {
     void refresh();
-    const t = setInterval(refresh, 15000);
+    const t = setInterval(refresh, 12000);
     return () => clearInterval(t);
   }, [refresh]);
 
-  useEffect(() => {
-    if (!domainId && domains[0]?.id) setDomainId(domains[0].id);
-  }, [domains, domainId]);
+  const picked = PATHS.find((p) => p.id === path);
+  const wantsAgents = path === "machine" || path === "box" || path === "chat";
 
-  const domainOk = tiles.find((t) => t.id === "domain")?.ok;
-  const machineOk = tiles.find((t) => t.id === "machine")?.ok;
-  const chatOk = tiles.find((t) => t.id === "chat")?.ok;
-  const boxOk = tiles.find((t) => t.id === "box")?.ok;
+  const remaining = useMemo(() => {
+    if (!path) return tiles.filter((t) => TILE_META[t.id]?.required("mail") && !t.ok);
+    return tiles.filter((t) => {
+      const meta = TILE_META[t.id];
+      if (!meta) return false;
+      if (meta.optional) return false;
+      return meta.required(path) && !t.ok;
+    });
+  }, [tiles, path]);
 
-  async function createFirst() {
-    setErr("");
-    if (!domainId) {
-      setErr("Add a domain in Accounts first.");
-      return;
-    }
-    if (!name.trim() && !slug.trim()) {
-      setErr("Give them a name, like Marketing.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const res = await apiFetch("/api/email/agent-mailboxes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain_id: domainId, name: name.trim() || slug.trim(), slug: slug.trim() || name.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setErr(data.error || "Couldn't create that agent");
-        return;
-      }
-      setAgents(data.agents || []);
-      onRefreshDomains();
-      setStep(4);
-    } finally {
-      setBusy(false);
-    }
+  function goNext(from: Step) {
+    if (from === "welcome") return setStep("path");
+    if (from === "path") return setStep("database");
+    if (from === "database") return setStep("mail");
+    if (from === "mail") return setStep("domain");
+    if (from === "domain") return setStep("signin");
+    if (from === "signin") return setStep(wantsAgents ? "hands" : "extras");
+    if (from === "hands") return setStep("extras");
+    saveSetup({ path, done: true });
+    setStep("done");
   }
-
-  function finish() {
-    saveSetup({ hands, done: true });
-    setStep(5);
-  }
-
-  const picked = HANDS.find((h) => h.id === hands);
 
   return (
     <div className="min-w-0 max-w-full overflow-x-hidden space-y-4">
-      {step === 0 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Set up email agents</h3>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            An agent is a mailbox like <span className="font-medium">a.marketing@yourdomain</span>. People you allow can email it. Grok answers. Everyone else is ignored.
+      {step === "welcome" && (
+        <Block title="Set up this mail app">
+          <p>
+            Clone it, fill a few keys, and this walkthrough tells you only what you need — mail only, or mail plus agents on this computer, a cloud box, or cloud questions.
           </p>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            This walkthrough picks how they run. You can change it any time.
+          <p>
+            Nothing here is locked. Skip a step, come back, change how you run it later. Green tiles mean that piece is connected.
           </p>
-          <button className="am-btn" onClick={() => setStep(1)}>Get started</button>
-        </div>
+          <button className="am-btn" onClick={() => goNext("welcome")}>Get started</button>
+        </Block>
       )}
 
-      {step === 1 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>How should they work?</h3>
+      {step === "path" && (
+        <Block title="How will you run it?">
           <div className="grid gap-2">
-            {HANDS.map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                onClick={() => setHands(h.id)}
-                className="text-left rounded-[12px] p-3"
-                style={{
-                  border: `1px solid ${hands === h.id ? "var(--mc-accent)" : "var(--mc-border)"}`,
-                  backgroundColor: hands === h.id ? "var(--mc-bg-active)" : "var(--mc-bg-tertiary)",
-                }}
-              >
-                <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{h.title}</div>
-                <div className="text-[12px] leading-5" style={{ color: "var(--mc-text-muted)" }}>{h.body}</div>
-              </button>
+            {PATHS.map((p) => (
+              <Choice key={p.id} on={path === p.id} title={p.title} body={p.body} onClick={() => setPath(p.id)} />
             ))}
           </div>
-          <div className="flex gap-2">
-            <button className="am-ghost" onClick={() => setStep(0)}>Back</button>
-            <button className="am-btn" disabled={!hands} onClick={() => setStep(2)}>Continue</button>
-          </div>
-        </div>
+          <Nav back={() => setStep("welcome")} next={() => goNext("path")} nextOff={!path} />
+        </Block>
       )}
 
-      {step === 2 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Which domain?</h3>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            Agents live on a domain you already receive mail on. {domainOk ? "You have one." : "Add one in Accounts first."}
-          </p>
-          {domains.length ? (
-            <select className="am-in" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
-              {domains.map((d) => (
-                <option key={d.id} value={d.id}>{d.domain}</option>
-              ))}
-            </select>
-          ) : (
-            <button className="am-btn" onClick={() => onOpenTab("accounts")}>Add a domain</button>
-          )}
-          <div className="flex gap-2">
-            <button className="am-ghost" onClick={() => setStep(1)}>Back</button>
-            <button className="am-btn" disabled={!domainId} onClick={() => setStep(agents.length ? 4 : 3)}>Continue</button>
-          </div>
-        </div>
+      {step === "database" && (
+        <Block title="Database (Supabase)">
+          <p>One free Supabase project holds mail, people, and agent grants. Create a project, then paste the URL and service role key into your env.</p>
+          <Code>{`# .env.local and Pages Functions secrets
+SUPABASE_URL=https://YOUR_REF.supabase.co
+SUPABASE_SERVICE_KEY=eyJ...
+NEXT_PUBLIC_SUPABASE_URL=  # same URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY=`}</Code>
+          <p>Then run every file in <code>migrations/</code> in the Supabase SQL editor (top to bottom is fine).</p>
+          <Status tiles={tiles} ids={["supabase", "migrations"]} />
+          <Nav back={() => setStep("path")} next={() => goNext("database")} />
+        </Block>
       )}
 
-      {step === 3 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Create your first agent</h3>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            Name is what you see. Short id becomes the mailbox: a.marketing@yourdomain.
-          </p>
-          <input className="am-in" placeholder="Name — Marketing" value={name} onChange={(e) => setName(e.target.value)} />
-          <input
-            className="am-in"
-            placeholder="Short id — marketing  (we add a.)"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value.toLowerCase())}
-          />
-          {err && <p className="text-[12px]" style={{ color: "#dc2626" }}>{err}</p>}
-          <div className="flex gap-2">
-            <button className="am-ghost" onClick={() => setStep(2)}>Back</button>
-            <button className="am-btn" disabled={busy} onClick={() => void createFirst()}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create agent"}
-            </button>
-            <button className="am-ghost" onClick={() => setStep(4)}>Skip for now</button>
-          </div>
-        </div>
+      {step === "mail" && (
+        <Block title="Send and receive (Resend)">
+          <p>Resend sends mail and receives it. Create an API key, then point inbound at this app.</p>
+          <Code>{`RESEND_API_KEY=re_...
+
+# Resend dashboard → Webhooks → add
+${inboundUrl}
+# events: email.received, email.sent`}</Code>
+          <p>Local dev uses a tunnel or the deployed Pages URL — Resend cannot POST to localhost.</p>
+          <Status tiles={tiles} ids={["resend", "inbound"]} />
+          <Nav back={() => setStep("database")} next={() => goNext("mail")} />
+        </Block>
       )}
 
-      {step === 4 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Who can email them?</h3>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            Only people on Users can write an agent. Anyone else is ignored — Grok never starts. Add people on the Agents tab.
-          </p>
-          {picked && (
-            <div className="rounded-[10px] p-3 text-[12px] leading-5" style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}>
-              <span className="font-semibold" style={{ color: "var(--mc-text)" }}>{picked.title}.</span> {picked.next}
-            </div>
-          )}
+      {step === "domain" && (
+        <Block title="Your domain">
+          <p>Add the domain you want mail on. If the domain is on Cloudflare and you set a token, we write MX/SPF/DKIM for you. Otherwise add the records Resend shows.</p>
+          <Code>{`CLOUDFLARE_API_TOKEN=   # optional, Zone + DNS
+CLOUDFLARE_ACCOUNT_ID=  # optional`}</Code>
+          <Status tiles={tiles} ids={["cloudflare", "domain"]} />
           <div className="flex flex-wrap gap-2">
-            <button className="am-ghost" onClick={() => setStep(3)}>Back</button>
-            <button className="am-btn" onClick={finish}>Finish</button>
-            <button className="am-ghost" onClick={() => onOpenTab("agents")}>Open Agents</button>
+            <button className="am-ghost" type="button" onClick={() => onOpenTab("accounts")}>Open Accounts</button>
+            <button className="am-ghost" type="button" onClick={() => void refresh()}>Recheck</button>
           </div>
-        </div>
+          <Nav back={() => setStep("mail")} next={() => goNext("domain")} />
+        </Block>
       )}
 
-      {step === 5 && (
-        <div className="space-y-3">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Your setup</h3>
-          <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
-            Change this any time. Green means that piece is connected.
+      {step === "signin" && (
+        <Block title="Sign-in">
+          <p>This is a single-owner app. Set the email and password you will type at the login screen, plus a shared API secret (same value on the server and in NEXT_PUBLIC_).</p>
+          <Code>{`MC_API_SECRET=long-random-string
+NEXT_PUBLIC_MC_API_SECRET=long-random-string   # same value
+NEXT_PUBLIC_OWNER_EMAIL=you@example.com
+NEXT_PUBLIC_OWNER_PASSWORD=...`}</Code>
+          <p>Rebuild the frontend after changing NEXT_PUBLIC_* — those are baked in at build time.</p>
+          <Status tiles={tiles} ids={["auth"]} />
+          <Nav back={() => setStep("domain")} next={() => goNext("signin")} />
+        </Block>
+      )}
+
+      {step === "hands" && path === "machine" && (
+        <Block title="This computer (agent worker)">
+          <p>The browser cannot run Grok on your files. A small worker on this machine polls mail and does the work.</p>
+          <Code>{`./scripts/install-local-worker.sh          # Mac
+# ./scripts/install-local-worker-linux.sh  # Linux
+
+# then copy worker/config.env.example →
+#   ~/Library/AgentMail/config.env   (Mac)
+#   ~/.local/share/agentmail/config.env
+# fill SUPABASE_*, RESEND_API_KEY, GROK_BIN`}</Code>
+          <p>Leave the computer awake when you want agents to run. Create the actual agents under the Agents tab.</p>
+          <Status tiles={tiles} ids={["machine"]} />
+          <Nav back={() => setStep("signin")} next={() => goNext("hands")} />
+        </Block>
+      )}
+
+      {step === "hands" && path === "box" && (
+        <Block title="Cloud box (agent worker)">
+          <p>Same worker, in Docker, on a box that stays on. Privileged — treat keys like production. Do not expose it to the public internet.</p>
+          <Code>{`cd worker
+docker build -t agentmail-box .
+# see worker/BOX.md and worker/fly.toml
+# env: SUPABASE_URL, SUPABASE_SERVICE_KEY, RESEND_API_KEY, AGENT_MAIL_DOMAIN`}</Code>
+          <p>This tile turns green when the box heartbeats. Agents themselves are created on the Agents tab.</p>
+          <Status tiles={tiles} ids={["box"]} />
+          <Nav back={() => setStep("signin")} next={() => goNext("hands")} />
+        </Block>
+      )}
+
+      {step === "hands" && path === "chat" && (
+        <Block title="Cloud questions">
+          <p>If the worker is offline, questions-only senders still get a reply. No file tools. Code asks wait for This computer or Cloud box.</p>
+          <Code>{`XAI_API_KEY=xai-...   # Pages Functions secret`}</Code>
+          <Status tiles={tiles} ids={["chat"]} />
+          <Nav back={() => setStep("signin")} next={() => goNext("hands")} />
+        </Block>
+      )}
+
+      {step === "extras" && (
+        <Block title="Optional extras">
+          <p>Skip these if you want. Turn them on later.</p>
+          <p><span className="font-semibold">Web push</span> — alerts when mail arrives and the tab is closed.</p>
+          <Code>{`npx web-push generate-vapid-keys --json
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+NEXT_PUBLIC_VAPID_PUBLIC_KEY=   # same public key`}</Code>
+          <p><span className="font-semibold">Junk assist</span> — optional OpenRouter key for smarter spam. Heuristics work without it.</p>
+          <Code>{`OPENROUTER_KEY=`}</Code>
+          <Status tiles={tiles} ids={["push", "junk"]} />
+          <Nav back={() => setStep(wantsAgents ? "hands" : "signin")} next={() => goNext("extras")} nextLabel="Finish" />
+        </Block>
+      )}
+
+      {step === "done" && (
+        <Block title="Your setup">
+          <p>
+            {picked ? <>Running as <span className="font-semibold">{picked.title}</span>.</> : "Pick how you run it to filter these tiles."}
+            {" "}Green is connected. You can change the path any time.
           </p>
-          {picked && (
-            <p className="text-[13px] leading-5" style={{ color: "var(--mc-text)" }}>
-              Running as <span className="font-semibold">{picked.title}</span>. {picked.next}
-            </p>
+          {remaining.length > 0 && (
+            <p>Still needed: {remaining.map((t) => TILE_META[t.id]?.label || t.id).join(", ")}.</p>
           )}
           <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
-            {tiles.map((t) => (
+            {tiles.filter((t) => {
+              if (!path) return true;
+              const meta = TILE_META[t.id];
+              if (!meta) return true;
+              return meta.required(path) || meta.optional || t.ok || t.configured;
+            }).map((t) => (
               <div key={t.id} className="rounded-[12px] p-3 min-w-0" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[13px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>
-                    {TILE_LABEL[t.id] || t.id}
+                    {TILE_META[t.id]?.label || t.id}
                   </span>
                   {t.ok ? (
                     <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                   ) : (
-                    <span className="text-[10px] font-bold" style={{ color: "#dc2626" }}>Off</span>
+                    <span className="text-[10px] font-bold" style={{ color: TILE_META[t.id]?.optional ? "var(--mc-text-faint)" : "#dc2626" }}>
+                      {TILE_META[t.id]?.optional ? "Optional" : "Off"}
+                    </span>
                   )}
                 </div>
                 <div className="text-[11px] mt-1 break-words" style={{ color: "var(--mc-text-muted)" }}>{t.detail}</div>
               </div>
             ))}
           </div>
-          {hands === "machine" && !machineOk && (
-            <pre className="am-howto-pre">./scripts/install-local-worker.sh{`\n`}# Linux: ./scripts/install-local-worker-linux.sh</pre>
-          )}
-          {hands === "chat" && !chatOk && (
-            <p className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>Add XAI_API_KEY to the email-app Pages project.</p>
-          )}
-          {hands === "box" && !boxOk && (
-            <p className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>Follow worker/BOX.md, then come back — this tile turns green when the box heartbeats.</p>
-          )}
           <div className="flex flex-wrap gap-2">
-            <button className="am-ghost" onClick={() => { saveSetup({ hands, done: false }); setStep(1); }}>Change how they run</button>
-            <button className="am-btn" onClick={() => onOpenTab("agents")}>Create or edit agents</button>
-            <button className="am-ghost" onClick={() => onOpenTab("howto")}>How it works</button>
+            <button className="am-ghost" type="button" onClick={() => { saveSetup({ path, done: false }); setStep("path"); }}>
+              Change how it runs
+            </button>
+            <button className="am-ghost" type="button" onClick={() => onOpenTab("accounts")}>Accounts</button>
+            {wantsAgents && (
+              <button className="am-btn" type="button" onClick={() => onOpenTab("agents")}>Set up agents</button>
+            )}
+            <button className="am-ghost" type="button" onClick={() => onOpenTab("howto")}>How it works</button>
+            <button className="am-ghost" type="button" onClick={() => { void refresh(); onRefreshDomains(); }}>Recheck</button>
           </div>
-        </div>
+        </Block>
       )}
 
-      <style>{`
-        .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; }
-        .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
-        .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
-        .am-howto-pre { margin:0; padding:10px 12px; border-radius:10px; background:#111827; color:#e5e7eb; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; overflow-x:hidden; }
-      `}</style>
+      <style>{SETUP_CSS}</style>
     </div>
   );
 }
+
+function Block({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-3 min-w-0">
+      <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>{title}</h3>
+      <div className="space-y-3 text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>{children}</div>
+    </div>
+  );
+}
+
+function Choice({ on, title, body, onClick }: { on: boolean; title: string; body: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left rounded-[12px] p-3"
+      style={{
+        border: `1px solid ${on ? "var(--mc-accent)" : "var(--mc-border)"}`,
+        backgroundColor: on ? "var(--mc-bg-active)" : "var(--mc-bg-tertiary)",
+      }}
+    >
+      <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>{title}</div>
+      <div className="text-[12px] leading-5" style={{ color: "var(--mc-text-muted)" }}>{body}</div>
+    </button>
+  );
+}
+
+function Nav({
+  back,
+  next,
+  nextOff,
+  nextLabel = "Continue",
+}: {
+  back: () => void;
+  next: () => void;
+  nextOff?: boolean;
+  nextLabel?: string;
+}) {
+  return (
+    <div className="flex gap-2 pt-1">
+      <button className="am-ghost" type="button" onClick={back}>Back</button>
+      <button className="am-btn" type="button" disabled={nextOff} onClick={next}>{nextLabel}</button>
+    </div>
+  );
+}
+
+function Status({ tiles, ids }: { tiles: Tile[]; ids: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {ids.map((id) => {
+        const t = tile(tiles, id);
+        const ok = t?.ok;
+        return (
+          <li key={id} className="flex items-start gap-2 text-[12px]">
+            {ok ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 mt-0.5 flex-shrink-0" />
+            ) : (
+              <span className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded-full border" style={{ borderColor: "var(--mc-border)" }} />
+            )}
+            <span className="min-w-0 break-words" style={{ color: "var(--mc-text)" }}>
+              {TILE_META[id]?.label || id}
+              {t?.detail ? <span style={{ color: "var(--mc-text-muted)" }}> — {t.detail}</span> : null}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function Code({ children }: { children: string }) {
+  return <pre className="am-setup-pre">{children}</pre>;
+}
+
+const SETUP_CSS = `
+  .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
+  .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
+  .am-setup-pre { margin:0; padding:10px 12px; border-radius:10px; background:#111827; color:#e5e7eb; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; overflow-x:hidden; max-width:100%; }
+`;

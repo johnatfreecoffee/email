@@ -31,7 +31,7 @@ interface AgentUser {
   agents: Record<string, Grant>;
 }
 
-type SubTab = "mailboxes" | "active" | "access" | "archived";
+type SubTab = "mailboxes" | "active" | "access" | "archived" | "setup";
 
 const AM_CSS = `
   .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; box-sizing:border-box; }
@@ -170,6 +170,23 @@ export function AgentsTab({
     await load();
   }
 
+  if (tab === "setup") {
+    return (
+      <div>
+        <SubTabs tab={tab} setTab={setTab} />
+        <AgentSetupPanel
+          domains={domains}
+          agents={agents}
+          onCreated={() => {
+            void load();
+            onRefreshDomains?.();
+          }}
+        />
+        <style>{AM_CSS}</style>
+      </div>
+    );
+  }
+
   if (tab === "mailboxes") {
     return (
       <div>
@@ -290,6 +307,7 @@ function SubTabs({ tab, setTab }: { tab: SubTab; setTab: (t: SubTab) => void }) 
     ["active", "Users"],
     ["access", "Access"],
     ["archived", "People archive"],
+    ["setup", "Agent setup"],
   ];
   return (
     <div className="flex gap-1 mb-4 p-1 rounded-[10px] w-fit" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
@@ -389,6 +407,86 @@ function UserCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function AgentSetupPanel({
+  domains,
+  agents,
+  onCreated,
+}: {
+  domains: EmailDomain[];
+  agents: AgentInfo[];
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [domainId, setDomainId] = useState(domains[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!domainId && domains[0]?.id) setDomainId(domains[0].id);
+  }, [domains, domainId]);
+
+  async function create() {
+    setErr("");
+    if (!domainId) {
+      setErr("Add a domain in Settings → Setup / Accounts first.");
+      return;
+    }
+    if (!name.trim() && !slug.trim()) {
+      setErr("Give them a name, like Marketing.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await apiFetch("/api/email/agent-mailboxes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain_id: domainId, name: name.trim() || slug.trim(), slug: slug.trim() || name.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data.error || "Couldn't create that agent");
+        return;
+      }
+      setName("");
+      setSlug("");
+      onCreated();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-w-0 space-y-3">
+      <p className="text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
+        Agent setup only. Database, Resend, domain, and the worker live in Settings → Setup.
+      </p>
+      <ol className="space-y-2 text-[13px] leading-5" style={{ color: "var(--mc-text-muted)" }}>
+        <li><span className="font-semibold" style={{ color: "var(--mc-text)" }}>1. Create a mailbox</span> — name + short id. We add a. so it becomes a.marketing@yourdomain.</li>
+        <li><span className="font-semibold" style={{ color: "var(--mc-text)" }}>2. Allow people</span> — Users tab. Anyone not listed is ignored.</li>
+        <li><span className="font-semibold" style={{ color: "var(--mc-text)" }}>3. Pick what they can do</span> — Questions only, Custom, or All. Access tab flips the same grants per agent.</li>
+      </ol>
+      <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 1.2fr auto" }}>
+        <input className="am-in" placeholder="Name — Marketing" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="am-in" placeholder="Short id — marketing" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} />
+        <select className="am-in" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
+          {!domains.length && <option value="">Add a domain first</option>}
+          {domains.map((d) => (
+            <option key={d.id} value={d.id}>{d.domain}</option>
+          ))}
+        </select>
+        <button className="am-btn" disabled={busy || !domains.length} onClick={() => void create()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
+        </button>
+      </div>
+      {err && <p className="text-[12px]" style={{ color: "#dc2626" }}>{err}</p>}
+      <p className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>
+        {agents.length ? `${agents.filter((a) => a.is_active !== false).length} active agent${agents.filter((a) => a.is_active !== false).length === 1 ? "" : "s"}.` : "None yet."} See Mailboxes for archive.
+      </p>
     </div>
   );
 }
