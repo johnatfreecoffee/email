@@ -133,7 +133,6 @@ async function replaceGrants(
   const src = agents && typeof agents === "object" ? (agents as Record<string, unknown>) : {};
   const del = await supabaseQuery(env, `/agent_sender_grants?sender_id=eq.${senderId}`, {
     method: "DELETE",
-    headers: { Prefer: "return=minimal" },
   });
   if (!del.ok && !isMissingTable(del)) return "failed to replace grants";
   const rows = [];
@@ -153,6 +152,23 @@ async function replaceGrants(
   const ins = await supabaseQuery(env, "/agent_sender_grants", { method: "POST", body: rows });
   if (!ins.ok) return "failed to save grants";
   return null;
+}
+
+async function resolveCreatedId(
+  env: Env,
+  created: unknown,
+  email: string
+): Promise<string | null> {
+  const row = Array.isArray(created) ? created[0] : created;
+  const id = (row as { id?: string } | null)?.id;
+  if (id && UUID_RE.test(id)) return id;
+  const lookup = await supabaseQuery(
+    env,
+    `/agent_senders?email=eq.${encodeURIComponent(email)}&select=id&limit=1`
+  );
+  const found = Array.isArray(lookup.data) ? lookup.data[0] : lookup.data;
+  const fallback = (found as { id?: string } | null)?.id;
+  return fallback && UUID_RE.test(fallback) ? fallback : null;
 }
 
 export const onRequest = async (context: CFContext) => {
@@ -237,13 +253,12 @@ export const onRequest = async (context: CFContext) => {
       }
       return errorResponse("Failed to create user", 500, origin);
     }
-    const created = Array.isArray(ins.data) ? ins.data[0] : ins.data;
-    const newId = (created as { id?: string })?.id;
+    const newId = await resolveCreatedId(env, ins.data, email);
     if (!newId) return errorResponse("Failed to create user", 500, origin);
-    const err = await replaceGrants(env, newId, body.agents, catalogSet);
-    if (err) return errorResponse(err, 500, origin);
+    const grantErr = await replaceGrants(env, newId, body.agents, catalogSet);
     const user = await loadUserBundle(env, newId, catalogLocals);
-    return jsonResponse({ user }, 200, origin);
+    if (!user) return errorResponse("Failed to create user", 500, origin);
+    return jsonResponse(grantErr ? { user, warning: grantErr } : { user }, 200, origin);
   }
 
   if (request.method === "PUT") {
@@ -268,10 +283,10 @@ export const onRequest = async (context: CFContext) => {
       }
       return errorResponse("Failed to save user", 500, origin);
     }
-    if (!Array.isArray(upd.data) || !upd.data.length) return errorResponse("user not found", 404, origin);
-    const err = await replaceGrants(env, id, body.agents, catalogSet);
-    if (err) return errorResponse(err, 500, origin);
+    const grantErr = await replaceGrants(env, id, body.agents, catalogSet);
     const user = await loadUserBundle(env, id, catalogLocals);
+    if (!user) return errorResponse("user not found", 404, origin);
+    if (grantErr) return errorResponse(grantErr, 500, origin);
     return jsonResponse({ user }, 200, origin);
   }
 

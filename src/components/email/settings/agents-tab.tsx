@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import {
@@ -35,9 +35,17 @@ type SubTab = "mailboxes" | "active" | "access" | "archived" | "setup";
 
 const AM_CSS = `
   .am-in { width:100%; border:1px solid var(--mc-border); background:var(--mc-bg); color:var(--mc-text); border-radius:8px; padding:7px 10px; font-size:13px; outline:none; box-sizing:border-box; }
-  .am-btn { border:0; border-radius:8px; padding:7px 12px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; }
-  .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; }
-  .am-pre { margin:8px 0 0; padding:10px 12px; border-radius:10px; background:#111827; color:#e5e7eb; font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; overflow-x:hidden; max-width:100%; max-height:220px; overflow-y:auto; }
+  .am-in:focus { border-color:var(--mc-accent); box-shadow:0 0 0 3px var(--mc-accent-bg); }
+  .am-btn { border:0; border-radius:8px; padding:7px 14px; background:var(--mc-accent); color:#fff; font-weight:600; font-size:13px; cursor:pointer; min-height:34px; }
+  .am-btn:disabled { opacity:.55; cursor:default; }
+  .am-ghost { background:transparent; color:var(--mc-text); border:1px solid var(--mc-border); border-radius:8px; padding:4px 9px; font-size:12px; cursor:pointer; }
+  .am-ghost:disabled { opacity:.5; cursor:default; }
+  .am-pre { margin:8px 0 0; padding:10px 12px; border-radius:10px; background:var(--mc-bg-tertiary); color:var(--mc-text); border:1px solid var(--mc-border); font:12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; overflow-x:hidden; max-width:100%; max-height:180px; overflow-y:auto; }
+  .am-add { display:grid; gap:8px; grid-template-columns:1fr 1fr minmax(0,1.5fr) auto; align-items:center; }
+  @media (max-width:720px) {
+    .am-add { grid-template-columns:1fr 1fr; }
+    .am-add .am-span { grid-column:1 / -1; }
+  }
 `;
 
 const chip = (on: boolean): React.CSSProperties => ({
@@ -70,9 +78,15 @@ export function AgentsTab({
   const [nlast, setNlast] = useState("");
   const [nemail, setNemail] = useState("");
   const [nerr, setNerr] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const booted = useRef(false);
+  const saveTimers = useRef<Record<string, number>>({});
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent && !booted.current) setLoading(true);
     setError("");
     try {
       const [people, boxes] = await Promise.all([
@@ -89,15 +103,15 @@ export function AgentsTab({
       setError(e instanceof Error ? e.message : "failed to load");
     } finally {
       setLoading(false);
+      booted.current = true;
     }
   }, [tab]);
 
   useEffect(() => {
-    load();
+    void load();
   }, [load]);
 
-  function draftFor(u: AgentUser): AgentUser {
-    if (drafts[u.id]) return drafts[u.id];
+  function seedDraft(u: AgentUser): AgentUser {
     const agentsMap: Record<string, Grant> = {};
     for (const a of agents) agentsMap[a.local_part] = blankGrant();
     Object.assign(agentsMap, u.agents || {});
@@ -105,13 +119,23 @@ export function AgentsTab({
     return { ...u, agents: agentsMap };
   }
 
-  function setDraft(id: string, next: AgentUser) {
+  function draftFor(u: AgentUser): AgentUser {
+    return drafts[u.id] || seedDraft(u);
+  }
+
+  function setDraft(id: string, next: AgentUser, persist = false) {
     setDrafts((prev) => ({ ...prev, [id]: next }));
+    if (!persist) return;
+    window.clearTimeout(saveTimers.current[id]);
+    saveTimers.current[id] = window.setTimeout(() => {
+      void saveUser(id, next);
+    }, 400);
   }
 
   const shown = useMemo(() => {
     const needle = q.toLowerCase().trim();
     return users.filter((u) => {
+      if (!u?.id) return false;
       const d = drafts[u.id] || u;
       const blob = `${d.first_name} ${d.last_name} ${d.email}`.toLowerCase();
       return !needle || blob.includes(needle);
@@ -120,54 +144,101 @@ export function AgentsTab({
 
   async function addUser() {
     setNerr("");
+    const first = nfirst.trim();
+    const last = nlast.trim();
+    const email = nemail.trim();
+    if (!first || !last || !email) {
+      setNerr("First, last, and email are required.");
+      return;
+    }
     const agentsMap: Record<string, Grant> = {};
     for (const a of agents) agentsMap[a.local_part] = blankGrant();
-    const res = await apiFetch("/api/email/agent-users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ first_name: nfirst, last_name: nlast, email: nemail, agents: agentsMap }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setNerr(data.error || "failed");
-      return;
+    setAdding(true);
+    try {
+      const res = await apiFetch("/api/email/agent-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ first_name: first, last_name: last, email, agents: agentsMap }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const user = data.user as AgentUser | undefined;
+      if (!res.ok || !user?.id) {
+        setNerr(data.error || "Couldn't add that person");
+        await load(true);
+        return;
+      }
+      setNfirst("");
+      setNlast("");
+      setNemail("");
+      setUsers((prev) => [user, ...prev.filter((u) => u.id !== user.id)]);
+      setOpen((s) => new Set(s).add(user.id));
+      setHighlightId(user.id);
+      window.setTimeout(() => {
+        setHighlightId((id) => (id === user.id ? null : id));
+      }, 1600);
+    } catch (e) {
+      setNerr(e instanceof Error ? e.message : "Couldn't add that person");
+    } finally {
+      setAdding(false);
     }
-    setNfirst("");
-    setNlast("");
-    setNemail("");
-    setUsers((prev) => [...prev, data.user]);
-    setOpen((s) => new Set(s).add(data.user.id));
   }
 
-  async function saveUser(id: string) {
-    const d = drafts[id];
+  async function saveUser(id: string, override?: AgentUser) {
+    const d = override || drafts[id] || users.find((u) => u.id === id);
     if (!d) return;
-    const res = await apiFetch(`/api/email/agent-users?id=${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(d),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setError(data.error || "save failed");
-      return;
+    setSavingId(id);
+    setError("");
+    try {
+      const res = await apiFetch(`/api/email/agent-users?id=${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(d),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.user) {
+        setError(data.error || "save failed");
+        return;
+      }
+      setUsers((prev) => prev.map((u) => (u.id === id ? data.user : u)));
+      setDrafts((prev) => {
+        const cur = prev[id];
+        if (!cur) return prev;
+        const nameDirty =
+          cur.first_name !== d.first_name ||
+          cur.last_name !== d.last_name ||
+          cur.email !== d.email;
+        if (nameDirty) {
+          return { ...prev, [id]: { ...data.user, first_name: cur.first_name, last_name: cur.last_name, email: cur.email } };
+        }
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setSavedId(id);
+      window.setTimeout(() => {
+        setSavedId((cur) => (cur === id ? null : cur));
+      }, 1400);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "save failed");
+    } finally {
+      setSavingId(null);
     }
-    setUsers((prev) => prev.map((u) => (u.id === id ? data.user : u)));
-    setDrafts((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
   }
 
   async function archiveOrRestore(id: string, action: "archive" | "restore") {
     await apiFetch(`/api/email/agent-users?id=${id}&action=${action}`, { method: "POST" });
+    setUsers((prev) => prev.filter((u) => u.id !== id));
     setDrafts((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
     });
-    await load();
+    setOpen((s) => {
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+    await load(true);
   }
 
   if (tab === "setup") {
@@ -196,7 +267,7 @@ export function AgentsTab({
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : error ? (
-          <div className="text-[13px]" style={{ color: "#dc2626" }}>{error}</div>
+          <div className="text-[13px]" style={{ color: "var(--mc-danger)" }}>{error}</div>
         ) : (
           <MailboxesPanel
             agents={agents}
@@ -223,7 +294,7 @@ export function AgentsTab({
             <Loader2 className="h-5 w-5 animate-spin" />
           </div>
         ) : error ? (
-          <div className="text-[13px]" style={{ color: "#dc2626" }}>{error}</div>
+          <div className="text-[13px]" style={{ color: "var(--mc-danger)" }}>{error}</div>
         ) : (
           <AccessByAgent
             users={users}
@@ -246,14 +317,25 @@ export function AgentsTab({
         </div>
       )}
       {tab === "active" && (
-        <div className="mb-3 grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 1.4fr auto" }}>
+        <div className="am-add mb-3">
           <input className="am-in" placeholder="First" value={nfirst} onChange={(e) => setNfirst(e.target.value)} />
           <input className="am-in" placeholder="Last" value={nlast} onChange={(e) => setNlast(e.target.value)} />
-          <input className="am-in" placeholder="email@example.com" value={nemail} onChange={(e) => setNemail(e.target.value)} />
-          <button className="am-btn" onClick={addUser}>Add</button>
+          <input
+            className="am-in am-span"
+            placeholder="email@example.com"
+            value={nemail}
+            onChange={(e) => setNemail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void addUser();
+            }}
+          />
+          <button className="am-btn am-span" disabled={adding} onClick={() => void addUser()}>
+            {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Add"}
+          </button>
         </div>
       )}
-      {nerr && <div className="text-[12px] mb-2" style={{ color: "#dc2626" }}>{nerr}</div>}
+      {nerr && <div className="text-[12px] mb-2" style={{ color: "var(--mc-danger)" }}>{nerr}</div>}
+      {error && <div className="text-[12px] mb-2" style={{ color: "var(--mc-danger)" }}>{error}</div>}
       <input
         className="am-in w-full mb-3"
         placeholder="Search name or email"
@@ -264,8 +346,6 @@ export function AgentsTab({
         <div className="flex justify-center py-10" style={{ color: "var(--mc-text-muted)" }}>
           <Loader2 className="h-5 w-5 animate-spin" />
         </div>
-      ) : error ? (
-        <div className="text-[13px]" style={{ color: "#dc2626" }}>{error}</div>
       ) : !shown.length ? (
         <div className="text-center py-10 text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
           {tab === "archived" ? "Nothing archived." : "No users yet."}
@@ -279,9 +359,11 @@ export function AgentsTab({
               agents={agents}
               open={open.has(u.id)}
               archived={tab === "archived"}
+              saving={savingId === u.id}
+              saved={savedId === u.id}
+              highlight={highlightId === u.id}
+              dirty={!!drafts[u.id]}
               onToggle={() => {
-                const d = draftFor(u);
-                setDrafts((prev) => (prev[u.id] ? prev : { ...prev, [u.id]: d }));
                 setOpen((s) => {
                   const n = new Set(s);
                   if (n.has(u.id)) n.delete(u.id);
@@ -289,8 +371,8 @@ export function AgentsTab({
                   return n;
                 });
               }}
-              onChange={(next) => setDraft(u.id, next)}
-              onSave={() => saveUser(u.id)}
+              onChange={(next) => setDraft(u.id, next, true)}
+              onSave={() => void saveUser(u.id, draftFor(u))}
               onArchive={() => archiveOrRestore(u.id, tab === "archived" ? "restore" : "archive")}
             />
           ))}
@@ -341,6 +423,10 @@ function UserCard({
   agents,
   open,
   archived,
+  saving,
+  saved,
+  highlight,
+  dirty,
   onToggle,
   onChange,
   onSave,
@@ -350,13 +436,24 @@ function UserCard({
   agents: AgentInfo[];
   open: boolean;
   archived: boolean;
+  saving: boolean;
+  saved: boolean;
+  highlight: boolean;
+  dirty: boolean;
   onToggle: () => void;
   onChange: (u: AgentUser) => void;
   onSave: () => void;
   onArchive: () => void;
 }) {
   return (
-    <div className="rounded-[10px] overflow-hidden" style={{ border: "1px solid var(--mc-border)", backgroundColor: "var(--mc-bg-elevated)" }}>
+    <div
+      className="rounded-[10px] overflow-hidden"
+      style={{
+        border: `1px solid ${highlight ? "var(--mc-accent)" : "var(--mc-border)"}`,
+        backgroundColor: "var(--mc-bg-elevated)",
+        boxShadow: highlight ? "0 0 0 3px var(--mc-accent-bg)" : undefined,
+      }}
+    >
       <div className="flex items-center justify-between gap-3 px-3 py-2.5 cursor-pointer" onClick={onToggle}>
         <div className="min-w-0">
           <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>
@@ -365,7 +462,7 @@ function UserCard({
           <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>{u.email}</div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: "var(--mc-bg-active)", color: "var(--mc-accent)" }}>
+          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: "var(--mc-accent-bg)", color: "var(--mc-accent)" }}>
             {summary(u.agents)}
           </span>
           <button
@@ -381,10 +478,10 @@ function UserCard({
       </div>
       {open && (
         <div className="px-3 pb-3" style={{ borderTop: "1px solid var(--mc-border)" }}>
-          <div className="grid gap-2 my-3" style={{ gridTemplateColumns: "1fr 1fr 1.4fr" }}>
+          <div className="am-add my-3">
             <input className="am-in" value={u.first_name} onChange={(e) => onChange({ ...u, first_name: e.target.value })} />
             <input className="am-in" value={u.last_name} onChange={(e) => onChange({ ...u, last_name: e.target.value })} />
-            <input className="am-in" value={u.email} onChange={(e) => onChange({ ...u, email: e.target.value })} />
+            <input className="am-in am-span" value={u.email} onChange={(e) => onChange({ ...u, email: e.target.value })} />
           </div>
           <div className="flex flex-wrap gap-2 mb-2">
             <button className="am-ghost" onClick={() => selectAll(u, agents, true, onChange)}>Select all agents</button>
@@ -392,18 +489,29 @@ function UserCard({
             <button className="am-ghost" onClick={() => setAllMode(u, agents, "ask", onChange)}>All → questions only</button>
             <button className="am-ghost" onClick={() => setAllMode(u, agents, "all", onChange)}>All → full access</button>
           </div>
-          <div className="grid gap-2">
-            {agents.map((a) => (
-              <AgentRow
-                key={a.local_part}
-                agent={a}
-                grant={u.agents[a.local_part] || blankGrant()}
-                onChange={(g) => onChange({ ...u, agents: { ...u.agents, [a.local_part]: g } })}
-              />
-            ))}
-          </div>
-          <div className="flex justify-end mt-3">
-            <button className="am-btn" onClick={onSave}>Save</button>
+          {!agents.length ? (
+            <p className="text-[12px] py-2" style={{ color: "var(--mc-text-muted)" }}>
+              No agent mailboxes yet. Create one on Mailboxes, then come back and assign them.
+            </p>
+          ) : (
+            <div className="grid gap-2">
+              {agents.map((a) => (
+                <AgentRow
+                  key={a.local_part}
+                  agent={a}
+                  grant={u.agents[a.local_part] || blankGrant()}
+                  onChange={(g) => onChange({ ...u, agents: { ...u.agents, [a.local_part]: g } })}
+                />
+              ))}
+            </div>
+          )}
+          <div className="flex items-center justify-end gap-2 mt-3">
+            <span className="text-[11px] font-medium" style={{ color: saved ? "var(--mc-success)" : "var(--mc-text-faint)" }}>
+              {saving ? "Saving…" : saved ? "Saved" : dirty ? "Unsaved" : ""}
+            </span>
+            <button className="am-btn" disabled={saving} onClick={onSave}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+            </button>
           </div>
         </div>
       )}
@@ -470,20 +578,20 @@ function AgentSetupPanel({
         <li><span className="font-semibold" style={{ color: "var(--mc-text)" }}>2. Allow people</span> — Users tab. Anyone not listed is ignored.</li>
         <li><span className="font-semibold" style={{ color: "var(--mc-text)" }}>3. Pick what they can do</span> — Questions only, Custom, or All. Access tab flips the same grants per agent.</li>
       </ol>
-      <div className="grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 1.2fr auto" }}>
+      <div className="am-add">
         <input className="am-in" placeholder="Name — Marketing" value={name} onChange={(e) => setName(e.target.value)} />
         <input className="am-in" placeholder="Short id — marketing" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} />
-        <select className="am-in" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
+        <select className="am-in am-span" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
           {!domains.length && <option value="">Add a domain first</option>}
           {domains.map((d) => (
             <option key={d.id} value={d.id}>{d.domain}</option>
           ))}
         </select>
-        <button className="am-btn" disabled={busy || !domains.length} onClick={() => void create()}>
+        <button className="am-btn am-span" disabled={busy || !domains.length} onClick={() => void create()}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
         </button>
       </div>
-      {err && <p className="text-[12px]" style={{ color: "#dc2626" }}>{err}</p>}
+      {err && <p className="text-[12px]" style={{ color: "var(--mc-danger)" }}>{err}</p>}
       <p className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>
         {agents.length ? `${agents.filter((a) => a.is_active !== false).length} active agent${agents.filter((a) => a.is_active !== false).length === 1 ? "" : "s"}.` : "None yet."} See Mailboxes for archive.
       </p>
@@ -575,20 +683,20 @@ function MailboxesPanel({
       <p className="text-[12px] mb-3 leading-5" style={{ color: "var(--mc-text-muted)" }}>
         Each agent is a mailbox. Active ones show under Agents in the sidebar. Archived ones stay on this list so you can turn them back on.
       </p>
-      <div className="mb-3 grid gap-2" style={{ gridTemplateColumns: "1fr 1fr 1.2fr auto" }}>
+      <div className="am-add mb-3">
         <input className="am-in" placeholder="Name — Marketing" value={name} onChange={(e) => setName(e.target.value)} />
         <input className="am-in" placeholder="Short id — marketing" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} />
-        <select className="am-in" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
+        <select className="am-in am-span" value={domainId} onChange={(e) => setDomainId(e.target.value)}>
           {!domains.length && <option value="">Add a domain first</option>}
           {domains.map((d) => (
             <option key={d.id} value={d.id}>{d.domain}</option>
           ))}
         </select>
-        <button className="am-btn" disabled={busy || !domains.length} onClick={() => void create()}>
+        <button className="am-btn am-span" disabled={busy || !domains.length} onClick={() => void create()}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Create"}
         </button>
       </div>
-      {err && <p className="text-[12px] mb-2" style={{ color: "#dc2626" }}>{err}</p>}
+      {err && <p className="text-[12px] mb-2" style={{ color: "var(--mc-danger)" }}>{err}</p>}
       <input className="am-in w-full mb-3" placeholder="Search agents" value={q} onChange={(e) => setQ(e.target.value)} />
 
       <p className="text-[11px] font-semibold mb-1.5" style={{ color: "var(--mc-text-faint)" }}>
@@ -665,15 +773,18 @@ function AccessByAgent({
     Object.assign(agentsMap, user.agents || {});
     for (const k of Object.keys(agentsMap)) agentsMap[k] = normalizeGrant(agentsMap[k]);
     agentsMap[local] = grant;
+    const optimistic = { ...user, agents: agentsMap };
+    onUsers((prev) => prev.map((u) => (u.id === user.id ? optimistic : u)));
     const res = await apiFetch(`/api/email/agent-users?id=${user.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...user, agents: agentsMap }),
+      body: JSON.stringify(optimistic),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     setBusy(null);
-    if (!res.ok) {
+    if (!res.ok || !data.user) {
       onError(data.error || "save failed");
+      onUsers((prev) => prev.map((u) => (u.id === user.id ? user : u)));
       return;
     }
     onUsers((prev) => prev.map((u) => (u.id === user.id ? data.user : u)));

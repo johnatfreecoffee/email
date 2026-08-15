@@ -76,7 +76,7 @@ function legacyHashPassword(password: string): string {
 export function corsHeaders(origin?: string): Record<string, string> {
   return {
     "Access-Control-Allow-Origin": origin || "*",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, X-MC-Auth",
     "Access-Control-Max-Age": "86400",
   };
@@ -122,7 +122,16 @@ export async function supabaseQuery(
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
-  const data = await res.json();
+  // DELETE + Prefer: return=minimal is 204 with an empty body. res.json() throws.
+  const text = await res.text();
+  let data: unknown = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+  }
   return { data, status: res.status, ok: res.ok, headers: res.headers };
 }
 
