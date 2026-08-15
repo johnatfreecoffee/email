@@ -19,11 +19,13 @@ const ASK_WORK = "- QUESTIONS ONLY. Do not change any files. Answer, then stop."
 const CODE_WORK =
   "- Do the work in the workspace with tools when they ask for code/project work, then summarize.";
 const COMMON = [
+  "- Your stdout IS the email they read. Print only the finished note.",
+  "- Write like a person: short sentences, real paragraphs, blank lines between them.",
+  "- No process talk (no checking memory/git/deploy, no \"then sending the reply\").",
+  "- Don't dump every URL or path. One link if useful. They will ask if they want more.",
   "- If unclear, ask one short clarifying question.",
-  "- Never invent secrets. Never send mail yourself — your stdout IS the email reply body.",
-  "- Keep the reply under ~400 words unless they asked for detail.",
-  "- Do not mention token counts unless asked.",
-  "- Prefer finishing with a partial useful answer over running forever. If time is tight, ship what you have.",
+  "- Never invent secrets. Never send mail yourself.",
+  "- Prefer finishing with a partial useful answer over running forever.",
 ];
 
 function pack(lock: string, work: string, flags: string) {

@@ -188,7 +188,10 @@ export async function maybeCloudChat(
   }
 
   const prompt =
-    `You are ${display}, an email agent. Reply as a plain email body. No subject line.\n\n` +
+    `You are ${display}. Reply as a person, not an agent log.\n` +
+    `Print ONLY the finished email. Short. Real paragraphs. No process talk.\n` +
+    `No memory/git/deploy narration. One link if useful. They will ask if they want more.\n` +
+    `No subject line.\n\n` +
     `From: ${args.fromAddress}\nSubject: ${args.subject}\n\n${args.bodyText || "(empty)"}`;
   const reply = await xaiReply(env, prompt);
   if (!reply) {

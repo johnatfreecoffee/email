@@ -158,6 +158,62 @@ def extract_local(to_field) -> str | None:
     return None
 
 
+PROCESS_OPEN = re.compile(
+    r"^(i(?:'ll| will| am|'m)|let me|pulling|checking|confirming|logging|"
+    r"looking|reading|searching|fetching|opening|loading|writing|updating|"
+    r"skimming|gathering|verifying|starting|working on|got it[,.]?\s+"
+    r"(?:i'll|let me)|just (?:checked|looking|pulled|read))\b",
+    re.I,
+)
+PROCESS_PHRASE = re.compile(
+    r"\b(so the (?:reply|status(?: email)?) is accurate|then sending the reply|"
+    r"project memory|logging this status)\b",
+    re.I,
+)
+
+
+def unsquash_sentences(text: str) -> str:
+    """Grok often glues status lines: 'accurate.Pulling' → split them."""
+    return re.sub(r"([.!?])([A-Z])", r"\1\n\n\2", text or "")
+
+
+def clean_email_reply(raw: str) -> str:
+    """Drop agent-process narration. Keep a human note with real paragraphs."""
+    text = (raw or "").strip()
+    if not text:
+        return text
+    fenced = re.fullmatch(r"```(?:text|markdown|md)?\s*\n(.*)\n```", text, re.S)
+    if fenced:
+        text = fenced.group(1).strip()
+    text = unsquash_sentences(text)
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    kept: list[str] = []
+    for p in paras:
+        first = p.split("\n", 1)[0].strip()
+        if PROCESS_OPEN.match(first) or PROCESS_PHRASE.search(p):
+            continue
+        kept.append(p)
+    if not kept:
+        kept = paras
+    out = re.sub(r"\n{3,}", "\n\n", "\n\n".join(kept)).strip()
+    return out[:12000]
+
+
+def reply_html(text: str) -> str:
+    import html as html_lib
+
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    bits = []
+    for p in paras:
+        bits.append("<p style=\"margin:0 0 12px\">" + html_lib.escape(p).replace("\n", "<br>") + "</p>")
+    return (
+        "<div style=\"font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;"
+        "font-size:15px;line-height:1.45;color:#111\">"
+        + "".join(bits)
+        + "</div>"
+    )
+
+
 def plain_text(msg: dict) -> str:
     t = msg.get("body_text") or ""
     if t.strip():
@@ -426,13 +482,21 @@ def run_grok(
         )
     )
 
-    prompt = f"""You are {display}, an email coding agent for John Romano (session ID {session_id}).
+    prompt = f"""You are {display}. You answer email as a person, not as an agent log.
+Session {session_id} — {"first email" if is_new else "continuation"}.
 
-This is {"a BRAND NEW session — first email" if is_new else "a CONTINUATION of session " + str(session_id)}.
-You MUST produce a useful email reply body (plain text). No subject line. No wrapping the whole reply in code fences.
-Be concise like a staff engineer texting a busy CEO.
+Your stdout IS the email they receive. Print ONLY the finished note.
 
-Workspace: {workspace}
+Write like a coworker: short, clear, human.
+- Real paragraphs. Blank line between them. Never glue sentences together.
+- No process talk. Never say you are checking memory, git, deploy, logs, or "then sending the reply".
+- No preamble. Start with the answer.
+- Do not dump every URL, path, commit, or admin detail. One link if it helps. More only if they asked.
+- 2–8 short sentences is enough. They will ask a follow-up if they want more.
+- No subject line. No markdown heading. No wrapping the whole reply in code fences.
+- Do not mention token counts, session IDs, or tool names.
+
+Workspace (do not mention unless asked): {workspace}
 Scope: {"ALL projects under ~/Documents" if scope == "all_documents" else "this project only"}
 {hist_block}
 New email from: {from_addr}
@@ -446,10 +510,8 @@ Email body:
 Rules:
 {work_rule}
 - If unclear, ask one short clarifying question.
-- Never invent secrets. Never send mail yourself — your stdout IS the email reply body.
-- Keep the reply under ~400 words unless they asked for detail.
-- Do not mention token counts unless asked.
-- Prefer finishing with a partial useful answer over running forever. If time is tight, ship what you have.
+- Never invent secrets. Never send mail yourself.
+- Prefer finishing with a partial useful answer over running forever.
 """
 
     append_history(session_id, "user", f"Subject: {subject}\n\n{body}")
@@ -496,25 +558,23 @@ Rules:
     duration_s = time.time() - t0
 
     if timed_out:
-        partial = stdout.strip()
+        partial = clean_email_reply(stdout)
         if partial and len(partial) > 80:
             text = (
                 partial[:11000]
-                + "\n\n—\nHit the agent time limit mid-run. Partial answer above; "
-                "reply on this thread to continue."
+                + "\n\nI ran out of time mid-reply. That's what I have so far — write back if you want me to keep going."
             )
         else:
             text = (
-                f"Started work but hit the {timeout_s // 60}-minute agent time limit "
-                "before a full answer was ready. Reply again on this thread and I'll continue."
+                "I started but ran out of time before I had a clean answer. "
+                "Reply on this thread and I'll pick it up."
             )
     else:
         if rc != 0:
             log(f"grok nonzero rc={rc} err={stderr[:400]}")
-        text = stdout.strip()
+        text = clean_email_reply(stdout)
         if not text:
-            text = "Got it. I ran the job but produced no text — reply again with a shorter ask."
-        text = text[:12000]
+            text = "Got it — I ran the job but didn't have a note to send. Write back with a shorter ask?"
 
     append_history(session_id, "assistant", text)
     turn_tokens = estimate_turn_tokens(
@@ -545,6 +605,7 @@ def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str)
         "to": [to_addr],
         "subject": subject,
         "text": reply_text,
+        "html": reply_html(reply_text),
     }
     # Thread for Apple Mail / Gmail / our app — use angle-bracket Message-IDs
     headers = {}
