@@ -154,11 +154,16 @@ export function howItWorks() {
       },
       {
         n: 6,
+        title: "To and CC",
+        body: "The agent replies on the same thread. Anyone already on the email who is on Users (this agent on) stays on To/CC. You can say “loop them in” or “talk to them, keep me CC’d.” People not on the list are never mailed.",
+      },
+      {
+        n: 7,
         title: "If this machine is offline",
         body: "Questions-only senders get a Cloud chat reply (xAI, no file tools). Anyone with write access gets: need This machine or Cloud box. Local worker wins again when it comes back.",
       },
       {
-        n: 7,
+        n: 8,
         title: "Cloud box (optional)",
         body: "Same worker in Docker, workspace = git clone. Heartbeats separately. A claim row means local and box cannot both run the same email.",
       },

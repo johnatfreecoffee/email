@@ -54,6 +54,7 @@ export const onRequest = async (context: CFContext) => {
         { n: 3, title: "Are they in Archive?", body: "Archived people stay in the file but are off. Same as not on the list: no Grok, no reply." },
         { n: 4, title: "Is this agent checked for them?", body: "On the list but this agent unchecked → Grok still does not start. They get a short denial email. Other checked agents still work." },
         { n: 5, title: "Grok starts with a hidden pre-prompt", body: "Only then do we spawn Grok. We prepend a lock the sender never sees, plus tool blocks so it cannot ignore the note." },
+        { n: 6, title: "To and CC", body: "Reply stays on the thread. Allowed people already on the email stay on To/CC. “Loop them in” / “talk to them, keep me CC’d” works. Not on the list → never mailed." },
       ],
       stops: [
         { id: "unknown", title: "Not on the list", grok: false, reply: "None — silent. We do not confirm the mailbox exists." },

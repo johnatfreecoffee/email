@@ -158,6 +158,160 @@ def extract_local(to_field) -> str | None:
     return None
 
 
+def extract_agent_local(*fields) -> str | None:
+    for field in fields:
+        loc = extract_local(field)
+        if loc:
+            return loc
+    return None
+
+
+def _norm_email(raw: str) -> str:
+    if access:
+        return access.normalize_email(raw)
+    s = (raw or "").strip().lower()
+    m = re.search(r"<([^>]+)>", s)
+    return (m.group(1) if m else s).strip("<>\"'")
+
+
+def is_agent_addr(email: str) -> bool:
+    local = (email or "").split("@")[0]
+    return bool(re.match(r"^[ae]\.", local or "", re.I))
+
+
+def emails_from_field(raw) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            raw = parsed
+        except Exception:
+            raw = [p.strip() for p in raw.split(",") if p.strip()]
+    if not isinstance(raw, list):
+        raw = [raw]
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if isinstance(item, dict):
+            addr = item.get("email") or item.get("address") or item.get("addr") or ""
+        else:
+            addr = str(item)
+        email = _norm_email(addr)
+        if not email or "@" not in email or email in seen or is_agent_addr(email):
+            continue
+        seen.add(email)
+        out.append(email)
+    return out
+
+
+def thread_people(msg: dict, extra: list[str] | None = None) -> list[str]:
+    people = (
+        emails_from_field(msg.get("from_address"))
+        + emails_from_field(msg.get("to_addresses"))
+        + emails_from_field(msg.get("cc_addresses"))
+        + (extra or [])
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for e in people:
+        if e in seen:
+            continue
+        seen.add(e)
+        out.append(e)
+    return out
+
+
+def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
+    """Pull a trailing TO:/CC: block off the reply. Returns (body, to, cc)."""
+    lines = (text or "").rstrip().splitlines()
+    if not lines:
+        return "", [], []
+    take: list[str] = []
+    i = len(lines) - 1
+    while i >= 0:
+        s = lines[i].strip()
+        if not s:
+            i -= 1
+            continue
+        if re.match(r"^---\s*(route|end)\s*---$", s, re.I):
+            i -= 1
+            continue
+        if re.match(r"^(TO|CC)\s*:", s, re.I):
+            take.append(s)
+            i -= 1
+            continue
+        break
+    if not take:
+        return (text or "").strip(), [], []
+    body = "\n".join(lines[: i + 1]).rstrip()
+    to: list[str] = []
+    cc: list[str] = []
+    for line in reversed(take):
+        m = re.match(r"^TO\s*:\s*(.*)$", line, re.I)
+        if m:
+            to.extend(emails_from_field(m.group(1)))
+            continue
+        m = re.match(r"^CC\s*:\s*(.*)$", line, re.I)
+        if m:
+            cc.extend(emails_from_field(m.group(1)))
+    return body, to, cc
+
+
+def resolve_recipients(
+    msg: dict,
+    agent_local: str,
+    store: dict | None,
+    route_to: list[str],
+    route_cc: list[str],
+    session_people: list[str] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Only allowlisted people. Default: To writer, CC everyone else already on the thread."""
+    writer = _norm_email(msg.get("from_address") or "")
+    people = thread_people(msg, session_people)
+
+    def ok(email: str) -> bool:
+        if not email or is_agent_addr(email):
+            return False
+        if access:
+            return access.is_allowed(email, agent_local, store)
+        return True
+
+    allowed_thread = [e for e in people if ok(e)]
+    want_to = [e for e in route_to if ok(e)]
+    want_cc = [e for e in route_cc if ok(e) and e not in want_to]
+
+    if want_to or want_cc:
+        to = want_to[:]
+        cc = want_cc[:]
+        if writer and ok(writer) and writer not in to and writer not in cc:
+            if to:
+                cc.insert(0, writer)
+            else:
+                to = [writer]
+        for e in allowed_thread:
+            if e not in to and e not in cc:
+                cc.append(e)
+    else:
+        to = [writer] if writer and ok(writer) else (allowed_thread[:1] if allowed_thread else [])
+        cc = [e for e in allowed_thread if e not in to]
+
+    # de-dupe, keep order
+    def uniq(seq: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for e in seq:
+            if e in seen:
+                continue
+            seen.add(e)
+            out.append(e)
+        return out
+
+    to = uniq(to)
+    cc = uniq([e for e in cc if e not in to])
+    return to, cc
+
+
 PROCESS_OPEN = re.compile(
     r"^(i(?:'ll| will| am|'m)|let me|pulling|checking|confirming|logging|"
     r"looking|reading|searching|fetching|opening|loading|writing|updating|"
@@ -320,7 +474,7 @@ def fetch_new_messages(cfg: dict, agent_locals: list[str], processed: set[str]) 
     base = cfg["SUPABASE_URL"].rstrip("/")
     url = (
         f"{base}/rest/v1/email_messages"
-        f"?select=id,address_id,from_address,from_name,to_addresses,subject,body_text,body_html,"
+        f"?select=id,address_id,from_address,from_name,to_addresses,cc_addresses,subject,body_text,body_html,"
         f"thread_id,resend_email_id,received_at,direction,folder,is_spam,is_trash,is_archived"
         f"&direction=eq.inbound&is_spam=eq.false&is_trash=eq.false"
         f"&order=received_at.desc&limit=40"
@@ -343,7 +497,7 @@ def fetch_new_messages(cfg: dict, agent_locals: list[str], processed: set[str]) 
         mid = msg.get("id")
         if not mid or mid in processed:
             continue
-        local = extract_local(msg.get("to_addresses"))
+        local = extract_agent_local(msg.get("to_addresses"), msg.get("cc_addresses"))
         if not local or local not in agent_set:
             continue
         msg["_agent_local"] = local
@@ -438,6 +592,7 @@ def run_grok(
     session_id: int,
     is_new: bool,
     grant: dict | None = None,
+    store: dict | None = None,
 ) -> tuple[str, dict]:
     """Run Grok Build for one email. Returns (reply_text, meta).
 
@@ -482,10 +637,20 @@ def run_grok(
         )
     )
 
+    people_now = thread_people(msg)
+    allow_lines = []
+    if access:
+        allow = access.allowed_people(agent["local_part"], store)
+        for p in allow:
+            name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+            allow_lines.append(f"- {name} <{p['email']}>" if name else f"- {p['email']}")
+    allow_block = "\n".join(allow_lines) or "- (none — only the writer if they are allowed)"
+    on_thread = ", ".join(people_now) or "(just the writer)"
+
     prompt = f"""You are {display}. You answer email as a person, not as an agent log.
 Session {session_id} — {"first email" if is_new else "continuation"}.
 
-Your stdout IS the email they receive. Print ONLY the finished note.
+Your stdout IS the email they receive. Print the finished note, then a routing block.
 
 Write like a coworker: short, clear, human.
 - Real paragraphs. Blank line between them. Never glue sentences together.
@@ -495,6 +660,23 @@ Write like a coworker: short, clear, human.
 - 2–8 short sentences is enough. They will ask a follow-up if they want more.
 - No subject line. No markdown heading. No wrapping the whole reply in code fences.
 - Do not mention token counts, session IDs, or tool names.
+
+You control To and CC. Only these people may receive mail (allowlist):
+{allow_block}
+
+Already on this email: {on_thread}
+Writer: {from_addr}
+
+End the reply with exactly:
+TO: email
+CC: email, email
+
+Rules for routing:
+- Default: TO the writer, CC everyone else already on the thread who is allowed.
+- If they loop someone in and say talk to them / take it from here: TO that person, CC the writer (and anyone else already on the thread).
+- Keep the original person CC'd when you start talking to someone new, unless they asked to be dropped.
+- Never invent an address. Never BCC. Never mail anyone not on the allowlist.
+- If they name someone who is not on the list, say they need to be added in Settings → Agents first. Do not email them.
 
 Workspace (do not mention unless asked): {workspace}
 Scope: {"ALL projects under ~/Documents" if scope == "all_documents" else "this project only"}
@@ -592,21 +774,37 @@ Rules:
     }
 
 
-def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str) -> bool:
+def send_reply(
+    cfg: dict,
+    agent: dict,
+    msg: dict,
+    reply_text: str,
+    subject: str,
+    *,
+    to: list[str] | None = None,
+    cc: list[str] | None = None,
+) -> bool:
     from_addr = agent.get("email") or f"{agent['local_part']}@{(load_agents().get('domain') or 'localhost')}"
     from_header = f"{agent['display_name']} <{from_addr}>"
-    to_addr = msg.get("from_address")
-    if not to_addr:
-        log("no from_address; skip send")
+    to_list = [e for e in (to or []) if e]
+    cc_list = [e for e in (cc or []) if e and e not in to_list]
+    if not to_list:
+        fallback = _norm_email(msg.get("from_address") or "")
+        if fallback:
+            to_list = [fallback]
+    if not to_list:
+        log("no recipients; skip send")
         return False
 
     payload = {
         "from": from_header,
-        "to": [to_addr],
+        "to": to_list,
         "subject": subject,
         "text": reply_text,
         "html": reply_html(reply_text),
     }
+    if cc_list:
+        payload["cc"] = cc_list
     # Thread for Apple Mail / Gmail / our app — use angle-bracket Message-IDs
     headers = {}
     rid = msg.get("resend_email_id")
@@ -627,7 +825,10 @@ def send_reply(cfg: dict, agent: dict, msg: dict, reply_text: str, subject: str)
         payload,
     )
     if code in (200, 201):
-        log(f"sent reply session_subj={subject!r} id={data.get('id') if isinstance(data, dict) else data}")
+        log(
+            f"sent reply session_subj={subject!r} to={to_list} cc={cc_list} "
+            f"id={data.get('id') if isinstance(data, dict) else data}"
+        )
         return True
     log(f"send failed code={code} {str(data)[:300]}")
     return False
@@ -845,7 +1046,9 @@ def process_once(cfg: dict) -> None:
             continue
         try:
             sid, rec, is_new = resolve_session(sessions, agent, msg)
-            reply, meta = run_grok(cfg, agent, msg, sid, is_new, grant=auth.get("grant"))
+            reply, meta = run_grok(
+                cfg, agent, msg, sid, is_new, grant=auth.get("grant"), store=cloud_store
+            )
             history = load_history(sid)
             prev_k = int(rec.get("used_k") or 1)
             prev_tokens = int(rec.get("used_tokens") or 0)
@@ -866,7 +1069,19 @@ def process_once(cfg: dict) -> None:
             save_sessions(sessions)
 
             subj = format_reply_subject(rec.get("base_subject") or base_subject(msg.get("subject") or ""), sid, used_k)
-            send_reply(cfg, agent, msg, reply, subj)
+            body, route_to, route_cc = parse_route_block(reply)
+            to_list, cc_list = resolve_recipients(
+                msg,
+                local,
+                cloud_store,
+                route_to,
+                route_cc,
+                rec.get("thread_people") or [],
+            )
+            rec["thread_people"] = thread_people(msg, (rec.get("thread_people") or []) + to_list + cc_list)
+            sessions["by_id"][str(sid)] = rec
+            save_sessions(sessions)
+            send_reply(cfg, agent, msg, body or reply, subj, to=to_list, cc=cc_list)
 
             tdir = Path(agent["agent_dir"]) / "threads"
             tdir.mkdir(parents=True, exist_ok=True)

@@ -97,24 +97,66 @@ async function sendAgentMail(
   env: Env,
   opts: {
     fromHeader: string;
-    to: string;
+    to: string | string[];
+    cc?: string[];
     subject: string;
     text: string;
     inReplyTo?: string | null;
   }
 ): Promise<boolean> {
+  const to = (Array.isArray(opts.to) ? opts.to : [opts.to]).filter(Boolean);
+  if (!to.length) return false;
   const payload: Record<string, unknown> = {
     from: opts.fromHeader,
-    to: [opts.to],
+    to,
     subject: opts.subject,
     text: opts.text,
   };
+  const cc = (opts.cc || []).filter((e) => e && !to.includes(e));
+  if (cc.length) payload.cc = cc;
   if (opts.inReplyTo) {
     const mid = opts.inReplyTo.startsWith("<") ? opts.inReplyTo : `<${opts.inReplyTo}>`;
     payload.headers = { "In-Reply-To": mid, References: mid };
   }
   const r = await resendAPI(env, "/emails", { method: "POST", body: payload });
   return r.ok;
+}
+
+function emailsFromField(raw: unknown): string[] {
+  const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    const addr = normalizeEmail(typeof item === "string" ? item : String((item as { email?: string })?.email || ""));
+    if (!addr || !addr.includes("@") || seen.has(addr)) continue;
+    if (/^[ae]\./i.test(addr.split("@")[0] || "")) continue;
+    seen.add(addr);
+    out.push(addr);
+  }
+  return out;
+}
+
+async function allowedOnAgent(env: Env, email: string, agentLocal: string): Promise<boolean> {
+  const auth = await loadGrant(env, email, agentLocal);
+  return auth.reason === "ok";
+}
+
+async function threadRecipients(
+  env: Env,
+  fromAddress: string,
+  toAddresses: string[],
+  ccAddresses: string[],
+  agentLocal: string
+): Promise<{ to: string[]; cc: string[] }> {
+  const writer = normalizeEmail(fromAddress);
+  const people = emailsFromField([writer, ...toAddresses, ...ccAddresses]);
+  const allowed: string[] = [];
+  for (const e of people) {
+    if (await allowedOnAgent(env, e, agentLocal)) allowed.push(e);
+  }
+  const to = writer && allowed.includes(writer) ? [writer] : allowed.slice(0, 1);
+  const cc = allowed.filter((e) => !to.includes(e));
+  return { to, cc };
 }
 
 /** After inbound stores an agent message: maybe reply via xAI if the Mac is down. */
@@ -124,6 +166,7 @@ export async function maybeCloudChat(
     messageId: string;
     fromAddress: string;
     toAddresses: string[];
+    ccAddresses?: string[];
     matchedLocal: string;
     subject: string;
     bodyText: string;
@@ -154,6 +197,9 @@ export async function maybeCloudChat(
   const display = agentDisplayName(local);
   const fromHeader = `${display} <${local}@${args.domain}>`;
   const subj = args.subject.startsWith("Re:") ? args.subject : `Re: ${args.subject}`;
+  const route = await threadRecipients(env, args.fromAddress, args.toAddresses || [], args.ccAddresses || [], local);
+  const to = route.to[0] || args.fromAddress;
+  const cc = route.cc;
 
   if (auth.reason === "no_agent") {
     const text =
@@ -179,7 +225,8 @@ export async function maybeCloudChat(
       "The worker is offline. Ask a question if you only need an answer, or wait until the machine is back.";
     const sent = await sendAgentMail(env, {
       fromHeader,
-      to: args.fromAddress,
+      to,
+      cc,
       subject: subj,
       text,
       inReplyTo: args.resendEmailId,
@@ -197,7 +244,8 @@ export async function maybeCloudChat(
   if (!reply) {
     const sent = await sendAgentMail(env, {
       fromHeader,
-      to: args.fromAddress,
+      to,
+      cc,
       subject: subj,
       text: "Cloud chat is not configured (missing XAI_API_KEY) and the local worker is offline.",
       inReplyTo: args.resendEmailId,
@@ -207,7 +255,8 @@ export async function maybeCloudChat(
 
   await sendAgentMail(env, {
     fromHeader,
-    to: args.fromAddress,
+    to,
+    cc,
     subject: subj,
     text: reply,
     inReplyTo: args.resendEmailId,

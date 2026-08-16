@@ -175,6 +175,35 @@ def authorize(from_addr: str, agent_local: str, store: dict | None = None) -> di
     return {"ok": True, "reason": "ok", "user": user, "grant": grant}
 
 
+def is_allowed(email: str, agent_local: str, store: dict | None = None) -> bool:
+    return bool(authorize(email, agent_local, store).get("ok"))
+
+
+def allowed_people(agent_local: str, store: dict | None = None) -> list[dict]:
+    """Active Users with this agent checked — the only people we may To/CC."""
+    data = store if store is not None else load_store()
+    local = (agent_local or "").strip().lower()
+    out = []
+    for u in data.get("users") or []:
+        if u.get("archived"):
+            continue
+        email = normalize_email(u.get("email") or "")
+        if not email:
+            continue
+        grant = (u.get("agents") or {}).get(local) or {}
+        if not grant.get("enabled"):
+            continue
+        out.append(
+            {
+                "email": email,
+                "first_name": u.get("first_name") or "",
+                "last_name": u.get("last_name") or "",
+            }
+        )
+    out.sort(key=lambda r: ((r.get("last_name") or ""), (r.get("email") or "")))
+    return out
+
+
 def normalize_grant(raw) -> dict:
     if not isinstance(raw, dict):
         return default_grant(enabled=False, mode="ask")

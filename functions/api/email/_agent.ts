@@ -17,6 +17,22 @@ export function isAgentRecipient(toAddresses: string[] | null | undefined, match
   return (toAddresses || []).some((a) => isAgentLocal(localPartOf(a)));
 }
 
+export function recipientList(...groups: Array<string[] | null | undefined>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const raw of group || []) {
+      const addr = String(raw || "").trim();
+      if (!addr) continue;
+      const key = addr.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(addr);
+    }
+  }
+  return out;
+}
+
 export function agentDisplayName(local: string): string {
   const l = String(local || "").trim().toLowerCase();
   if (l.startsWith("e.")) {

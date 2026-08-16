@@ -10,6 +10,7 @@ import {
   isAgentLocal,
   isAgentRecipient,
   localPartOf,
+  recipientList,
 } from "./_agent";
 import { maybeCloudChat } from "./_agent_cloud";
 
@@ -353,13 +354,14 @@ export const onRequest = async (context: CFContext) => {
   const createdAt = fullEmail?.created_at || webhookData.created_at || new Date().toISOString();
 
   const toAddresses = envelopeTo;
+  const allRecipients = recipientList(toAddresses, ccAddresses, bccAddresses);
 
-  // Find which domain this is for
+  // Find which domain this is for (To, CC, or BCC — agent is often only on CC)
   let matchedDomain: any = null;
   let matchedAddress: any = null;
   let isCatchAll = false;
 
-  for (const toAddr of toAddresses) {
+  for (const toAddr of allRecipients) {
     const [localPart, domainPart] = toAddr.toLowerCase().split("@");
     if (!domainPart) continue;
 
@@ -389,15 +391,15 @@ export const onRequest = async (context: CFContext) => {
 
   const matchedLocal =
     (matchedAddress as { address?: string } | null | undefined)?.address ||
-    localPartOf(toAddresses[0] || "");
-  const isAgent = isAgentRecipient(toAddresses, matchedLocal);
+    localPartOf(allRecipients.find((a) => isAgentLocal(localPartOf(a))) || toAddresses[0] || "");
+  const isAgent = isAgentRecipient(allRecipients, matchedLocal);
 
   // Agent mail is never catch-all, even if the local-part wasn't provisioned yet.
   if (isAgent) {
     isCatchAll = false;
     if (!matchedAddress) {
       const wantLocal = localPartOf(
-        (toAddresses || []).find((a) => isAgentLocal(localPartOf(a))) || toAddresses[0] || ""
+        allRecipients.find((a) => isAgentLocal(localPartOf(a))) || toAddresses[0] || ""
       );
       if (wantLocal) {
         try {
@@ -677,6 +679,7 @@ export const onRequest = async (context: CFContext) => {
         messageId: String(message.id),
         fromAddress,
         toAddresses,
+        ccAddresses,
         matchedLocal,
         subject: finalSubject,
         bodyText: bodyText || "",
