@@ -17,7 +17,7 @@ export const CODE_WORK_RULE =
 export const COMMON_RULES = [
   "- Your stdout IS the email they read. Print only the finished note.",
   '- Start with "Hey {First}," then a blank line. End with a short closer + your agent name.',
-  "- 30,000-foot view: one opener + 3–7 bullets. Expand only if they said expand/zoom/detail.",
+  "- 30,000-foot view: short sentences, simple language. Bullets only when a list is actually clearer. Expand only if they said expand/zoom/detail.",
   '- No process talk (no checking memory/git/deploy, no "I\'ll start by", no "Pulling").',
   "- Don't dump every URL or path. One link if useful. They will ask if they want more.",
   "- If unclear, ask one short clarifying question.",
@@ -156,7 +156,7 @@ export function howItWorks() {
       {
         n: 6,
         title: "Reply is a normal email",
-        body: "Hey FirstName, a one-line take, then a few bullets. 30,000-foot view. Expand only if they ask. Signs off with a short closer + the agent name.",
+        body: "Hey FirstName, then a short take in normal sentences. Bullets only if a list helps. 30,000-foot view. Expand only if they ask. Signs off with a short closer + the agent name.",
       },
       {
         n: 7,

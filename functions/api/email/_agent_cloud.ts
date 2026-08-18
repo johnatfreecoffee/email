@@ -285,8 +285,8 @@ export async function maybeCloudChat(
     `You are ${display}. Write a normal email to a busy coworker.\n` +
     `Their first name is ${first}.\n` +
     `Print ONLY the finished email.\n` +
-    `Shape:\nHey ${first},\n\nSo I looked at {what they sent} — {one-line take}.\n\n- bullet\n- bullet\n\n{closer},\n${display}\n` +
-    `30,000-foot view. 3–7 bullets. Expand only if they said expand/zoom/detail.\n` +
+    `Shape:\nHey ${first},\n\nSo I looked at {what they sent} — {one-line take}.\n\nThen 2–5 short sentences in plain language. Write like a person. Use bullets only if a list is actually clearer — never the whole email.\n\n{closer},\n${display}\n` +
+    `30,000-foot view. Short sentences. Expand only if they said expand/zoom/detail.\n` +
     `No process talk. No memory/git/deploy narration. One link if useful.\n` +
     `No subject line. Sign off with a short closer (Making it happen / On it / That's the short of it) then your name.\n\n` +
     `From: ${args.fromAddress}\nSubject: ${args.subject}\n\n${args.bodyText || "(empty)"}`;
