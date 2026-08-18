@@ -1,5 +1,6 @@
 #!/bin/sh
 # Clone AGENT_GIT_MAP repos and start the worker.
+# Mailboxes also load from Settings → Agents (Supabase). AGENT_GIT_MAP is the folder overlay.
 # AGENT_GIT_MAP=a.noknok=https://github.com/org/repo.git,a.email=https://github.com/org/email.git
 # AGENT_MAIL_DOMAIN=example.com
 set -eu

@@ -3,7 +3,7 @@
 **Code:** `EM` (standalone email client forked from Mission Control / `MT`)
 **Path:** `/Users/johnromano/Documents/email`
 **Forked:** 2026-07-08 from `~/Projects/mission-control`
-**Status:** Live on Cloudflare Pages. Do not delete email from MC until this is proven.
+**Status:** Live on Cloudflare Pages. Agent Mail (`~/Documents/AgentMail`) is retired — worker + Settings live here.
 **2026-07-18:** Apple Mail revamp shipped — light/dark (System default), Apple-blue tokens, stacked desktop preview rows, keyset-cursor infinite scroll (envelope API), instant unread counts (catch-all bucket fixed), Favorites v2 (pin any mailbox + drag reorder).
 **2026-07-18 (phase 2):** Apple-style Settings window (accounts/junk/viewing/composing/signatures/rules/privacy), server-synced prefs (`email_settings` — **migration SQL must be pasted in Supabase dashboard**, app degrades gracefully until then), delivery rules engine (`email_rules`), column-layout desktop list option, collapse-all sidebar, remote-content blocking, per-address signatures.
 **Live URL:** https://email-app-7rp.pages.dev

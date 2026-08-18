@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path.home() / "Library" / "AgentMail"
+ROOT = Path(os.environ.get("AGENTMAIL_HOME") or (Path.home() / "Library" / "AgentMail"))
 STATE_DIR = ROOT / "state"
 USERS_PATH = STATE_DIR / "allowed_users.json"
 AGENTS_JSON = ROOT / "agents.json"

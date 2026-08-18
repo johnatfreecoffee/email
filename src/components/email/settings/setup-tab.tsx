@@ -210,11 +210,13 @@ NEXT_PUBLIC_OWNER_PASSWORD=...`}</Code>
           <Code>{`./scripts/install-local-worker.sh          # Mac
 # ./scripts/install-local-worker-linux.sh  # Linux
 
-# then copy worker/config.env.example →
+# script copies worker/config.env.example if missing:
 #   ~/Library/AgentMail/config.env   (Mac)
 #   ~/.local/share/agentmail/config.env
-# fill SUPABASE_*, RESEND_API_KEY, GROK_BIN`}</Code>
-          <p>Leave the computer awake when you want agents to run. Create the actual agents under the Agents tab.</p>
+# fill SUPABASE_*, RESEND_API_KEY, GROK_BIN
+# optional WORKSPACE_ROOT=~/Documents
+# optional ~/Library/AgentMail/workspaces.json  →  { "a.dev": "~/src/my-app" }`}</Code>
+          <p>Leave the computer awake when you want agents to run. Create mailboxes under the Agents tab — the worker reads them from the database. Only add workspaces.json if a mailbox should open a folder that is not WORKSPACE_ROOT/name.</p>
           <Status tiles={tiles} ids={["machine"]} />
           <Nav back={() => setStep("signin")} next={() => goNext("hands")} />
         </Block>

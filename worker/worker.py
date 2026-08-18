@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(os.environ.get("AGENTMAIL_HOME") or (Path.home() / "Library" / "AgentMail"))
 CONFIG = ROOT / "config.env"
 AGENTS_JSON = ROOT / "agents.json"
+WORKSPACES_JSON = ROOT / "workspaces.json"
 STATE_DIR = ROOT / "state"
 LOG_DIR = ROOT / "logs"
 PROCESSED = STATE_DIR / "processed_ids.json"
@@ -117,8 +118,156 @@ def save_sessions(data: dict) -> None:
     SESSIONS.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def load_agents() -> dict:
-    return json.loads(AGENTS_JSON.read_text())
+def _expand_path(raw: str) -> Path:
+    s = (raw or "").strip()
+    return Path(os.path.expanduser(s)).resolve() if s else Path()
+
+
+def workspace_root(cfg: dict) -> Path:
+    raw = (cfg.get("WORKSPACE_ROOT") or "").strip()
+    return _expand_path(raw) if raw else Path.home() / "Documents"
+
+
+def load_workspace_map() -> dict[str, dict]:
+    """local_part → {workspace, agent_dir?, scope?, display_name?, email?}."""
+    out: dict[str, dict] = {}
+    if WORKSPACES_JSON.exists():
+        try:
+            raw = json.loads(WORKSPACES_JSON.read_text())
+            if isinstance(raw, dict):
+                mapping = raw.get("map") if isinstance(raw.get("map"), dict) else raw
+                for k, v in mapping.items():
+                    if k in ("WORKSPACE_ROOT", "domain", "map"):
+                        continue
+                    local = str(k).strip().lower()
+                    if isinstance(v, str):
+                        out[local] = {"workspace": v}
+                    elif isinstance(v, dict):
+                        out[local] = dict(v)
+        except Exception as e:
+            log(f"workspaces.json: {e}")
+    if AGENTS_JSON.exists():
+        try:
+            doc = json.loads(AGENTS_JSON.read_text())
+            for a in doc.get("agents") or []:
+                local = (a.get("local_part") or "").strip().lower()
+                if not local:
+                    continue
+                cur = out.get(local, {})
+                for key in ("workspace", "agent_dir", "scope", "display_name", "email"):
+                    if a.get(key) and not cur.get(key):
+                        cur[key] = a[key]
+                out[local] = cur
+        except Exception as e:
+            log(f"agents.json: {e}")
+    return out
+
+
+def fetch_cloud_agents(cfg: dict) -> list[dict]:
+    """Agent mailboxes live in Settings → Agents (email_addresses)."""
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key:
+        return []
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    try:
+        code, addrs = curl_json(
+            "GET",
+            f"{base}/rest/v1/email_addresses?select=address,display_name,is_active,domain_id&order=address.asc",
+            headers,
+        )
+        if code != 200 or not isinstance(addrs, list):
+            log(f"cloud agents fetch failed code={code}")
+            return []
+        code, domains = curl_json("GET", f"{base}/rest/v1/email_domains?select=id,domain", headers)
+        dmap: dict = {}
+        if code == 200 and isinstance(domains, list):
+            dmap = {d.get("id"): d.get("domain") or "" for d in domains if isinstance(d, dict)}
+        out: list[dict] = []
+        for a in addrs:
+            if not isinstance(a, dict) or a.get("is_active") is False:
+                continue
+            local = str(a.get("address") or "").strip().lower()
+            if not (local.startswith("a.") or local.startswith("e.")):
+                continue
+            domain = dmap.get(a.get("domain_id")) or ""
+            slug = local.split(".", 1)[-1].replace(".", " ").title()
+            out.append(
+                {
+                    "local_part": local,
+                    "display_name": a.get("display_name") or f"Agent {slug}",
+                    "email": f"{local}@{domain}" if domain else local,
+                    "domain": domain,
+                }
+            )
+        return out
+    except Exception as e:
+        log(f"cloud agents error: {e}")
+        return []
+
+
+def resolve_workspace(local: str, overlay: dict, root: Path) -> tuple[str, str]:
+    if overlay.get("workspace"):
+        ws = str(_expand_path(str(overlay["workspace"])))
+        scope = overlay.get("scope") or ("all_documents" if local == "a.main" else "project")
+        return ws, str(scope)
+    if local == "a.main" or overlay.get("scope") == "all_documents":
+        return str(root), "all_documents"
+    slug = local.split(".", 1)[-1] if "." in local else local
+    for cand in (root / slug, root / local):
+        if cand.is_dir():
+            return str(cand), "project"
+    return str(root / slug), "project"
+
+
+def load_agents(cfg: dict) -> dict:
+    overlay = load_workspace_map()
+    root = workspace_root(cfg)
+    cloud = fetch_cloud_agents(cfg)
+    agents: list[dict] = []
+    seen: set[str] = set()
+
+    def add(local: str, base: dict, o: dict) -> None:
+        ws, scope = resolve_workspace(local, o, root)
+        agent_dir = str(o.get("agent_dir") or (ROOT / "agents" / local))
+        if "/Documents/AgentMail/" in agent_dir.replace("\\", "/"):
+            agent_dir = str(ROOT / "agents" / local)
+        slug = local.split(".", 1)[-1].replace(".", " ").title()
+        agents.append(
+            {
+                "email": o.get("email") or base.get("email") or local,
+                "local_part": local,
+                "display_name": o.get("display_name") or base.get("display_name") or f"Agent {slug}",
+                "workspace": ws,
+                "agent_dir": agent_dir,
+                "scope": scope,
+            }
+        )
+        seen.add(local)
+
+    for row in cloud:
+        add(row["local_part"], row, overlay.get(row["local_part"]) or {})
+    for local, o in overlay.items():
+        if local in seen:
+            continue
+        if not (local.startswith("a.") or local.startswith("e.")):
+            continue
+        add(local, {}, o)
+
+    if not agents and AGENTS_JSON.exists():
+        try:
+            return json.loads(AGENTS_JSON.read_text())
+        except Exception:
+            pass
+    domain = ""
+    if cloud:
+        domain = cloud[0].get("domain") or ""
+    elif AGENTS_JSON.exists():
+        try:
+            domain = json.loads(AGENTS_JSON.read_text()).get("domain") or ""
+        except Exception:
+            domain = ""
+    return {"domain": domain, "agents": agents}
 
 
 def by_local(agents: dict) -> dict[str, dict]:
@@ -1201,13 +1350,13 @@ def deny_reply(agent: dict, reason: str) -> str:
     if reason == "no_agent":
         return (
             f"This mailbox is restricted. Your address isn't allowed to talk to {name}. "
-            "Ask John to enable it in Agent Mail Users."
+            "Ask the owner to enable it in Settings → Agents."
         )
     return f"This mailbox is restricted. {name} didn't run your message."
 
 
 def process_once(cfg: dict) -> None:
-    agents_doc = load_agents()
+    agents_doc = load_agents(cfg)
     agents = by_local(agents_doc)
     processed = load_processed()
     sessions = load_sessions()
@@ -1383,7 +1532,12 @@ def acquire_lock() -> bool:
 def main() -> int:
     cfg = load_config()
     poll = int(cfg.get("POLL_SECONDS", "30"))
-    log(f"Agent Mail worker start poll={poll}s pid={os.getpid()} sessions=on")
+    log(f"email worker start poll={poll}s pid={os.getpid()} sessions=on")
+    try:
+        boot_agents = load_agents(cfg)
+        log(f"agents n={len(boot_agents.get('agents') or [])} workspaces={WORKSPACES_JSON.exists()} overlay={AGENTS_JSON.exists()}")
+    except Exception as e:
+        log(f"agents boot: {e}")
     try:
         store = fetch_allowlist(cfg)
         if store is not None:

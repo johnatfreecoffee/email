@@ -2,7 +2,10 @@
 
 A full send/receive email web app: add a domain, it auto-configures on Resend +
 Cloudflare DNS, inbound mail arrives via a Resend webhook into Supabase, and a
-three-panel web UI reads/sends it. **Resend-only** (no IMAP, no mailboxes).
+three-panel web UI reads/sends it. **Resend-only** (no IMAP). Optional coding
+agents (`a.*` mailboxes) run from a worker in this same repo.
+
+Clone this repo only. There is no separate Agent Mail project.
 
 **Live:** https://email-app-7rp.pages.dev  
 **Repo:** https://github.com/johnatfreecoffee/email
@@ -17,6 +20,7 @@ Mission Control once this app is proven and the Resend webhook is re-pointed.
 | File | What it is |
 |---|---|
 | **`EMAIL-SYSTEM.md`** | The brain — full architecture, every API endpoint, DB schema, deployment, services, env, gotchas. Start here. |
+| **`docs/OSS-README.md`** | Clone-and-run (mail + optional agents). |
 | **`KICKSTART.md`** | The prompt to paste into a fresh Claude chat to continue the work. |
 | `docs/EMAIL-SPEC.md` | Original MC build spec (design intent; some parts predate the Resend-only cutover). |
 | `.env.example` | Env template. `.env.local` (gitignored) is already filled with real keys. |
@@ -49,11 +53,13 @@ Cloudflare Pages + Pages Functions (`functions/api/email/*`) · Web Push (VAPID)
 ## Layout
 
 ```
-functions/api/email/     15 Cloudflare Pages Functions = the backend API
+functions/api/email/     Cloudflare Pages Functions = the backend API
 src/app/email/           the /email route (three-panel client)
-src/components/email/     11 UI components (list, reader, compose, editor, domains…)
-src/lib/                  auth, supabase, theme, push-notifications, utils
-migrations/              email-*.sql (see EMAIL-SYSTEM.md §7 for current vs legacy)
+src/components/email/    UI (list, reader, compose, Settings → Agents)
+src/lib/                 auth, supabase, theme, push, agent helpers
+worker/                  local/Docker agent worker (install script copies it out)
+scripts/                 install-local-worker.sh / linux
+migrations/              email-*.sql (see EMAIL-SYSTEM.md §7)
 ```
 
 ## What was pruned in the fork
