@@ -93,6 +93,51 @@ async function xaiReply(env: Env, prompt: string): Promise<string | null> {
   return null;
 }
 
+function replyHtml(text: string): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const blocks: string[] = [];
+  let para: string[] = [];
+  let bullets: string[] = [];
+  const flushPara = () => {
+    if (!para.length) return;
+    blocks.push(`<p style="margin:0 0 12px">${para.map(esc).join("<br>")}</p>`);
+    para = [];
+  };
+  const flushBullets = () => {
+    if (!bullets.length) return;
+    blocks.push(
+      `<ul style="margin:0 0 12px;padding-left:20px">${bullets
+        .map((b) => `<li style="margin:0 0 4px">${esc(b)}</li>`)
+        .join("")}</ul>`
+    );
+    bullets = [];
+  };
+  for (const line of (text || "").split("\n")) {
+    const s = line.trim();
+    if (!s) {
+      flushPara();
+      flushBullets();
+      continue;
+    }
+    const m = s.match(/^[-*•]\s+/);
+    if (m) {
+      flushPara();
+      bullets.push(s.slice(m[0].length));
+    } else {
+      flushBullets();
+      para.push(s);
+    }
+  }
+  flushPara();
+  flushBullets();
+  return (
+    '<div style="font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.45;color:#111">' +
+    blocks.join("") +
+    "</div>"
+  );
+}
+
 async function sendAgentMail(
   env: Env,
   opts: {
@@ -111,6 +156,7 @@ async function sendAgentMail(
     to,
     subject: opts.subject,
     text: opts.text,
+    html: replyHtml(opts.text),
   };
   const cc = (opts.cc || []).filter((e) => e && !to.includes(e));
   if (cc.length) payload.cc = cc;
@@ -200,6 +246,7 @@ export async function maybeCloudChat(
   const route = await threadRecipients(env, args.fromAddress, args.toAddresses || [], args.ccAddresses || [], local);
   const to = route.to[0] || args.fromAddress;
   const cc = route.cc;
+  const first = (auth.sender?.first_name || "there").trim().split(/\s+/)[0] || "there";
 
   if (auth.reason === "no_agent") {
     const text =
@@ -235,10 +282,13 @@ export async function maybeCloudChat(
   }
 
   const prompt =
-    `You are ${display}. Reply as a person, not an agent log.\n` +
-    `Print ONLY the finished email. Short. Real paragraphs. No process talk.\n` +
-    `No memory/git/deploy narration. One link if useful. They will ask if they want more.\n` +
-    `No subject line.\n\n` +
+    `You are ${display}. Write a normal email to a busy coworker.\n` +
+    `Their first name is ${first}.\n` +
+    `Print ONLY the finished email.\n` +
+    `Shape:\nHey ${first},\n\nSo I looked at {what they sent} — {one-line take}.\n\n- bullet\n- bullet\n\n{closer},\n${display}\n` +
+    `30,000-foot view. 3–7 bullets. Expand only if they said expand/zoom/detail.\n` +
+    `No process talk. No memory/git/deploy narration. One link if useful.\n` +
+    `No subject line. Sign off with a short closer (Making it happen / On it / That's the short of it) then your name.\n\n` +
     `From: ${args.fromAddress}\nSubject: ${args.subject}\n\n${args.bodyText || "(empty)"}`;
   const reply = await xaiReply(env, prompt);
   if (!reply) {

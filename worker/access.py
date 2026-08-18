@@ -289,8 +289,9 @@ ASK_WORK_RULE = "- QUESTIONS ONLY. Do not change any files. Answer, then stop."
 CODE_WORK_RULE = "- Do the work in the workspace with tools when they ask for code/project work, then summarize."
 COMMON_RULES = [
     "- Your stdout IS the email they read. Print only the finished note.",
-    "- Write like a person: short sentences, real paragraphs, blank lines between them.",
-    "- No process talk (no checking memory/git/deploy, no \"then sending the reply\").",
+    "- Start with \"Hey {First},\" then a blank line. End with a short closer + your agent name.",
+    "- 30,000-foot view: one opener + 3–7 bullets. Expand only if they said expand/zoom/detail.",
+    "- No process talk (no checking memory/git/deploy, no \"I'll start by\", no \"Pulling\").",
     "- Don't dump every URL or path. One link if useful. They will ask if they want more.",
     "- If unclear, ask one short clarifying question.",
     "- Never invent secrets. Never send mail yourself.",

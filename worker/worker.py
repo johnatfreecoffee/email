@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -315,15 +316,102 @@ def resolve_recipients(
 PROCESS_OPEN = re.compile(
     r"^(i(?:'ll| will| am|'m)|let me|pulling|checking|confirming|logging|"
     r"looking|reading|searching|fetching|opening|loading|writing|updating|"
-    r"skimming|gathering|verifying|starting|working on|got it[,.]?\s+"
-    r"(?:i'll|let me)|just (?:checked|looking|pulled|read))\b",
+    r"skimming|gathering|verifying|starting|working on|investigating|"
+    r"querying|refining|releasing|creating|rewriting|taking|found|"
+    r"next i(?:'ll| will)?|got it[,.]?\s+(?:i'll|let me)|just (?:checked|"
+    r"looking|pulled|read)|desk's|code gate|server is up|preview is up|"
+    r"build is clean|screenshots are|live checkout)\b",
     re.I,
 )
 PROCESS_PHRASE = re.compile(
     r"\b(so the (?:reply|status(?: email)?) is accurate|then sending the reply|"
-    r"project memory|logging this status)\b",
+    r"project memory|logging this status|hidden pre-prompt|tool loop)\b",
     re.I,
 )
+GREET_RE = re.compile(r"^(hey|hi|hello|good (?:morning|afternoon|evening))\b", re.I)
+SIGNOFF_RE = re.compile(
+    r"^(making it happen|on it|that's the short of it|that's the 30k view|"
+    r"easy win|all set|back in your court|we're good|done and dusted|"
+    r"keep me posted|cheers|thanks|talk soon|got you|will do|still at it|"
+    r"give me a bit|back shortly|working it|not lost)\b",
+    re.I,
+)
+JOB_HINTS = re.compile(
+    r"\b("
+    r"fix|build|ship|deploy|create|add|implement|take over|take them|"
+    r"rewrite|update|install|migrate|publish|make|wire|stand up|"
+    r"include|generate|design|replace|remove|delete|merge|"
+    r"take all|kick|handle|work on|need you to|please do|"
+    r"can you (?:fix|build|add|make|ship|run|create)|"
+    r"run (?:the|a|it|this)|do (?:it|this|that)"
+    r")\b",
+    re.I,
+)
+DONE_CLOSERS = [
+    "Making it happen",
+    "That's the short of it",
+    "That's the 30k view",
+    "Easy win",
+    "All set",
+    "Back in your court",
+    "We're good",
+    "Done and dusted",
+    "On it",
+]
+ACK_CLOSERS = ["On it", "Working it", "Give me a bit", "Back shortly", "Not lost"]
+CHECKIN_CLOSERS = ["Still at it", "Still cooking", "Hang tight"]
+ACK_AFTER_S = 25
+CHECKIN_AFTER_S = 8 * 60
+
+
+def pick_closer(seed: str, pool: list[str]) -> str:
+    n = 0
+    for ch in seed:
+        n = (n * 31 + ord(ch)) & 0xFFFFFFFF
+    return pool[n % len(pool)]
+
+
+def sender_first_name(from_addr: str, store: dict | None, msg: dict | None = None) -> str:
+    email = _norm_email(from_addr)
+    if store:
+        for u in store.get("users") or []:
+            if _norm_email(u.get("email") or "") == email:
+                n = (u.get("first_name") or "").strip()
+                if n:
+                    return n.split()[0]
+    name = ((msg or {}).get("from_name") or "").strip()
+    if name:
+        return name.split()[0]
+    return "there"
+
+
+def looks_like_job(msg: dict, questions_only: bool) -> bool:
+    """Real work that will not have a reply in a few seconds."""
+    if questions_only:
+        return False
+    body = plain_text(msg)
+    body = re.split(r"\nOn .+ wrote:\n", body, maxsplit=1)[0]
+    body = re.sub(r"^>.*$", "", body, flags=re.M)
+    compact = re.sub(r"\s+", " ", body).strip()
+    text = f"{msg.get('subject') or ''}\n{compact}"
+    if not compact:
+        return False
+    if len(compact) < 100 and compact.endswith("?") and not JOB_HINTS.search(text):
+        return False
+    if JOB_HINTS.search(text):
+        return True
+    return len(compact) > 350
+
+
+def status_note(kind: str, first: str, display: str, topic: str) -> str:
+    topic = re.sub(r"\s+", " ", topic or "this").strip()[:90].rstrip(" .") or "this"
+    if kind == "ack":
+        body = f"Got this — I'm on {topic}. I'll write back when it's done."
+        closer = pick_closer(topic + "ack", ACK_CLOSERS)
+    else:
+        body = f"Still on {topic}. Not done yet — I'll write back when it is."
+        closer = pick_closer(topic + "checkin", CHECKIN_CLOSERS)
+    return f"Hey {first},\n\n{body}\n\n{closer},\n{display}"
 
 
 def unsquash_sentences(text: str) -> str:
@@ -331,39 +419,112 @@ def unsquash_sentences(text: str) -> str:
     return re.sub(r"([.!?])([A-Z])", r"\1\n\n\2", text or "")
 
 
-def clean_email_reply(raw: str) -> str:
+def _is_process(block: str) -> bool:
+    first = block.split("\n", 1)[0].strip()
+    if re.match(r"^(TO|CC)\s*:", first, re.I):
+        return False
+    return bool(PROCESS_OPEN.match(first) or PROCESS_PHRASE.search(block))
+
+
+def _has_signoff(text: str, display: str) -> bool:
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return False
+    tail = lines[-3:]
+    if any(SIGNOFF_RE.match(ln.rstrip(",")) for ln in tail):
+        return True
+    disp = (display or "").strip().lower()
+    return bool(disp and any(ln.lower() == disp for ln in tail))
+
+
+def shape_human_email(text: str, first: str, display: str) -> str:
+    """Guarantee Hey First + closer + agent name."""
+    body = (text or "").strip()
+    first = first or "there"
+    display = display or "Agent"
+    if not body:
+        body = "I looked at this — write back if you want me to go deeper on any piece."
+    if not GREET_RE.match(body):
+        body = f"Hey {first},\n\n{body}"
+    if not _has_signoff(body, display):
+        closer = pick_closer(body, DONE_CLOSERS)
+        body = f"{body.rstrip()}\n\n{closer},\n{display}"
+    return body
+
+
+def clean_email_reply(raw: str, first: str = "there", display: str = "Agent") -> str:
     """Drop agent-process narration. Keep a human note with real paragraphs."""
     text = (raw or "").strip()
     if not text:
-        return text
+        return shape_human_email("", first, display)
     fenced = re.fullmatch(r"```(?:text|markdown|md)?\s*\n(.*)\n```", text, re.S)
     if fenced:
         text = fenced.group(1).strip()
+    body_only, route_to, route_cc = parse_route_block(text)
+    text = body_only or text
     text = unsquash_sentences(text)
+    # Drop **Heading:** labels Grok loves — keep the line body
+    text = re.sub(r"^\*{0,2}(?:what (?:it was|i did)|status|do this|raw)\*{0,2}:\s*", "", text, flags=re.I | re.M)
     paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     kept: list[str] = []
     for p in paras:
-        first = p.split("\n", 1)[0].strip()
-        if PROCESS_OPEN.match(first) or PROCESS_PHRASE.search(p):
+        lines = [ln.rstrip() for ln in p.splitlines()]
+        good = [ln for ln in lines if ln.strip() and not _is_process(ln.strip())]
+        if not good:
             continue
-        kept.append(p)
+        # whole paragraph is process if the opener was
+        if _is_process(p) and not any(ln.lstrip().startswith(("-", "*", "•")) for ln in good):
+            continue
+        kept.append("\n".join(good))
     if not kept:
-        kept = paras
+        kept = [p for p in paras if not _is_process(p)]
     out = re.sub(r"\n{3,}", "\n\n", "\n\n".join(kept)).strip()
+    out = shape_human_email(out[:12000], first, display)
+    if route_to or route_cc:
+        out = f"{out.rstrip()}\n\nTO: {', '.join(route_to)}\nCC: {', '.join(route_cc)}"
     return out[:12000]
 
 
 def reply_html(text: str) -> str:
     import html as html_lib
 
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
-    bits = []
-    for p in paras:
-        bits.append("<p style=\"margin:0 0 12px\">" + html_lib.escape(p).replace("\n", "<br>") + "</p>")
+    blocks: list[str] = []
+    para: list[str] = []
+    bullets: list[str] = []
+
+    def flush_para() -> None:
+        if not para:
+            return
+        body = "<br>".join(html_lib.escape(x) for x in para)
+        blocks.append(f'<p style="margin:0 0 12px">{body}</p>')
+        para.clear()
+
+    def flush_bullets() -> None:
+        if not bullets:
+            return
+        items = "".join(f"<li style=\"margin:0 0 4px\">{html_lib.escape(b)}</li>" for b in bullets)
+        blocks.append(f'<ul style="margin:0 0 12px;padding-left:20px">{items}</ul>')
+        bullets.clear()
+
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not s:
+            flush_para()
+            flush_bullets()
+            continue
+        m = re.match(r"^[-*•]\s+", s)
+        if m:
+            flush_para()
+            bullets.append(s[m.end() :])
+        else:
+            flush_bullets()
+            para.append(s)
+    flush_para()
+    flush_bullets()
     return (
         "<div style=\"font-family:-apple-system,BlinkMacSystemFont,Helvetica,Arial,sans-serif;"
         "font-size:15px;line-height:1.45;color:#111\">"
-        + "".join(bits)
+        + "".join(blocks)
         + "</div>"
     )
 
@@ -593,10 +754,13 @@ def run_grok(
     is_new: bool,
     grant: dict | None = None,
     store: dict | None = None,
+    first_name: str = "there",
+    on_slow: Callable[[str], None] | None = None,
 ) -> tuple[str, dict]:
     """Run Grok Build for one email. Returns (reply_text, meta).
 
     meta: {turn_tokens, duration_s, timed_out, returncode}
+    on_slow("ack"|"checkin") fires if the job is still running.
     """
     grok = cfg.get("GROK_BIN") or str(Path.home() / ".grok/bin/grok")
     workspace = agent["workspace"]
@@ -605,6 +769,7 @@ def run_grok(
     subject = msg.get("subject") or "(no subject)"
     from_addr = msg.get("from_address") or ""
     display = agent["display_name"]
+    first = first_name or "there"
     scope = agent.get("scope") or "project"
     # Default 45 min — complex audits (mycart non-public pages) regularly blew
     # the old 15 min (900s) hard kill and only returned the timeout stub.
@@ -647,18 +812,37 @@ def run_grok(
     allow_block = "\n".join(allow_lines) or "- (none — only the writer if they are allowed)"
     on_thread = ", ".join(people_now) or "(just the writer)"
 
-    prompt = f"""You are {display}. You answer email as a person, not as an agent log.
+    prompt = f"""You are {display}. You write a normal email to a busy coworker. Not an agent log.
 Session {session_id} — {"first email" if is_new else "continuation"}.
+Their first name is {first}.
 
-Your stdout IS the email they receive. Print the finished note, then a routing block.
+Your stdout IS the email they receive. Print only the finished note, then a routing block.
 
-Write like a coworker: short, clear, human.
-- Real paragraphs. Blank line between them. Never glue sentences together.
-- No process talk. Never say you are checking memory, git, deploy, logs, or "then sending the reply".
-- No preamble. Start with the answer.
-- Do not dump every URL, path, commit, or admin detail. One link if it helps. More only if they asked.
-- 2–8 short sentences is enough. They will ask a follow-up if they want more.
-- No subject line. No markdown heading. No wrapping the whole reply in code fences.
+EMAIL SHAPE (HARD):
+Hey {first},
+
+So I looked at {{what they sent}} — {{one-line take}}.
+
+- bullet
+- bullet
+- bullet
+
+{{whimsical closer that matches the vibe}},
+{display}
+
+Altitude:
+- Default = 30,000 feet. One opener + 3–7 bullets. That is the whole email.
+- Expand ONLY if they said expand / zoom / detail / more on X / walk me through. Then expand that piece only.
+- If they did not ask for detail, do not give it.
+
+Voice:
+- First line is always "Hey {first}," then a blank line.
+- Sign off every time. Vary the closer (Making it happen / On it / That's the short of it / Easy win / Back in your court / All set / That's the 30k view). Never the same one twice in a row if you can help it.
+- No process talk. Never say you are checking memory, git, deploy, logs, "I'll start by", "Pulling", "Loading", "then sending the reply".
+- Do the work with tools silently. The email is the DONE note, not the diary.
+- The worker already sent (or will send) a "got it" note if this is a long job. Do not write another "I'm on it".
+- One link if it helps. No URL dumps, no path dumps, no commit dumps.
+- No subject line. No markdown headings. No **bold** labels. Bullets use "- " only.
 - Do not mention token counts, session IDs, or tool names.
 
 You control To and CC. Only these people may receive mail (allowlist):
@@ -719,44 +903,83 @@ Rules:
     stdout = ""
     stderr = ""
     rc = -1
+    sent_ack = False
+    sent_checkin = False
     try:
-        r = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout_s,
             env=env,
             cwd=workspace if Path(workspace).is_dir() else str(Path.home()),
         )
-        stdout = r.stdout or ""
-        stderr = r.stderr or ""
-        rc = r.returncode
-    except subprocess.TimeoutExpired as e:
-        timed_out = True
-        # Python keeps partial capture on the exception when available
-        stdout = (e.stdout or "") if isinstance(e.stdout, str) else (e.stdout or b"").decode("utf-8", "replace")
-        stderr = (e.stderr or "") if isinstance(e.stderr, str) else (e.stderr or b"").decode("utf-8", "replace")
+        while True:
+            elapsed = time.time() - t0
+            if elapsed >= timeout_s:
+                proc.kill()
+                timed_out = True
+                break
+            wakes = [timeout_s - elapsed]
+            if on_slow and not sent_ack:
+                wakes.append(max(0.2, ACK_AFTER_S - elapsed))
+            elif on_slow and sent_ack and not sent_checkin:
+                wakes.append(max(0.2, CHECKIN_AFTER_S - elapsed))
+            try:
+                proc.wait(timeout=min(wakes))
+                break
+            except subprocess.TimeoutExpired:
+                elapsed = time.time() - t0
+                if on_slow and not sent_ack and elapsed >= ACK_AFTER_S:
+                    try:
+                        on_slow("ack")
+                    except Exception as e:
+                        log(f"ack send failed: {e}")
+                    sent_ack = True
+                elif on_slow and sent_ack and not sent_checkin and elapsed >= CHECKIN_AFTER_S:
+                    try:
+                        on_slow("checkin")
+                    except Exception as e:
+                        log(f"checkin send failed: {e}")
+                    sent_checkin = True
+        out, err = proc.communicate()
+        stdout = out or ""
+        stderr = err or ""
+        rc = -1 if timed_out else int(proc.returncode if proc.returncode is not None else -1)
+    except Exception as e:
+        log(f"grok spawn failed session={session_id}: {e}")
+        stdout = ""
+        stderr = str(e)
+        rc = -1
+    if timed_out:
         log(f"grok TIMEOUT session={session_id} after {timeout_s}s partial_out={len(stdout)} partial_err={len(stderr)}")
     duration_s = time.time() - t0
 
     if timed_out:
-        partial = clean_email_reply(stdout)
-        if partial and len(partial) > 80:
+        partial = clean_email_reply(stdout, first, display)
+        if partial and len(re.sub(r"\s+", " ", partial)) > 120:
             text = (
                 partial[:11000]
                 + "\n\nI ran out of time mid-reply. That's what I have so far — write back if you want me to keep going."
             )
+            text = shape_human_email(text, first, display)
         else:
-            text = (
+            text = shape_human_email(
                 "I started but ran out of time before I had a clean answer. "
-                "Reply on this thread and I'll pick it up."
+                "Reply on this thread and I'll pick it up.",
+                first,
+                display,
             )
     else:
         if rc != 0:
             log(f"grok nonzero rc={rc} err={stderr[:400]}")
-        text = clean_email_reply(stdout)
-        if not text:
-            text = "Got it — I ran the job but didn't have a note to send. Write back with a shorter ask?"
+        text = clean_email_reply(stdout, first, display)
+        if not text.strip():
+            text = shape_human_email(
+                "I ran the job but didn't have a note to send. Write back with a shorter ask?",
+                first,
+                display,
+            )
 
     append_history(session_id, "assistant", text)
     turn_tokens = estimate_turn_tokens(
@@ -1046,8 +1269,35 @@ def process_once(cfg: dict) -> None:
             continue
         try:
             sid, rec, is_new = resolve_session(sessions, agent, msg)
+            grant = auth.get("grant") or {}
+            first = sender_first_name(from_addr, cloud_store, msg)
+            display = agent.get("display_name") or "Agent"
+            q_only = False
+            if access:
+                q_only = bool(access.grok_invocation(grant).get("questions_only"))
+            default_to, default_cc = resolve_recipients(
+                msg, local, cloud_store, [], [], rec.get("thread_people") or []
+            )
+
+            def send_status(kind: str) -> None:
+                topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
+                used_k = int(rec.get("used_k") or 1)
+                subj_s = format_reply_subject(topic, sid, used_k)
+                note = status_note(kind, first, display, topic)
+                send_reply(cfg, agent, msg, note, subj_s, to=default_to, cc=default_cc)
+                append_history(sid, "assistant", note)
+                log(f"{kind} sent session={sid} to={default_to}")
+
             reply, meta = run_grok(
-                cfg, agent, msg, sid, is_new, grant=auth.get("grant"), store=cloud_store
+                cfg,
+                agent,
+                msg,
+                sid,
+                is_new,
+                grant=grant,
+                store=cloud_store,
+                first_name=first,
+                on_slow=send_status if looks_like_job(msg, q_only) else None,
             )
             history = load_history(sid)
             prev_k = int(rec.get("used_k") or 1)

@@ -20,8 +20,9 @@ const CODE_WORK =
   "- Do the work in the workspace with tools when they ask for code/project work, then summarize.";
 const COMMON = [
   "- Your stdout IS the email they read. Print only the finished note.",
-  "- Write like a person: short sentences, real paragraphs, blank lines between them.",
-  "- No process talk (no checking memory/git/deploy, no \"then sending the reply\").",
+  '- Start with "Hey {First}," then a blank line. End with a short closer + your agent name.',
+  "- 30,000-foot view: one opener + 3–7 bullets. Expand only if they said expand/zoom/detail.",
+  '- No process talk (no checking memory/git/deploy, no "I\'ll start by", no "Pulling").',
   "- Don't dump every URL or path. One link if useful. They will ask if they want more.",
   "- If unclear, ask one short clarifying question.",
   "- Never invent secrets. Never send mail yourself.",
@@ -54,7 +55,9 @@ export const onRequest = async (context: CFContext) => {
         { n: 3, title: "Are they in Archive?", body: "Archived people stay in the file but are off. Same as not on the list: no Grok, no reply." },
         { n: 4, title: "Is this agent checked for them?", body: "On the list but this agent unchecked → Grok still does not start. They get a short denial email. Other checked agents still work." },
         { n: 5, title: "Grok starts with a hidden pre-prompt", body: "Only then do we spawn Grok. We prepend a lock the sender never sees, plus tool blocks so it cannot ignore the note." },
-        { n: 6, title: "To and CC", body: "Reply stays on the thread. Allowed people already on the email stay on To/CC. “Loop them in” / “talk to them, keep me CC’d” works. Not on the list → never mailed." },
+        { n: 6, title: "Reply is a normal email", body: "Hey FirstName, a one-line take, then a few bullets. 30,000-foot view. Expand only if they ask. Signs off with a short closer + the agent name." },
+        { n: 7, title: "Long jobs stay on the thread", body: "Still running after a few seconds → got-it note. Still going after a few minutes → check-in. Done → the real reply. The email is never left hanging." },
+        { n: 8, title: "To and CC", body: "Reply stays on the thread. Allowed people already on the email stay on To/CC. “Loop them in” / “talk to them, keep me CC’d” works. Not on the list → never mailed." },
       ],
       stops: [
         { id: "unknown", title: "Not on the list", grok: false, reply: "None — silent. We do not confirm the mailbox exists." },

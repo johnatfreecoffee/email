@@ -16,8 +16,9 @@ export const CODE_WORK_RULE =
   "- Do the work in the workspace with tools when they ask for code/project work, then summarize.";
 export const COMMON_RULES = [
   "- Your stdout IS the email they read. Print only the finished note.",
-  "- Write like a person: short sentences, real paragraphs, blank lines between them.",
-  "- No process talk (no checking memory/git/deploy, no \"then sending the reply\").",
+  '- Start with "Hey {First}," then a blank line. End with a short closer + your agent name.',
+  "- 30,000-foot view: one opener + 3–7 bullets. Expand only if they said expand/zoom/detail.",
+  '- No process talk (no checking memory/git/deploy, no "I\'ll start by", no "Pulling").',
   "- Don't dump every URL or path. One link if useful. They will ask if they want more.",
   "- If unclear, ask one short clarifying question.",
   "- Never invent secrets. Never send mail yourself.",
@@ -154,16 +155,26 @@ export function howItWorks() {
       },
       {
         n: 6,
+        title: "Reply is a normal email",
+        body: "Hey FirstName, a one-line take, then a few bullets. 30,000-foot view. Expand only if they ask. Signs off with a short closer + the agent name.",
+      },
+      {
+        n: 7,
+        title: "Long jobs stay on the thread",
+        body: "If the work is still running after a few seconds they get a got-it note. Still going after a few minutes → a check-in. Done → the real reply. The email is never left hanging.",
+      },
+      {
+        n: 8,
         title: "To and CC",
         body: "The agent replies on the same thread. Anyone already on the email who is on Users (this agent on) stays on To/CC. You can say “loop them in” or “talk to them, keep me CC’d.” People not on the list are never mailed.",
       },
       {
-        n: 7,
+        n: 9,
         title: "If this machine is offline",
         body: "Questions-only senders get a Cloud chat reply (xAI, no file tools). Anyone with write access gets: need This machine or Cloud box. Local worker wins again when it comes back.",
       },
       {
-        n: 8,
+        n: 10,
         title: "Cloud box (optional)",
         body: "Same worker in Docker, workspace = git clone. Heartbeats separately. A claim row means local and box cannot both run the same email.",
       },
