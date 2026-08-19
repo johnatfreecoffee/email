@@ -7,13 +7,10 @@ agents (`a.*` mailboxes) run from a worker in this same repo.
 
 Clone this repo only. There is no separate Agent Mail project.
 
-**Live:** https://email-app-7rp.pages.dev  
-**Repo:** https://github.com/johnatfreecoffee/email
+Self-hosted, one deploy per person. Point it at **your** Supabase project and
+Resend account — never reuse someone else's.
 
-This was carved out of **Mission Control** on **2026-07-08**. It still points at
-the **same Supabase project** (`YOUR_PROJECT_REF`) as MC, so mail already in
-`email_messages` shows up here immediately. The email module will be deleted from
-Mission Control once this app is proven and the Resend webhook is re-pointed.
+Clone-and-run: **`docs/OSS-README.md`**.
 
 ## Read these first
 
@@ -23,7 +20,7 @@ Mission Control once this app is proven and the Resend webhook is re-pointed.
 | **`docs/OSS-README.md`** | Clone-and-run (mail + optional agents). |
 | **`KICKSTART.md`** | The prompt to paste into a fresh Claude chat to continue the work. |
 | `docs/EMAIL-SPEC.md` | Original MC build spec (design intent; some parts predate the Resend-only cutover). |
-| `.env.example` | Env template. `.env.local` (gitignored) is already filled with real keys. |
+| `.env.example` | Env template. Copy to `.env.local` (gitignored) and fill your own keys. |
 
 ## Quick start
 
@@ -35,11 +32,10 @@ npm run dev          # http://localhost:3000 → redirects to /email
                      # proxies /api/* → :8788 in development
 ```
 
-`.env.local` has working credentials. Auth is a **shared-secret gate**:
-- Server `checkAuth` accepts `X-MC-Auth === env.MC_API_SECRET` (also still
-  accepts valid `mc_sessions` tokens + the legacy MC hash).
-- Client auto-seeds `localStorage["mc-auth-token"]` from
-  `NEXT_PUBLIC_MC_API_SECRET` (or a tiny password screen if unset).
+Copy `.env.example` → `.env.local` and fill your keys. Auth is a **shared-secret gate**:
+- Server `checkAuth` accepts `X-MC-Auth === env.MC_API_SECRET` (also accepts
+  valid `mc_sessions` tokens if you use that table).
+- After login, the client sends `NEXT_PUBLIC_MC_API_SECRET` as `X-MC-Auth`.
 - Local API path: **`wrangler pages dev out`** (not plain `next dev` alone —
   static Next does not run Pages Functions). `next.config.ts` rewrites `/api/*`
   to `http://127.0.0.1:8788` only when `NODE_ENV=development`.

@@ -175,7 +175,7 @@ export function DomainSetupCard({ onClose, onDomainAdded }: DomainSetupProps) {
                 <input
                   value={domain}
                   onChange={(e) => setDomain(e.target.value)}
-                  placeholder="cleanenergyexperts.pro"
+                  placeholder="example.com"
                   className="w-full bg-muted/40 border border-border rounded-lg px-3 py-2.5 text-[14px] text-foreground placeholder-[#4B5563] focus:outline-none focus:border-mc-teal transition-colors"
                   onKeyDown={(e) => e.key === "Enter" && handleCheck()}
                   autoFocus

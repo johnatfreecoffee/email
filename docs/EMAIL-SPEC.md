@@ -247,7 +247,7 @@ Path pattern: `{domain}/{message_id}/{filename}`
 
 ## Webhook Setup
 After domain verification, the webhook URL needs to be configured in Resend:
-- URL: `https://mission-control-806.pages.dev/api/email/inbound`
+- URL: `https://YOUR_PAGES_URL/api/email/inbound`
 - Event: `email.received`
 
 Note: Webhook setup must be done via Resend dashboard or API. The domain setup flow should include instructions or auto-configure via API if available.

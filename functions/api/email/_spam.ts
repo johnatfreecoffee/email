@@ -123,8 +123,8 @@ Be conservative — only mark spam if you are confident. Marketing/newsletters f
       headers: {
         Authorization: `Bearer ${env.OPENROUTER_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://mission-control-806.pages.dev",
-        "X-Title": "Mission Control Email Spam Filter",
+        "HTTP-Referer": "https://email.example",
+        "X-Title": "Email Spam Filter",
       },
       body: JSON.stringify({
         model,

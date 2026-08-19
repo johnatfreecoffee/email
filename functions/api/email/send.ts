@@ -21,7 +21,7 @@ export const onRequest = async (context: CFContext) => {
   if (request.method !== "POST") return errorResponse("Method not allowed", 405, origin);
 
   const body = await request.json() as {
-    from: string;       // "John Romano <john@cleanenergyexperts.pro>"
+    from: string;       // "Name <you@example.com>"
     to: string[];
     cc?: string[];
     bcc?: string[];

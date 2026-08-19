@@ -9,7 +9,7 @@
 - **What it is:** a single-tenant, Resend-backed webmail client. Inbound mail → Resend receives on AWS SES infra → Resend POSTs a thin webhook to `POST /api/email/inbound` → the function fetches full message detail from Resend, classifies spam, stores into Supabase `email_messages`, uploads attachments to Supabase Storage, and fires a Web Push. Outbound → `POST /api/email/send` → Resend `POST /emails`.
 - **Frontend:** Next.js 16 App Router, **static export** (`output: "export"` → `out/`). There are **no Next API routes / server components at request time** — 100% of server logic is Cloudflare Pages Functions under `functions/api/**`, served at `/api/**`.
 - **Backend:** Cloudflare Pages Functions (TypeScript/JS, Web Crypto + `fetch` only, no Node deps). All Supabase access is PostgREST over `${SUPABASE_URL}/rest/v1` using the **service-role key** (bypasses RLS). No RLS policies exist on any email table — access control is entirely app-layer via `checkAuth()`.
-- **Auth:** a custom `X-MC-Auth` request header carrying an opaque token, validated against the Supabase `mc_sessions` table, with a static legacy back-door token `[redacted]` (= `legacyHashPassword("[redacted]")`). The inbound webhook is **unauthenticated and unsigned**.
+- **Auth:** a custom `X-MC-Auth` request header carrying an opaque token. Primary gate is `token === env.MC_API_SECRET`; optional fallback is a valid `mc_sessions` row. The inbound webhook is **unauthenticated and unsigned**.
 - **Storage:** one central `email_messages` table + `email_domains`, `email_addresses`, `email_attachments`, `email_sender_reputation`, `email_drafts`, `email_contacts`, `mc_sessions`, `mc_push_subscriptions`. Attachment bytes go to the private Supabase Storage bucket `email-attachments`.
 - **Push:** self-contained RFC 8291 (aes128gcm) + RFC 8292 (VAPID) Web Push implemented in `_web-push.ts` — no external push service; pushes go straight to the browser vendor endpoint stored per-subscription. Spam mail never pushes.
 - **Spam:** heuristic + optional OpenRouter free-LLM classifier (`_spam.ts`), memoized per-sender in `email_sender_reputation`. Threshold `0.7`. Fully degradable if `OPENROUTER_KEY` is unset.
@@ -67,12 +67,12 @@
 
 ## 3. External services
 
-The email subsystem talks to exactly **four** external services (confirmed by grepping `functions/api/email/`: only outbound hosts are `api.resend.com`, `api.cloudflare.com`, `openrouter.ai`, `${SUPABASE_URL}/rest/v1`, plus self-referential `mission-control-806.pages.dev`).
+The email subsystem talks to exactly **four** external services (confirmed by grepping `functions/api/email/`: only outbound hosts are `api.resend.com`, `api.cloudflare.com`, `openrouter.ai`, `${SUPABASE_URL}/rest/v1`).
 
 ### 3.1 Resend (email provider — inbound + outbound + webhooks)
 - **API base:** `https://api.resend.com`. Auth: `Authorization: Bearer ${RESEND_API_KEY}` (helper `resendAPI()`).
 - **Inbound MX host:** every managed domain's apex `MX → inbound-smtp.us-east-1.amazonaws.com` (priority `10`). Return-path/DKIM/SPF use `*.amazonses.com`.
-- **Inbound webhook target:** `https://mission-control-806.pages.dev/api/email/inbound`, event `email.received` (and `email.sent` is handled). **Must be re-pointed to the fork's hostname.** No Svix/Resend signature verification is performed — authenticated only by URL obscurity + re-fetch by id.
+- **Inbound webhook target:** `https://YOUR_PAGES_URL/api/email/inbound`, event `email.received` (and `email.sent` is handled). No Svix/Resend signature verification is performed — authenticated only by URL obscurity + re-fetch by id.
 - **Endpoints called:**
   - `GET /emails/receiving/{id}` — full received email (`html`, `text`, `headers`, `reply_to`, `raw.download_url`, attachments).
   - `GET /emails/receiving/{id}/attachments` — signed attachment download URLs.
@@ -83,8 +83,7 @@ The email subsystem talks to exactly **four** external services (confirmed by gr
 - **Domain verification statuses (stored verbatim):** `pending, verifying, verified, failed, temporary_failure, not_started`. Local `email_domains.status` is set to `active` only when Resend reports `verified`.
 
 ### 3.2 Supabase (database + storage + session auth)
-- **Project ref:** `YOUR_PROJECT_REF`. **Region:** West US / Oregon (`us-west-2`).
-- **Project URL:** `https://YOUR_PROJECT_REF.supabase.co` (= `SUPABASE_URL` = `NEXT_PUBLIC_SUPABASE_URL`).
+- **Project URL:** `${SUPABASE_URL}` (= `NEXT_PUBLIC_SUPABASE_URL`). Your project, your keys.
 - **Direct Postgres pooler:** `aws-0-us-west-2.pooler.supabase.com:6543`.
 - **Access:** Pages Functions hit PostgREST at `${SUPABASE_URL}/rest/v1{path}` using the **service-role key** as both `apikey` and `Authorization: Bearer` (bypasses RLS). `Prefer: return=representation` always set, so all mutations echo rows. The static frontend uses the **anon key** via `@supabase/supabase-js` (only for the unrelated `/inbox` feed; the `/email` app does not use it).
 - **Storage:** private bucket `email-attachments`, path pattern `{domain}/{message_id}/{filename}`. Object I/O via `${SUPABASE_URL}/storage/v1/object/email-attachments/{path}` (Bearer = service key). Public read URL form: `${SUPABASE_URL}/storage/v1/object/public/email-attachments/{storage_path}`.
@@ -93,9 +92,8 @@ The email subsystem talks to exactly **four** external services (confirmed by gr
 
 ### 3.3 Cloudflare (Pages + Functions + DNS)
 - **Pages** hosts the static `out/` site and the Functions.
-  - Primary project name: **`mission-control`**. Production URL: **`https://mission-control-806.pages.dev`**.
-  - Secondary mirror project: **`branson-snap`** (`branson-snap.pages.dev`) — deploy pushes the same `out/` build; **not email-relevant, drop in the fork.**
-  - **Account ID:** `YOUR_CF_ACCOUNT_ID`. SSL auto for `*.pages.dev`.
+  - Pages project name is yours (this fork uses `email-app` in the deploy workflow). SSL auto for `*.pages.dev`.
+  - **Account ID:** set `CLOUDFLARE_ACCOUNT_ID` in GitHub secrets. Never commit it.
 - **DNS API base:** `https://api.cloudflare.com/client/v4`. Auth: `Authorization: Bearer ${CLOUDFLARE_API_TOKEN}` (helper `cloudflareDNS()`).
   - `GET /zones?name=<domain>` (zone lookup, walks subdomain suffixes so `mail.example.com` finds `example.com`).
   - `GET /zones/{zoneId}/dns_records?type=&name=`, `POST /zones/{zoneId}/dns_records`, `DELETE /zones/{zoneId}/dns_records/{recordId}`.
@@ -103,26 +101,17 @@ The email subsystem talks to exactly **four** external services (confirmed by gr
   - Token must carry **Pages:Edit + Zone DNS:Edit + Zone:Read** across all 8 zones.
 
 ### 3.4 OpenRouter (spam classification — optional)
-- Endpoint: `POST https://openrouter.ai/api/v1/chat/completions`. Auth: `Authorization: Bearer ${OPENROUTER_KEY}`. Extra headers: `HTTP-Referer: https://mission-control-806.pages.dev`, `X-Title: Mission Control Email Spam Filter`.
+- Endpoint: `POST https://openrouter.ai/api/v1/chat/completions`. Auth: `Authorization: Bearer ${OPENROUTER_KEY}`. Extra headers: `HTTP-Referer` + `X-Title` (generic app name).
 - Guarded by `if (!env.OPENROUTER_KEY) return null;` — entirely optional. Models: `FREE_MODELS = ["google/gemini-2.0-flash-exp:free", "meta-llama/llama-3.3-70b-instruct:free"]`.
 
 ### 3.5 VAPID / Web Push
-- No external service — RFC 8291 (aes128gcm) encryption + RFC 8292 (VAPID) signing done in `_web-push.ts` with Web Crypto; POSTs directly to each subscription's browser push endpoint (e.g. `https://fcm.googleapis.com`). Audience derived per-endpoint as `${protocol}//${host}`. Default VAPID subject `mailto:admin@cleanenergyexperts.pro` (change for the fork). Keys `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are base64url raw P-256 (public = 65-byte uncompressed point, private = raw 32-byte scalar).
+- No external service — RFC 8291 (aes128gcm) encryption + RFC 8292 (VAPID) signing done in `_web-push.ts` with Web Crypto; POSTs directly to each subscription's browser push endpoint (e.g. `https://fcm.googleapis.com`). Audience derived per-endpoint as `${protocol}//${host}`. Default VAPID subject `mailto:admin@example.com`. Keys `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` are base64url raw P-256 (public = 65-byte uncompressed point, private = raw 32-byte scalar).
 
 ---
 
-## 4. The 8 managed domains
+## 4. Domains
 
-All eight have apex `MX → inbound-smtp.us-east-1.amazonaws.com`, are verified for sending+receiving in Resend, and have DNS in the single Cloudflare account. Rows live in `email_domains`. New domains are onboarded programmatically via `POST /api/email/domains` (Resend + Cloudflare DNS, no dashboard steps).
-
-1. **cleanenergyexperts.pro** — primary/default (hardcoded example `from`, default VAPID subject, CEE marketing account).
-2. **mycart.cloud**
-3. **enrollme.us**
-4. **gcliar.com**
-5. **meetjack.online**
-6. **worships.love**
-7. **clearhome.pro**
-8. **noknok.pro**
+Domains you add live in `email_domains`. Apex `MX → inbound-smtp.us-east-1.amazonaws.com`. New domains are onboarded via `POST /api/email/domains` (Resend + Cloudflare DNS).
 
 ---
 
@@ -269,11 +258,9 @@ Legacy JS Pages Function for MC's **issue tracker** (`mc_issues`, `mc_issue_read
   1. No token → `401 {"error":"Unauthorized"}`.
   2. If `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` present, validate against `mc_sessions`:
      `GET {SUPABASE_URL}/rest/v1/mc_sessions?token=eq.{urlenc(token)}&expires_at=gte.{now ISO}&limit=1` (headers `apikey` + `Bearer` = service key). Non-empty → pass.
-  3. **Legacy fallback:** if empty, `token === legacyHashPassword("[redacted]")` → pass; else `401 {"error":"Invalid or expired session"}`.
+  3. Else `401 {"error":"Invalid or expired session"}`.
   4. **If env URL/key absent → validation skipped, any non-empty token accepted.** Never deploy without those set.
-- **`legacyHashPassword(password)`** — DJB-ish 32-bit string hash (`hash = ((hash<<5)-hash)+char; hash|=0`), returned as `"mc_" + Math.abs(hash).toString(16)`. For `"[redacted]"` it produces the literal token **`[redacted]`** — a static shared-secret back door. Decide deliberately whether to keep/rotate/remove; removing it 401s any client still sending it.
-  - (Note: an alternate slice mentions an `mc_5ff3c6`-style value as illustrative; the verified constant for `"[redacted]"` is `[redacted]`.)
-- **`MC_API_SECRET`** is referenced by the original prompt/onboarding but is **NOT read anywhere** in the email functions (grep-confirmed absent from `functions/api/email/`). The live auth is session-token-based. `NEXT_PUBLIC_MC_API_SECRET` is a build-time public var (baked into JS, low security). If the fork wants a simpler `X-MC-Auth: <MC_API_SECRET>` model, it must be added.
+- **`MC_API_SECRET`:** primary gate. `NEXT_PUBLIC_MC_API_SECRET` is a build-time public var (baked into JS, low security — single-tenant only).
 - **Service-role usage:** every Supabase call from the functions uses `SUPABASE_SERVICE_KEY` as both `apikey` and `Bearer` — bypasses RLS. Single-tenant; no per-user row scoping. The inbound webhook is **unauthenticated and unsigned** (Resend cannot send `X-MC-Auth`); consider adding Resend/Svix signature verification when hardening.
 - **CORS** (`corsHeaders`): `Access-Control-Allow-Origin` = request `Origin` or `*`; Methods `GET, POST, PATCH, DELETE, OPTIONS`; Headers `Content-Type, Authorization, X-MC-Auth`; Max-Age `86400`. `optionsResponse` → 204.
 - **Fork guidance:** replace `mc_sessions` + the hardcoded password, but keep the `X-MC-Auth` header name and the `checkAuth → Response|null` contract every endpoint depends on. Front-end token obtained via `POST /api/auth/login` → `{token, user}`, validated on mount via `GET /api/auth/me`.
@@ -282,7 +269,7 @@ Legacy JS Pages Function for MC's **issue tracker** (`mc_issues`, `mc_issue_read
 
 ## 7. Database schema
 
-Shared Supabase project `YOUR_PROJECT_REF`. **No RLS / GRANT / policies on any email table** — access control is app-layer only. Six migration files exist; two tables (`email_drafts`, `email_contacts`) have **no migration** (dashboard-created) and must be authored by the fork.
+Your Supabase project. **No RLS / GRANT / policies on any email table** — access control is app-layer only. See `migrations/`.
 
 ### 7.1 CURRENT tables (adopt these)
 
@@ -538,21 +525,21 @@ Keys: `email-collapsed-domains`, `email-favorites-visible`, **`email.favorites.v
 
 ### Forkable email UI files (absolute paths)
 ```
-/Users/johnromano/Projects/mission-control/src/app/email/page.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/email-layout.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/folder-list.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/message-list.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/message-table.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/message-reader.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/compose-modal.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/rich-editor.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/domain-setup.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/domain-settings-panel.tsx
-/Users/johnromano/Projects/mission-control/src/components/email/address-autocomplete.tsx
-/Users/johnromano/Projects/mission-control/src/lib/auth.tsx          (need apiFetch + X-MC-Auth)
-/Users/johnromano/Projects/mission-control/src/lib/push-notifications.ts
-/Users/johnromano/Projects/mission-control/src/lib/supabase.ts        (optional)
-/Users/johnromano/Projects/mission-control/public/sw.js
+<upstream>/src/app/email/page.tsx
+<upstream>/src/components/email/email-layout.tsx
+<upstream>/src/components/email/folder-list.tsx
+<upstream>/src/components/email/message-list.tsx
+<upstream>/src/components/email/message-table.tsx
+<upstream>/src/components/email/message-reader.tsx
+<upstream>/src/components/email/compose-modal.tsx
+<upstream>/src/components/email/rich-editor.tsx
+<upstream>/src/components/email/domain-setup.tsx
+<upstream>/src/components/email/domain-settings-panel.tsx
+<upstream>/src/components/email/address-autocomplete.tsx
+<upstream>/src/lib/auth.tsx          (need apiFetch + X-MC-Auth)
+<upstream>/src/lib/push-notifications.ts
+<upstream>/src/lib/supabase.ts        (optional)
+<upstream>/public/sw.js
 Replace: src/components/layout/sidebar.tsx, top-nav.tsx
 NOT email (do not port): src/app/inbox/page.tsx, functions/api/inbox.js
 ```
@@ -566,19 +553,19 @@ Runtime vars are declared in the `Env` interface in `functions/api/email/_shared
 | Name | Purpose | Public/Secret | Where it lives | Known value / notes |
 |---|---|---|---|---|
 | `RESEND_API_KEY` | Auth for all Resend calls (send, domain create/verify, fetch detail) | Secret | CF Pages runtime | write-only in CF; required |
-| `SUPABASE_URL` | PostgREST + Storage base; `mc_sessions` auth lookups | Secret-ish (runtime) | CF Pages runtime | `https://YOUR_PROJECT_REF.supabase.co` |
+| `SUPABASE_URL` | PostgREST + Storage base; `mc_sessions` auth lookups | Secret-ish (runtime) | CF Pages runtime | your project URL |
 | `SUPABASE_SERVICE_KEY` | Service-role key — `apikey` + `Bearer` for all email DB access; **bypasses RLS** | Secret (most sensitive) | CF Pages runtime | never expose |
 | `SUPABASE_ANON_KEY` | Anon key for server-side anon reads | Secret | CF Pages runtime | listed for CF, but **not read by email code** (email uses service key) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare DNS API (onboarding) + `wrangler` deploy auth | Secret | CF Pages runtime **and** GitHub secret | needs Pages:Edit + Zone DNS:Edit + Zone:Read on all 8 zones |
-| `CLOUDFLARE_ACCOUNT_ID` | `wrangler pages deploy` targeting | Not secret | GitHub secret | `YOUR_CF_ACCOUNT_ID` |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare DNS API (onboarding) + `wrangler` deploy auth | Secret | CF Pages runtime **and** GitHub secret | needs Pages:Edit + Zone DNS:Edit + Zone:Read |
+| `CLOUDFLARE_ACCOUNT_ID` | `wrangler pages deploy` targeting | Not secret | GitHub secret | your account |
 | `VAPID_PUBLIC_KEY` | Web Push public key (returned by GET /api/email/push) | Public (safe) | CF Pages runtime | optional; push disabled if unset; base64url raw P-256 |
 | `VAPID_PRIVATE_KEY` | Signs Web Push VAPID JWT | Secret | CF Pages runtime | optional; base64url raw 32-byte scalar |
 | `OPENROUTER_KEY` | Bearer for OpenRouter spam LLM | Secret | CF Pages runtime | optional; spam LLM skipped if unset |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase URL inlined into static bundle | Public (baked into JS) | GitHub build secret + `.env.local` | `https://YOUR_PROJECT_REF.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key inlined for browser reads | Public (baked into JS) | GitHub build secret + `.env.local` | JWT anon key (unknown/quoted value — pull from Secrets Vault / `~/Documents/noknok.pro/.env`) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase URL inlined into static bundle | Public (baked into JS) | GitHub build secret + `.env.local` | same as `SUPABASE_URL` |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key inlined for browser reads | Public (baked into JS) | GitHub build secret + `.env.local` | your anon key |
 | `NEXT_PUBLIC_MC_API_SECRET` | Shared secret inlined so frontend can send an auth header (misleadingly `NEXT_PUBLIC_` yet onboarding says checked server-side) | Public (baked into JS) | GitHub build secret + Secrets Vault | low-security (readable from shipped JS); **not read by email functions** |
 | `MC_API_SECRET` | Shared-secret concept | Secret (if used) | not referenced by email code | **not read anywhere in email functions** (grep-confirmed); live auth is session-token based |
-| `MC_CRON_TOKEN` | `X-MC-Auth` token for the (dead) email-sync cron; long-lived `mc_sessions` token | Secret | GitHub secret (cron workflow) | falls back to `[redacted]` when unset; drop with the cron |
+| `MC_CRON_TOKEN` | unused (dead cron) | Secret | drop | — |
 
 The 11 required/known env names above appear in this table; the `Env` interface in `_shared.ts` declares only the seven runtime vars listed at the top of this section. `MC_API_SECRET`, `SUPABASE_ANON_KEY`, and the `NEXT_PUBLIC_*` vars are **not read by email code** (grep-confirmed absent from `functions/api/email/`).
 
@@ -610,7 +597,7 @@ Env-var usage matrix (the 3 core-flow files):
 - **Node version:** `.node-version` = `20` (deploy workflow pins Node 20). `.npmrc` only a comment (does not set `optional=true`).
 
 ### Cloudflare Pages
-- Primary project `mission-control` → `https://mission-control-806.pages.dev`. Mirror `branson-snap` (drop in fork). Account `YOUR_CF_ACCOUNT_ID`.
+- Pages project name is set in `.github/workflows/deploy-cloudflare.yml` (`email-app` by default). Account ID lives in GitHub secrets, not in this file.
 
 ### Deploy workflow — `.github/workflows/deploy-cloudflare.yml`
 Trigger: push to `main` (+ `workflow_dispatch`). No PRs — commits go straight to `main`.
@@ -627,12 +614,12 @@ Trigger: push to `main` (+ `workflow_dispatch`). No PRs — commits go straight 
 6. Retry deploy on `if: failure()`.
 7. Mirror to `branson-snap` (drop in fork).
 
-**Deploy rule:** never `wrangler pages deploy` by hand — only `git push origin main` triggers deploys. Watch: `gh run list --repo johnatfreecoffee/mission-control --limit 3` then `gh run watch <run-id>`. Repo: `https://github.com/johnatfreecoffee/mission-control`, branch `main`; `gh` auth as `johnatfreecoffee`.
+**Deploy rule:** never `wrangler pages deploy` by hand — only `git push origin main` triggers deploys. Watch with `gh run list` / `gh run watch`.
 
 **Two env locations:** GitHub repo secrets (build-time: `NEXT_PUBLIC_*`, `CLOUDFLARE_*`, `MC_CRON_TOKEN`) vs. Cloudflare Pages env (runtime, read by Functions). **CF Pages secrets are write-only.** Global gotcha: never null-PATCH multiple CF Pages env vars in one request — it has silently wiped unrelated siblings; PATCH one var, one environment, then GET-diff.
 
 ### Cron jobs
-- **`.github/workflows/email-sync-cron.yml` — VESTIGIAL/DEAD.** Schedule `*/5 * * * *` + `workflow_dispatch`; `curl -X POST https://mission-control-806.pages.dev/api/email/sync` with `X-MC-Auth: ${MC_CRON_TOKEN}` (fallback `[redacted]`); `exit 0` always. `/api/email/sync` (`sync.ts`) was deleted in the Migadu cutover → returns **405**; the cron is a harmless every-5-min no-op. **Delete this workflow and drop `MC_CRON_TOKEN` in the fork.** Do not re-implement `/api/email/sync`.
+- **`.github/workflows/email-sync-cron.yml` — VESTIGIAL/DEAD.** `/api/email/sync` was deleted. Do not re-implement.
 
 ---
 
@@ -644,7 +631,7 @@ Trigger: push to `main` (+ `workflow_dispatch`). No PRs — commits go straight 
 - **No server-side threading:** `thread_id`/`in_reply_to`/`conversation_id` columns exist but are never populated/grouped server-side. The inbound path does not set `in_reply_to`; raw `headers` jsonb retains `In-Reply-To`/`References` if a client wants to derive threads. `messages.ts` returns a flat `received_at`-ordered list.
 - **Inbound webhook is unauthenticated & unsigned:** no `checkAuth`, no Svix/Resend signature verification — authenticated only by URL obscurity + re-fetch by id. Add signature verification when hardening.
 - **`checkAuth` open-fail:** if `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` are unset, any non-empty token is accepted. Never deploy without them.
-- **Static back-door token `[redacted]`** (= `legacyHashPassword("[redacted]")`) authenticates as a valid legacy session regardless of `mc_sessions`. Decide keep/rotate/remove deliberately.
+- Legacy MC password-hash back door is **removed**. Auth is `MC_API_SECRET` then `mc_sessions`.
 - **`search` param interpolated unescaped** into PostgREST `ilike` filters (`or=(…ilike…)` at messages.ts:99/145) — injection/escaping risk to fix.
 - **Drafts PATCH/DELETE always report success** without checking `res.ok`.
 - **Messages DELETE is a hard permanent delete** (cascades attachments); trashing is `PATCH is_trash:true`.
@@ -669,10 +656,10 @@ DB: create in order — `email_domains` (with `catchall_destination_address_id` 
 
 ### Replace (shared MC chrome → minimal email-only shell)
 - `src/components/layout/sidebar.tsx`, `top-nav.tsx` — rebuild as a plain email shell; define the required `--mc-*` CSS vars and `mc-content-offset`/`mc-bg-glow`/`--mc-sidebar-w` globally (cyan accent `#06B6D4`, dark theme).
-- Auth: replace `mc_sessions` + the `[redacted]`/`[redacted]` fallback with real auth **before public exposure**, keeping the `X-MC-Auth` header and `checkAuth → Response|null` contract. Optionally stub `apiFetch` to plain `fetch`/static token.
+- Auth: `MC_API_SECRET` + optional `mc_sessions`. Keep the `X-MC-Auth` header and `checkAuth → Response|null` contract.
 - Drop `@/lib/supabase` unless porting `/inbox` (email app doesn't use it; MessageReader builds the attachment URL as a plain string).
-- Re-point the Resend webhook from `mission-control-806.pages.dev/api/email/inbound` to the fork's hostname; keep event `email.received` and handle `email.sent`.
-- Change hardcoded strings: client `VAPID_PUBLIC_KEY` in `push-notifications.ts` (must match a **newly generated** server keypair), `vapidSubject` default `mailto:admin@cleanenergyexperts.pro` in `_web-push.ts` (line 328), OpenRouter `HTTP-Referer`/`X-Title` in `_spam.ts`, SW icons `/mc-icon-192.png`, module-registry entry, CORS/self-URL references.
+- Point the Resend webhook at `https://YOUR_PAGES_URL/api/email/inbound`; keep event `email.received` and handle `email.sent`.
+- Generate a fresh VAPID keypair; keep client `NEXT_PUBLIC_VAPID_PUBLIC_KEY` matched to the server private key.
 - Rename the CF Pages project from `mission-control`; drop the `branson-snap` mirror step.
 
 ### Drop (dead code / do not port)
@@ -687,5 +674,5 @@ DB: create in order — `email_domains` (with `catchall_destination_address_id` 
 3. Set CF Pages runtime env: `RESEND_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `CLOUDFLARE_API_TOKEN`, optionally `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`OPENROUTER_KEY` (PATCH one secret at a time).
 4. Set GitHub build secrets: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_MC_API_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
 5. Generate a fresh VAPID keypair; sync client key.
-6. DB: reuse Supabase `YOUR_PROJECT_REF` (us-west-2) or a new project; create the `email_*` tables + auth store + `mc_push_subscriptions` + private `email-attachments` bucket. No RLS needed to match current behavior.
+6. DB: a new Supabase project; create the `email_*` tables + auth store + `mc_push_subscriptions` + private `email-attachments` bucket. No RLS needed to match current behavior.
 7. Re-point the Resend inbound webhook; verify domains via `POST /api/email/domains`.

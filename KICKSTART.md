@@ -15,8 +15,8 @@ You are picking up a **standalone email web app** just forked out of my larger "
 
 **Key facts:**
 - Stack: Next.js 16 (`output: "export"`) · React 19 · Tailwind v4 · Tiptap · Supabase · Resend · Cloudflare Pages + Functions · VAPID web push.
-- Shares my existing **Supabase project `YOUR_PROJECT_REF`** — real mail is already in `email_messages`.
-- `.env.local` is **already filled with real working keys** (Supabase URL/anon/service, Resend, Cloudflare token + account, OpenRouter, matched VAPID keypair, and a shared `MC_API_SECRET` / `NEXT_PUBLIC_MC_API_SECRET`). Do not ask me for credentials.
+- Uses **your** Supabase project (set `SUPABASE_URL` / keys in `.env.local`).
+- Copy `.env.example` → `.env.local` and fill your own keys. Never commit them.
 - The fork typechecks clean. MC's global chrome and the unrelated issues/`inbox` module were removed — this is email-only.
 - Email still also lives in Mission Control (`~/Projects/mission-control`). Do **not** delete it from MC until this app is proven.
 
@@ -26,7 +26,7 @@ You are picking up a **standalone email web app** just forked out of my larger "
 
 2. **Wire auth for standalone use** (the one deliberate gap).
    - UI attaches `X-MC-Auth: <token>` from `localStorage["mc-auth-token"]` via `src/lib/auth.tsx` / `apiFetch`.
-   - Functions validate in `functions/api/email/_shared.ts` `checkAuth` against `mc_sessions`, plus a legacy static token `[redacted]` (see `EMAIL-SYSTEM.md` §6).
+   - Functions validate in `functions/api/email/_shared.ts` `checkAuth` against `MC_API_SECRET`, then optional `mc_sessions` rows.
    - `auth.tsx` posts to `/api/auth/login` and `/api/auth/me`, which were **not** forked over.
    - `MC_API_SECRET` is set in `.env.local` but **not currently read by `checkAuth`** — you must teach the backend to accept it (or collapse to a shared-secret gate).
    - Recommended: shared-secret gate — make `checkAuth` accept `X-MC-Auth === env.MC_API_SECRET`, and make the client store `NEXT_PUBLIC_MC_API_SECRET` as the token (or a tiny password screen that stores it). Keep the `X-MC-Auth` header + `checkAuth → Response|null` contract.

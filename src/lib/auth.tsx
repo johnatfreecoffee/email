@@ -37,7 +37,7 @@ export interface MCUser {
 const STANDALONE_USER: MCUser = {
   id: "local",
   email: LOGIN_EMAIL,
-  display_name: "John",
+  display_name: "Owner",
   role: "admin",
   allowed_modules: ["email"],
 };

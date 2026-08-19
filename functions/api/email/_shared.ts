@@ -14,7 +14,7 @@ export interface Env {
   XAI_API_KEY?: string;
 }
 
-// Validate X-MC-Auth: shared secret → mc_sessions → legacy token.
+// Validate X-MC-Auth: shared secret → optional mc_sessions.
 // Returns null on pass, a 401 Response on fail. Callers: if (err) return err.
 export async function checkAuth(request: Request, env?: Env): Promise<Response | null> {
   const token = request.headers.get("X-MC-Auth");
@@ -32,7 +32,7 @@ export async function checkAuth(request: Request, env?: Env): Promise<Response |
     return null;
   }
 
-  // 2. Session store + legacy fallback (shared Supabase / MC compatibility)
+  // 2. Session store (optional — shared-secret above is the primary gate)
   if (env?.SUPABASE_URL && env?.SUPABASE_SERVICE_KEY) {
     const now = new Date().toISOString();
     const sessRes = await fetch(
@@ -48,10 +48,6 @@ export async function checkAuth(request: Request, env?: Env): Promise<Response |
     if (Array.isArray(sessions) && sessions.length > 0) {
       return null;
     }
-    // Legacy MC back-door hash for "[redacted]"
-    if (token === legacyHashPassword("[redacted]")) {
-      return null;
-    }
     return new Response(JSON.stringify({ error: "Invalid or expired session" }), {
       status: 401,
       headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
@@ -60,17 +56,6 @@ export async function checkAuth(request: Request, env?: Env): Promise<Response |
 
   // 3. No env configured → accept any non-empty token (local/misconfig escape hatch)
   return null;
-}
-
-// Legacy hash for backward compatibility
-function legacyHashPassword(password: string): string {
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash |= 0;
-  }
-  return "mc_" + Math.abs(hash).toString(16);
 }
 
 export function corsHeaders(origin?: string): Record<string, string> {

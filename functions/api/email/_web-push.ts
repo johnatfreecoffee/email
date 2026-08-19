@@ -325,7 +325,7 @@ export async function sendWebPush(
   payload: string,
   vapidPublicKey: string,
   vapidPrivateKey: string,
-  vapidSubject: string = "mailto:admin@cleanenergyexperts.pro"
+  vapidSubject: string = "mailto:admin@example.com"
 ): Promise<SendPushResult> {
   try {
     // 1. Get audience from endpoint URL
