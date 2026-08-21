@@ -462,12 +462,13 @@ def resolve_recipients(
     return to, cc
 
 
+_APOS = r"['\u2019]"
 PROCESS_OPEN = re.compile(
-    r"^(i(?:'ll| will| am|'m)|let me|pulling|checking|confirming|logging|"
+    rf"^(i(?:{_APOS}ll| will| am|{_APOS}m)|let me|pulling|checking|confirming|logging|"
     r"looking|reading|searching|fetching|opening|loading|writing|updating|"
     r"skimming|gathering|verifying|starting|working on|investigating|"
-    r"querying|refining|releasing|creating|rewriting|taking|found|"
-    r"next i(?:'ll| will)?|got it[,.]?\s+(?:i'll|let me)|just (?:checked|"
+    r"querying|refining|releasing|creating|rewriting|taking|found|confirmed|"
+    rf"next i(?:{_APOS}ll| will)?|got it[,.]?\s+(?:i{_APOS}ll|let me)|just (?:checked|"
     r"looking|pulled|read)|desk's|code gate|server is up|preview is up|"
     r"build is clean|screenshots are|live checkout)\b",
     re.I,
@@ -477,7 +478,20 @@ PROCESS_PHRASE = re.compile(
     r"project memory|logging this status|hidden pre-prompt|tool loop)\b",
     re.I,
 )
+FUTURE_PLAN = re.compile(
+    rf"\b(?:i(?:{_APOS}ll| will)|next i(?:{_APOS}ll| will)?|let me)\b",
+    re.I,
+)
 GREET_RE = re.compile(r"^(hey|hi|hello|good (?:morning|afternoon|evening))\b", re.I)
+GREET_LINE_RE = re.compile(
+    r"^(?:hey|hi|hello|good (?:morning|afternoon|evening))\b[^\n]{0,60},?\s*$",
+    re.I | re.M,
+)
+STATUS_NOTE_RE = re.compile(
+    rf"\b(?:got this|i(?:{_APOS}ll) write back when|not done yet|still on |"
+    r"still at it|still cooking|hang tight|working it|not lost)\b",
+    re.I,
+)
 SIGNOFF_RE = re.compile(
     r"^(making it happen|on it|that's the short of it|that's the 30k view|"
     r"easy win|all set|back in your court|we're good|done and dusted|"
@@ -508,9 +522,7 @@ DONE_CLOSERS = [
     "On it",
 ]
 ACK_CLOSERS = ["On it", "Working it", "Give me a bit", "Back shortly", "Not lost"]
-CHECKIN_CLOSERS = ["Still at it", "Still cooking", "Hang tight"]
 ACK_AFTER_S = 25
-CHECKIN_AFTER_S = 8 * 60
 
 
 def pick_closer(seed: str, pool: list[str]) -> str:
@@ -554,12 +566,8 @@ def looks_like_job(msg: dict, questions_only: bool) -> bool:
 
 def status_note(kind: str, first: str, display: str, topic: str) -> str:
     topic = re.sub(r"\s+", " ", topic or "this").strip()[:90].rstrip(" .") or "this"
-    if kind == "ack":
-        body = f"Got this — I'm on {topic}. I'll write back when it's done."
-        closer = pick_closer(topic + "ack", ACK_CLOSERS)
-    else:
-        body = f"Still on {topic}. Not done yet — I'll write back when it is."
-        closer = pick_closer(topic + "checkin", CHECKIN_CLOSERS)
+    body = f"Got this — I'm on {topic}. I'll write back when it's done."
+    closer = pick_closer(topic + "ack", ACK_CLOSERS)
     return f"Hey {first},\n\n{body}\n\n{closer},\n{display}"
 
 
@@ -568,11 +576,37 @@ def unsquash_sentences(text: str) -> str:
     return re.sub(r"([.!?])([A-Z])", r"\1\n\n\2", text or "")
 
 
+def _is_status_note(chunk: str) -> bool:
+    compact = re.sub(r"\s+", " ", chunk or "").strip()
+    if not compact:
+        return False
+    return len(compact) < 320 and bool(STATUS_NOTE_RE.search(compact))
+
+
+def extract_final_note(text: str) -> str:
+    """Grok prints thinking turns to stdout. Keep only the last finished email."""
+    text = (text or "").strip()
+    if not text:
+        return text
+    matches = list(GREET_LINE_RE.finditer(text))
+    if not matches:
+        return text
+    for m in reversed(matches):
+        chunk = text[m.start() :].strip()
+        if _is_status_note(chunk):
+            continue
+        return chunk
+    return text[matches[-1].start() :].strip()
+
+
 def _is_process(block: str) -> bool:
     first = block.split("\n", 1)[0].strip()
     if re.match(r"^(TO|CC)\s*:", first, re.I):
         return False
-    return bool(PROCESS_OPEN.match(first) or PROCESS_PHRASE.search(block))
+    if PROCESS_OPEN.match(first) or PROCESS_PHRASE.search(block):
+        return True
+    # Mid-job diary: "I'll pull that, then ship." Never the finished note.
+    return bool(FUTURE_PLAN.search(block))
 
 
 def _has_signoff(text: str, display: str) -> bool:
@@ -601,8 +635,45 @@ def shape_human_email(text: str, first: str, display: str) -> str:
     return body
 
 
+def parse_grok_stdout(raw: str) -> tuple[str, int | None]:
+    """Pull reply text (and optional usage) out of grok --output-format json."""
+    s = (raw or "").strip()
+    if not s:
+        return "", None
+
+    def from_obj(data: object) -> tuple[str, int | None] | None:
+        if not isinstance(data, dict):
+            return None
+        if "text" not in data and "sessionId" not in data:
+            return None
+        text = str(data.get("text") or "")
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        total = usage.get("total_tokens") or usage.get("output_tokens")
+        try:
+            tokens = int(total) if total is not None else None
+        except (TypeError, ValueError):
+            tokens = None
+        return text, tokens
+
+    try:
+        got = from_obj(json.loads(s))
+        if got is not None:
+            return got
+    except json.JSONDecodeError:
+        pass
+    start = s.rfind("{")
+    if start >= 0:
+        try:
+            got = from_obj(json.loads(s[start:]))
+            if got is not None:
+                return got
+        except json.JSONDecodeError:
+            pass
+    return s, None
+
+
 def clean_email_reply(raw: str, first: str = "there", display: str = "Agent") -> str:
-    """Drop agent-process narration. Keep a human note with real paragraphs."""
+    """Keep the last human email. Drop thinking / process narration."""
     text = (raw or "").strip()
     if not text:
         return shape_human_email("", first, display)
@@ -611,6 +682,7 @@ def clean_email_reply(raw: str, first: str = "there", display: str = "Agent") ->
         text = fenced.group(1).strip()
     body_only, route_to, route_cc = parse_route_block(text)
     text = body_only or text
+    text = extract_final_note(text)
     text = unsquash_sentences(text)
     # Drop **Heading:** labels Grok loves — keep the line body
     text = re.sub(r"^\*{0,2}(?:what (?:it was|i did)|status|do this|raw)\*{0,2}:\s*", "", text, flags=re.I | re.M)
@@ -909,7 +981,7 @@ def run_grok(
     """Run Grok Build for one email. Returns (reply_text, meta).
 
     meta: {turn_tokens, duration_s, timed_out, returncode}
-    on_slow("ack"|"checkin") fires if the job is still running.
+    on_slow("ack") fires once if the job is still running after ACK_AFTER_S.
     """
     grok = cfg.get("GROK_BIN") or str(Path.home() / ".grok/bin/grok")
     workspace = agent["workspace"]
@@ -967,6 +1039,12 @@ Their first name is {first}.
 
 Your stdout IS the email they receive. Print only the finished note, then a routing block.
 
+HARD — one email, nothing else:
+- Do the work with tools silently. Print ZERO words until the job is done.
+- No thinking. No diary. No "I'll look up". No "next I'll". No status. No play-by-play.
+- The worker already sent a "got it" note if this is a long job. Do not write another "I'm on it" or "still working".
+- When done, print one normal human email. That is the only thing they should ever see.
+
 EMAIL SHAPE (HARD):
 Hey {first},
 
@@ -987,9 +1065,6 @@ Voice:
 - First line is always "Hey {first}," then a blank line.
 - Sign off every time. Vary the closer (Making it happen / On it / That's the short of it / Easy win / Back in your court / All set / That's the 30k view). Never the same one twice in a row if you can help it.
 - Simple language. Short sentences. No essay.
-- No process talk. Never say you are checking memory, git, deploy, logs, "I'll start by", "Pulling", "Loading", "then sending the reply".
-- Do the work with tools silently. The email is the DONE note, not the diary.
-- The worker already sent (or will send) a "got it" note if this is a long job. Do not write another "I'm on it".
 - One link if it helps. No URL dumps, no path dumps, no commit dumps.
 - No subject line. No markdown headings. No **bold** labels. If you use bullets, use "- " only.
 - Do not mention token counts, session IDs, or tool names.
@@ -1039,7 +1114,7 @@ Rules:
         cmd += ["--disallowed-tools", ",".join(flags["disallowed_tools"])]
     for rule in flags.get("deny_rules") or []:
         cmd += ["--deny", rule]
-    cmd += ["--max-turns", str(max_turns), "-p", prompt]
+    cmd += ["--output-format", "json", "--max-turns", str(max_turns), "-p", prompt]
     env = os.environ.copy()
     env["PATH"] = f"/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:{Path.home()}/.grok/bin:" + env.get("PATH", "")
     log(
@@ -1053,7 +1128,7 @@ Rules:
     stderr = ""
     rc = -1
     sent_ack = False
-    sent_checkin = False
+    usage_tokens: int | None = None
     try:
         proc = subprocess.Popen(
             cmd,
@@ -1072,8 +1147,6 @@ Rules:
             wakes = [timeout_s - elapsed]
             if on_slow and not sent_ack:
                 wakes.append(max(0.2, ACK_AFTER_S - elapsed))
-            elif on_slow and sent_ack and not sent_checkin:
-                wakes.append(max(0.2, CHECKIN_AFTER_S - elapsed))
             try:
                 proc.wait(timeout=min(wakes))
                 break
@@ -1085,14 +1158,8 @@ Rules:
                     except Exception as e:
                         log(f"ack send failed: {e}")
                     sent_ack = True
-                elif on_slow and sent_ack and not sent_checkin and elapsed >= CHECKIN_AFTER_S:
-                    try:
-                        on_slow("checkin")
-                    except Exception as e:
-                        log(f"checkin send failed: {e}")
-                    sent_checkin = True
         out, err = proc.communicate()
-        stdout = out or ""
+        stdout, usage_tokens = parse_grok_stdout(out or "")
         stderr = err or ""
         rc = -1 if timed_out else int(proc.returncode if proc.returncode is not None else -1)
     except Exception as e:
@@ -1100,6 +1167,7 @@ Rules:
         stdout = ""
         stderr = str(e)
         rc = -1
+        usage_tokens = None
     if timed_out:
         log(f"grok TIMEOUT session={session_id} after {timeout_s}s partial_out={len(stdout)} partial_err={len(stderr)}")
     duration_s = time.time() - t0
@@ -1131,8 +1199,12 @@ Rules:
             )
 
     append_history(session_id, "assistant", text)
-    turn_tokens = estimate_turn_tokens(
-        prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
+    turn_tokens = (
+        usage_tokens
+        if usage_tokens and usage_tokens > 0
+        else estimate_turn_tokens(
+            prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
+        )
     )
     log(
         f"grok done session={session_id} timed_out={timed_out} "

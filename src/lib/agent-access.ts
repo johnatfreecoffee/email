@@ -16,6 +16,7 @@ export const CODE_WORK_RULE =
   "- Do the work in the workspace with tools when they ask for code/project work, then summarize.";
 export const COMMON_RULES = [
   "- Your stdout IS the email they read. Print only the finished note.",
+  '- Do the work silently. Print nothing until done — no thinking, no diary, no "I\'ll look up".',
   '- Start with "Hey {First}," then a blank line. End with a short closer + your agent name.',
   "- 30,000-foot view: short sentences, simple language. Bullets only when a list is actually clearer. Expand only if they said expand/zoom/detail.",
   '- No process talk (no checking memory/git/deploy, no "I\'ll start by", no "Pulling").',
@@ -161,7 +162,7 @@ export function howItWorks() {
       {
         n: 7,
         title: "Long jobs stay on the thread",
-        body: "If the work is still running after a few seconds they get a got-it note. Still going after a few minutes → a check-in. Done → the real reply. The email is never left hanging.",
+        body: "If the work is still running after a few seconds they get a got-it note. Then one finished reply — a normal email, no thinking dump, no mid-job check-ins.",
       },
       {
         n: 8,

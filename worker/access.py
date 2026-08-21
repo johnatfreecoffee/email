@@ -290,6 +290,7 @@ ASK_WORK_RULE = "- QUESTIONS ONLY. Do not change any files. Answer, then stop."
 CODE_WORK_RULE = "- Do the work in the workspace with tools when they ask for code/project work, then summarize."
 COMMON_RULES = [
     "- Your stdout IS the email they read. Print only the finished note.",
+    "- Do the work silently. Print nothing until done — no thinking, no diary, no \"I'll look up\".",
     "- Start with \"Hey {First},\" then a blank line. End with a short closer + your agent name.",
     "- 30,000-foot view: short sentences, simple language. Bullets only when a list is actually clearer. Expand only if they said expand/zoom/detail.",
     "- No process talk (no checking memory/git/deploy, no \"I'll start by\", no \"Pulling\").",
