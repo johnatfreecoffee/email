@@ -354,7 +354,21 @@ export const onRequest = async (context: CFContext) => {
   const createdAt = fullEmail?.created_at || webhookData.created_at || new Date().toISOString();
 
   const toAddresses = envelopeTo;
-  const allRecipients = recipientList(toAddresses, ccAddresses, bccAddresses);
+  // Cron reports used to send From noreply@noknok.pro. Replies are catch-all
+  // and the Agent Mail worker never sees them. If this is a reply to a
+  // marketing-agent report, also treat a.noknok as a recipient so the worker
+  // continues the thread. Do NOT alias every noreply@ (OTP, tasks, portal).
+  const extraAgent: string[] = [];
+  const recipsLower = recipientList(toAddresses, ccAddresses, bccAddresses).map((a) => a.toLowerCase());
+  const subj = subject || "";
+  if (
+    recipsLower.includes("noreply@noknok.pro") &&
+    /noknok marketing agent/i.test(subj) &&
+    (getHeader(headers, "in-reply-to") || getHeader(headers, "references"))
+  ) {
+    extraAgent.push("a.noknok@freecoffee.dev");
+  }
+  const allRecipients = recipientList(toAddresses, ccAddresses, bccAddresses, extraAgent);
 
   // Find which domain this is for (To, CC, or BCC — agent is often only on CC)
   let matchedDomain: any = null;
