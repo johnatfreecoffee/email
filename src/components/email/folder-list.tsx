@@ -29,6 +29,7 @@ import {
   Minus,
   ChevronsDownUp,
   ChevronsUpDown,
+  Columns3,
   type LucideIcon,
 } from "lucide-react";
 import { useState, useEffect, useMemo } from "react";
@@ -39,7 +40,7 @@ import { usePush } from "@/lib/push-notifications";
 import { useTheme, type ThemePref } from "@/lib/theme";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { type FavoriteRef, favKey } from "./favorites";
-import { AGENT_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -1081,7 +1082,7 @@ export function FolderList({
                           !catchAllOnly
                         }
                         onClick={() => onAgentOpen?.(d, null)}
-                        last={!agentsExpanded && !hasAddresses}
+                        last={false}
                         trailing={
                           editing ? (
                             <PinButton
@@ -1089,6 +1090,14 @@ export function FolderList({
                             />
                           ) : undefined
                         }
+                        showChevron={!editing}
+                      />
+                      <IosRow
+                        icon={Columns3}
+                        label="Kanban"
+                        active={activeFolder === KANBAN_FOLDER}
+                        onClick={() => onFolderChange(KANBAN_FOLDER)}
+                        last={!agentsExpanded && !hasAddresses}
                         showChevron={!editing}
                       />
                       {agentsExpanded &&
@@ -1548,6 +1557,13 @@ export function FolderList({
                                     />
                                   ) : undefined
                                 }
+                              />
+                              <SidebarRow
+                                icon={Columns3}
+                                label="Kanban"
+                                active={activeFolder === KANBAN_FOLDER}
+                                depth={1}
+                                onClick={() => onFolderChange(KANBAN_FOLDER)}
                               />
                               {agentsExpanded &&
                                 agentAddrs.map((addr) => {

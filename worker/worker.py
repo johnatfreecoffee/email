@@ -192,6 +192,7 @@ def mark_processed(mid: str) -> None:
                 ids = set()
         ids.add(str(mid))
         PROCESSED.write_text(json.dumps(sorted(ids)[-5000:]))
+        _inflight.discard(str(mid))
 
 
 def inflight_count() -> int:
@@ -498,6 +499,41 @@ def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
         if m:
             cc.extend(emails_from_field(m.group(1)))
     return body, to, cc
+
+
+def parse_note_block(text: str) -> tuple[str, str]:
+    """Strip NOTE: lines (board card note). Returns (body, note)."""
+    notes: list[str] = []
+    keep: list[str] = []
+    for line in (text or "").splitlines():
+        m = re.match(r"^NOTE\s*:\s*(.*)$", line.strip(), re.I)
+        if m:
+            n = m.group(1).strip()
+            if n:
+                notes.append(n)
+            continue
+        keep.append(line)
+    return "\n".join(keep).rstrip(), " ".join(notes).strip()
+
+
+def looks_like_waiting_question(text: str) -> bool:
+    """Clarifying question only → waiting. Finished work → not waiting."""
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if not compact or "?" not in compact:
+        return False
+    if len(compact) > 900:
+        return False
+    if re.search(r"\b(shipped|fixed|deployed|merged|committed|patched|installed)\b", compact, re.I):
+        return False
+    return True
+
+
+def finish_stage(timed_out: bool, reply_text: str) -> str:
+    if timed_out:
+        return "stuck"
+    if looks_like_waiting_question(reply_text):
+        return "waiting"
+    return "done"
 
 
 def resolve_recipients(
@@ -1230,6 +1266,10 @@ Rules for routing:
 - Never invent an address. Never BCC. Never mail anyone not on the allowlist.
 - If they name someone who is not on the list, say they need to be added in Settings → Agents first. Do not email them.
 
+There is a Kanban board in the mail app for this session. You may append one short card note as its own line:
+NOTE: one line for the board
+Do not mention the board otherwise. When this turn is done, say so. If you only have a clarifying question, ask it — the board will mark the card waiting.
+
 Workspace (do not mention unless asked): {workspace}
 Scope: {"ALL projects under ~/Documents" if scope == "all_documents" else "this project only"}
 {hist_block}
@@ -1295,6 +1335,7 @@ Rules:
                 proc.wait(timeout=min(wakes))
                 break
             except subprocess.TimeoutExpired:
+                touch_lock()
                 elapsed = time.time() - t0
                 if on_slow and not sent_ack and elapsed >= ACK_AFTER_S:
                     try:
@@ -1319,19 +1360,9 @@ Rules:
     if timed_out:
         partial = clean_email_reply(stdout, first, display)
         if partial and len(re.sub(r"\s+", " ", partial)) > 120:
-            text = (
-                partial[:11000]
-                + "\n\nThis turn is done. I ran out of time mid-reply — that's what finished. "
-                "The rest did not. Write back if you want me to keep going."
-            )
-            text = shape_human_email(text, first, display)
+            text = shape_human_email(partial[:11000].rstrip() + "\n\n" + TIMEOUT_PARTIAL, first, display)
         else:
-            text = shape_human_email(
-                "This turn is done. I started but ran out of time, so nothing finished cleanly. "
-                "Reply on this thread and I'll pick it up.",
-                first,
-                display,
-            )
+            text = shape_human_email(TIMEOUT_EMPTY, first, display)
     else:
         if rc != 0:
             log(f"grok nonzero rc={rc} err={stderr[:400]}")
@@ -1567,18 +1598,143 @@ def deny_reply(agent: dict, reason: str) -> str:
     return f"This mailbox is restricted. {name} didn't run your message."
 
 
+def _sb_headers(cfg: dict, extra: dict[str, str] | None = None) -> dict[str, str]:
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    h = {"apikey": key, "Authorization": f"Bearer {key}"}
+    if extra:
+        h.update(extra)
+    return h
+
+
+def upsert_agent_job(cfg: dict, fields: dict, event_kind: str | None = None, event_detail: str | None = None) -> str | None:
+    """Write/merge one Kanban row. Returns job uuid or None. Never raises."""
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    if not base or not cfg.get("SUPABASE_SERVICE_KEY"):
+        return None
+    sid = fields.get("session_id")
+    local = fields.get("agent_local")
+    if sid is None or not local:
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    stage = str(fields.get("stage") or "received")
+    row = {
+        "session_id": int(sid),
+        "agent_local": local,
+        "mailbox": fields.get("mailbox"),
+        "base_subject": fields.get("base_subject") or "(no subject)",
+        "stage": stage,
+        "email_thread_id": fields.get("email_thread_id") or None,
+        "last_message_id": fields.get("last_message_id") or None,
+        "used_k": int(fields.get("used_k") or 1),
+        "used_tokens": int(fields.get("used_tokens") or 0),
+        "updated_at": now,
+        "notes": fields.get("notes") if fields.get("notes") is not None else None,
+    }
+    if stage == "received":
+        row["received_at"] = fields.get("received_at") or now
+    if stage == "working":
+        row["started_at"] = now
+    if stage == "done":
+        row["done_at"] = now
+        row["last_reply_at"] = now
+    if stage == "stuck":
+        row["stuck_at"] = now
+        row["last_reply_at"] = now
+    if stage == "waiting":
+        row["last_reply_at"] = now
+    if fields.get("remind_requested_at") is not None:
+        row["remind_requested_at"] = fields.get("remind_requested_at")
+    # drop Nones so we don't blank columns on merge
+    body = {k: v for k, v in row.items() if v is not None}
+    try:
+        code, data = curl_json(
+            "POST",
+            f"{base}/rest/v1/agent_jobs?on_conflict=session_id,agent_local",
+            _sb_headers(
+                cfg,
+                {"Prefer": "resolution=merge-duplicates,return=representation"},
+            ),
+            body,
+        )
+        job_id = None
+        if code in (200, 201):
+            rec = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
+            if isinstance(rec, dict):
+                job_id = rec.get("id")
+        if not job_id:
+            code2, data2 = curl_json(
+                "GET",
+                f"{base}/rest/v1/agent_jobs?session_id=eq.{int(sid)}&agent_local=eq.{local}&select=id&limit=1",
+                _sb_headers(cfg),
+            )
+            if code2 == 200 and isinstance(data2, list) and data2:
+                job_id = data2[0].get("id")
+            log(f"job upsert code={code} sid={sid} stage={stage}")
+        if job_id and event_kind:
+            curl_json(
+                "POST",
+                f"{base}/rest/v1/agent_job_events",
+                _sb_headers(cfg, {"Prefer": "return=minimal"}),
+                {"job_id": job_id, "kind": event_kind, "detail": event_detail},
+            )
+        return str(job_id) if job_id else None
+    except Exception as e:
+        log(f"job upsert failed sid={sid}: {e}")
+        return None
+
+
+def fetch_remind_jobs(cfg: dict) -> list[dict]:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    if not base or not cfg.get("SUPABASE_SERVICE_KEY"):
+        return []
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/agent_jobs?remind_requested_at=not.is.null&select=*&order=remind_requested_at.asc&limit=10",
+            _sb_headers(cfg),
+        )
+        if code == 200 and isinstance(data, list):
+            return data
+    except Exception as e:
+        log(f"remind fetch: {e}")
+    return []
+
+
+def clear_remind(cfg: dict, job_id: str) -> None:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    if not base or not job_id:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        curl_json(
+            "PATCH",
+            f"{base}/rest/v1/agent_jobs?id=eq.{job_id}",
+            _sb_headers(cfg, {"Prefer": "return=minimal"}),
+            {"remind_requested_at": None, "updated_at": now},
+        )
+    except Exception as e:
+        log(f"remind clear: {e}")
+
+
+def fetch_message_by_id(cfg: dict, mid: str) -> dict | None:
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    if not base or not mid:
+        return None
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/email_messages?id=eq.{mid}&select=id,address_id,from_address,from_name,to_addresses,cc_addresses,subject,body_text,body_html,thread_id,resend_email_id,received_at,direction,folder&limit=1",
+            _sb_headers(cfg),
+        )
+        if code == 200 and isinstance(data, list) and data:
+            return data[0]
+    except Exception as e:
+        log(f"fetch message: {e}")
+    return None
+
+
 def _mark_processed(mid: str) -> None:
-    with _state_lock:
-        ids: set[str] = set()
-        if PROCESSED.exists():
-            try:
-                ids = set(json.loads(PROCESSED.read_text()))
-            except Exception:
-                ids = set()
-        ids.add(mid)
-        PROCESSED.write_text(json.dumps(sorted(ids)[-5000:]))
-    with _session_locks_guard:
-        _inflight.discard(str(mid))
+    mark_processed(mid)
 
 
 def _execute_session_turn(
@@ -1602,6 +1758,22 @@ def _execute_session_turn(
         rec_snap = dict(rec)
     default_to, default_cc = resolve_recipients(
         msg, local, cloud_store, [], [], rec_snap.get("thread_people") or []
+    )
+    mailbox = agent.get("email") or local
+    upsert_agent_job(
+        cfg,
+        {
+            "session_id": sid,
+            "agent_local": local,
+            "mailbox": mailbox,
+            "base_subject": rec_snap.get("base_subject") or base_subject(msg.get("subject") or ""),
+            "stage": "working",
+            "email_thread_id": rec_snap.get("email_thread_id") or msg.get("thread_id"),
+            "last_message_id": mid,
+            "used_k": rec_snap.get("used_k") or 1,
+            "used_tokens": rec_snap.get("used_tokens") or 0,
+        },
+        event_kind="working",
     )
 
     def send_status(kind: str) -> None:
@@ -1646,6 +1818,7 @@ def _execute_session_turn(
         if msg.get("thread_id") and not rec.get("email_thread_id"):
             rec["email_thread_id"] = msg.get("thread_id")
         body, route_to, route_cc = parse_route_block(reply)
+        body, card_note = parse_note_block(body)
         to_list, cc_list = resolve_recipients(
             msg,
             local,
@@ -1659,7 +1832,27 @@ def _execute_session_turn(
         save_sessions(sessions)
         topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
     subj = format_reply_subject(topic, sid, used_k)
-    send_reply(cfg, agent, msg, body or reply, subj, to=to_list, cc=cc_list)
+    send_body, card_note2 = parse_note_block(body or reply)
+    card_note = card_note or card_note2
+    send_reply(cfg, agent, msg, send_body, subj, to=to_list, cc=cc_list)
+    stage = finish_stage(bool(meta.get("timed_out")), send_body)
+    upsert_agent_job(
+        cfg,
+        {
+            "session_id": sid,
+            "agent_local": local,
+            "mailbox": mailbox,
+            "base_subject": topic,
+            "stage": stage,
+            "email_thread_id": rec.get("email_thread_id") or msg.get("thread_id"),
+            "last_message_id": mid,
+            "used_k": used_k,
+            "used_tokens": used_tokens,
+            "notes": card_note or None,
+        },
+        event_kind=stage if stage in ("done", "waiting", "stuck") else "reply",
+        event_detail=(card_note or None),
+    )
 
     tdir = Path(agent["agent_dir"]) / "threads"
     tdir.mkdir(parents=True, exist_ok=True)
@@ -1710,6 +1903,52 @@ def _run_claimed_job(
         touch_lock()
 
 
+def handle_reminds(cfg: dict, agents: dict[str, dict], cloud_store: dict | None) -> None:
+    """Nudge sessions with remind_requested_at set (same session ID), then clear the flag."""
+    rows = fetch_remind_jobs(cfg)
+    if not rows:
+        return
+    pool = get_job_pool()
+    for row in rows:
+        jid = str(row.get("id") or "")
+        try:
+            sid = int(row.get("session_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        local = str(row.get("agent_local") or "")
+        agent = agents.get(local)
+        clear_remind(cfg, jid)
+        if not agent or sid < 1:
+            log(f"remind skip job={jid[:8]} sid={sid} agent={local}")
+            continue
+        mid = row.get("last_message_id")
+        msg = fetch_message_by_id(cfg, str(mid) if mid else "")
+        if not msg:
+            log(f"remind no message job={jid[:8]} session={sid}")
+            continue
+        msg["_agent_local"] = local
+        msg["body_text"] = (
+            "John tapped Remind on the board. Continue this session (same ID). "
+            "Pick up where you left off."
+        )
+        msg["body_html"] = ""
+        grant = {"enabled": True, "mode": "all"}
+        first = sender_first_name(msg.get("from_address") or "", cloud_store, msg)
+        log(f"remind dispatch session={sid} agent={local}")
+        pool.submit(
+            _run_claimed_job,
+            cfg,
+            agent,
+            msg,
+            sid,
+            False,
+            grant,
+            cloud_store,
+            first,
+            False,
+        )
+
+
 def process_once(cfg: dict) -> None:
     """Claim new mail and dispatch Grok jobs. Returns while other sessions still run."""
     touch_lock()
@@ -1721,6 +1960,8 @@ def process_once(cfg: dict) -> None:
         access.ensure_store()
         cloud_store = fetch_allowlist(cfg)
 
+    handle_reminds(cfg, agents, cloud_store)
+
     msgs = fetch_new_messages(cfg, list(agents.keys()), processed)
     if not msgs:
         return
@@ -1729,7 +1970,7 @@ def process_once(cfg: dict) -> None:
     pool = get_job_pool()
     for msg in msgs:
         mid = msg["id"]
-        with _session_locks_guard:
+        with _state_lock:
             if str(mid) in _inflight:
                 continue
         if cloud_already_handled(cfg, str(mid)):
@@ -1773,15 +2014,31 @@ def process_once(cfg: dict) -> None:
             _mark_processed(mid)
             continue
         with _state_lock:
+            if str(mid) in _inflight:
+                continue
             sessions = load_sessions()
-            sid, _rec, is_new = resolve_session(sessions, agent, msg)
+            sid, rec, is_new = resolve_session(sessions, agent, msg)
+            _inflight.add(str(mid))
+        upsert_agent_job(
+            cfg,
+            {
+                "session_id": sid,
+                "agent_local": local,
+                "mailbox": agent.get("email") or local,
+                "base_subject": rec.get("base_subject") or base_subject(msg.get("subject") or ""),
+                "stage": "received",
+                "email_thread_id": rec.get("email_thread_id") or msg.get("thread_id"),
+                "last_message_id": mid,
+                "used_k": rec.get("used_k") or 1,
+                "used_tokens": rec.get("used_tokens") or 0,
+            },
+            event_kind="received",
+        )
         grant = auth.get("grant") or {}
         first = sender_first_name(from_addr, cloud_store, msg)
         q_only = False
         if access:
             q_only = bool(access.grok_invocation(grant).get("questions_only"))
-        with _session_locks_guard:
-            _inflight.add(str(mid))
         log(f"dispatch session={sid} new={is_new} agent={local} msg={str(mid)[:8]}")
         fut = pool.submit(
             _run_claimed_job,
@@ -1798,7 +2055,6 @@ def process_once(cfg: dict) -> None:
         fut.add_done_callback(
             lambda f: (log(f"job thread error: {f.exception()}") if f.exception() else None)
         )
-        del rec
 
 
 def acquire_lock() -> bool:
@@ -1842,6 +2098,7 @@ def main() -> int:
         while True:
             try:
                 heartbeat(cfg)
+                touch_lock()
                 process_once(cfg)
             except Exception as e:
                 log(f"loop error: {e}")

@@ -22,14 +22,14 @@ Source: `SPEC.md`. If it is not in the spec, it does not exist.
 - API `GET/PATCH /api/email/agent-jobs` (list + filters `agent`, `stage`; single by id; patch notes; POST remind sets `remind_requested_at`).
 - Apply the SQL to live Supabase (project `sxjtpprtaascxafddddg`). Do not ask John to paste.
 
-### P3 — Worker board writes + remind + agent knows the board
+### P3 — Worker board writes + remind + agent knows the board [x]
 **Files:** `worker/worker.py`, prompt text. After P1+P2.
 - Upsert `agent_jobs` + events: inbound → received; grok start → working; finished reply → done; clarifying question only → waiting; timeout / no progress → stuck.
 - Prompt: the Kanban exists; agent may append a short note for the card; when the turn is done, say so.
 - Remind: if `remind_requested_at` is set, nudge that session (same ID), then clear the flag.
 - `./scripts/install-local-worker.sh`
 
-### P4 — Kanban UI in the mail app
+### P4 — Kanban UI in the mail app [x]
 **Files:** `src/components/email/*`, `src/app/email/page.tsx` only as needed. After P2.
 - Board inside this app (sidebar entry next to Agents). Not a new product.
 - Columns = stages. Filters = agent mailbox + stage.

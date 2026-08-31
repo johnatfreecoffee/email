@@ -13,7 +13,8 @@ import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { playNotificationSound } from "@/lib/notification-sound";
 import { collapseThreads, threadKey } from "@/lib/email-threads";
-import { AGENT_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AgentKanban } from "./agent-kanban";
 
 const API_BASE = "/api/email";
 
@@ -102,6 +103,7 @@ const FOLDER_LABELS: Record<string, string> = {
   starred: "Starred",
   all: "All Mail",
   agent: "Agents",
+  kanban: "Kanban",
 };
 
 // Unread counts shape returned by /api/email/unread-counts
@@ -364,6 +366,7 @@ export function EmailLayout() {
   //   poll  — background freshness: merges page 1 into the accumulated list
   //           without ever touching the scrollback tail.
   const loadPage = useCallback(async (kind: "reset" | "more" | "poll") => {
+    if (activeFolder === KANBAN_FOLDER) return;
     if (domains.length === 0) return;
     if (kind === "more" && (!hasMoreRef.current || loadingMoreRef.current || !nextCursorRef.current)) return;
 
@@ -473,7 +476,7 @@ export function EmailLayout() {
         setLoading(false);
       }
     }
-  }, [domains.length, buildFilterParams]);
+  }, [domains.length, buildFilterParams, activeFolder]);
 
   // Always-current handle for callbacks wired up once (service worker, etc.)
   const loadPageRef = useRef(loadPage);
@@ -1368,6 +1371,16 @@ export function EmailLayout() {
         />
       </div>
 
+      {activeFolder === KANBAN_FOLDER ? (
+        <div
+          className={`flex-1 min-w-0 overflow-hidden z-20 mc-mobile-pane ${
+            mobileView === "folders" ? "mc-pane-off" : ""
+          }`}
+        >
+          <AgentKanban onMobileMenuClick={() => setMobileView("folders")} />
+        </div>
+      ) : (
+      <>
       {/* Center: Message List — slides in over the mailboxes on mobile */}
       <div
         className={`mc-email-list-col mc-mobile-pane z-20 w-full flex-shrink-0 overflow-hidden md:block ${
@@ -1547,6 +1560,8 @@ export function EmailLayout() {
           }}
         />
       </div>
+      </>
+      )}
 
       {/* Compose Modal */}
       {showCompose && (
