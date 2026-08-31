@@ -1,47 +1,54 @@
-# Phases: Agent Kanban + done + parallel sessions
+# Phases: Agent reply pipeline + 48h backfill
 
 Source: `SPEC.md`. If it is not in the spec, it does not exist.
 
 ## Build
 
-### P1 — Worker: parallel sessions, context tag, done signaling [x]
-**Files:** `worker/worker.py` (+ tests under `worker/`). Do not add UI.
-**Ship:** edit worker, `./scripts/install-local-worker.sh`
-- New subject (no `(ID: n)`, different `base_subject`) = **new session**. Do not reuse by `email_thread_id` alone if the base subject differs.
-- Same `(ID: n)` or `Re:` of the same base subject + same agent = same session.
-- Several sessions run **in parallel** in one worker process. One long Grok job must not block other new-subject mails. Same session stays serial.
-- Subject tag `{usedK}/500K` is **this session only**. New session starts small. Never paint 500/500K unless this session actually burned ~500K. Do not treat model-window / `total_tokens` as used. Fix the wall-clock estimate (`wall * 2500` is per-second and caps in minutes).
-- Finished reply **states this turn is done**. Ban the vague fallback “I looked at this — write back if you want me to go deeper on any piece.” Timeout / empty-stdout copy must say what finished vs what did not.
-- Keep: Hey First, 30k-foot, closer + agent name, ack ~25s then one finished mail, no thinking dumps.
+### P1 — Worker: honest finish + 15-min + death [x]
+**Files:** `worker/worker.py`, `worker/test_sessions.py`, `worker/config.env.example`
+- Raise default MAX_TURNS to 120. Patch live `~/Library/AgentMail/config.env` MAX_TURNS only
+- Max-turns with no human note: auto-continue once (cap 2). Still empty → honest stuck mail, never EMPTY_DONE
+- 15-min pulse after the 25s ack. Skip if newer inbound exists for that session
+- Watchdog: spawn fail / empty / restart with orphan `working` → died mail + stuck
+- Prompt: print zero until done; NokNok ships main before the finished email; 15-min is worker-owned
+- Tests: empty stdout ≠ Done; pulse skip; finish_stage mapping
 
-### P2 — Kanban schema + API [x]
-**Files:** `migrations/email-agent-jobs.sql`, `functions/api/email/agent-jobs.ts`. No UI. No `worker.py`.
-- Table `agent_jobs`: one row per agent session. Stages: `received | working | waiting | done | stuck`.
-- Columns: session_id, agent_local, mailbox, base_subject, stage, email_thread_id, last_message_id, used_k, used_tokens, received_at, started_at, last_reply_at, done_at, stuck_at, updated_at, notes, remind_requested_at.
-- Table `agent_job_events`: timestamped log (received, working, waiting, done, stuck, reply, note, remind).
-- API `GET/PATCH /api/email/agent-jobs` (list + filters `agent`, `stage`; single by id; patch notes; POST remind sets `remind_requested_at`).
-- Apply the SQL to live Supabase (project `sxjtpprtaascxafddddg`). Do not ask John to paste.
+### P2 — Attachments actually readable [x]
+**Files:** `functions/api/email/inbound.ts`, `worker/worker.py` materialize
+- Always fetch Resend receiving attachments API (iPhone inline), not only webhook `attachments[]`
+- Never persist `pending/` as the only copy
+- Worker retries pending via Resend; log `files session= n= names=`
+- Prompt: read each image path before answering
 
-### P3 — Worker board writes + remind + agent knows the board [x]
-**Files:** `worker/worker.py`, prompt text. After P1+P2.
-- Upsert `agent_jobs` + events: inbound → received; grok start → working; finished reply → done; clarifying question only → waiting; timeout / no progress → stuck.
-- Prompt: the Kanban exists; agent may append a short note for the card; when the turn is done, say so.
-- Remind: if `remind_requested_at` is set, nudge that session (same ID), then clear the flag.
-- `./scripts/install-local-worker.sh`
+### P3 — One chain [x]
+**Files:** `worker/worker.py` send/persist, `functions/api/email/_thread.ts`
+- Sticky `rec.email_thread_id`. Patch inbound onto that thread if it minted a new one
+- In-Reply-To + full References. Persist outbound onto the session thread
+- Inbound: match `(ID: n)` / normalized subject / References before minting a new thread
 
-### P4 — Kanban UI in the mail app [x]
-**Files:** `src/components/email/*`, `src/app/email/page.tsx` only as needed. After P2.
-- Board inside this app (sidebar entry next to Agents). Not a new product.
-- Columns = stages. Filters = agent mailbox + stage.
-- Card: subject, agent, stage, usedK/500K, last activity time.
-- Click card → thread + timestamps + notes. Remind button on stuck/waiting.
-- Apple Mail chrome. No purple. Empty/loading/error states.
+### P4 — Mac LaunchAgent [x]
+**Files:** `scripts/install-local-worker.sh`
+- ProcessType=Standard; caffeinate -i wrapper; KeepAlive; drop Documents leftover script
+- Reinstall. Confirm launchctl running, BTM enabled, no TCC Documents errors
+- Setup / How-it-works one-liner: worker lives while Mac is awake; lid close sleeps unless Energy toggle
 
-## UI match [x]
-Diff every new/changed screen vs existing Agents sidebar + Settings cards. Desktop + ~390 mobile. No new color language.
+### P5 — How-it-works + Kanban copy [x]
+**Files:** `functions/api/email/agent-how.ts`, `src/lib/agent-access.ts`, `src/components/email/settings/setup-tab.tsx`
+- Replace “ack then one mail, no check-ins” with ack / 15-min / done-or-questions / died
+- Stage colors unchanged (no purple)
 
-## Hunt [x]
-Console, network, frontend, backend, channels (test@freecoffee.dev if a mail send is in scope), broken-path. Identities: `johnfrankromanojr@gmail.com` / Voice 504-535-4551 / `test@freecoffee.dev`.
+### P6 — Ship pipeline [ ]
+- Tests, commit, push main (email-app). Install worker. Confirm heartbeat
+
+### P7 — 48h backfill [ ] (only after P6)
+Must finish: 999004, 999006, 45, 46. Audit 37–44. Skip 999001–999003.
+NokNok backfill = real product fix on `~/Documents/noknok.pro`, merge main, live noknok-app, then the done email.
+
+## UI match [ ]
+How-it-works + Setup copy vs existing Agents/Settings tiles. Desktop + ~390. No new chrome.
+
+## Hunt [ ]
+Send a job to `a.email` from `johnfrankromanojr@gmail.com` with a screenshot; CC `test@freecoffee.dev`. Confirm ack, attachments read, one done mail in the same thread, card Done. Kill Grok mid-job → died mail + stuck.
 
 ## Clean run
 One full hunt with zero findings. Then stop.

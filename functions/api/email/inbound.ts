@@ -38,6 +38,8 @@ interface WebhookPayload {
       content_type: string;
       content_disposition?: string;
       content_id?: string;
+      size?: number;
+      download_url?: string;
     }>;
   };
 }
@@ -66,17 +68,38 @@ interface ReceivedEmail {
     content_type: string;
     content_disposition?: string;
     content_id?: string;
+    size?: number;
+    download_url?: string;
   }>;
 }
 
-// Attachment from GET /emails/receiving/{id}/attachments
+// Attachment from GET /emails/receiving/{id}/attachments (inline/CID included)
 interface AttachmentWithUrl {
-  id: string;
-  filename: string;
-  content_type: string;
-  size: number;
-  download_url: string;
-  expires_at: string;
+  id?: string;
+  filename?: string;
+  content_type?: string;
+  content_disposition?: string;
+  content_id?: string;
+  size?: number;
+  size_bytes?: number;
+  download_url?: string;
+  expires_at?: string;
+}
+
+function attachmentsFromResend(raw: unknown): AttachmentWithUrl[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as AttachmentWithUrl[];
+  if (typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)) {
+    return (raw as { data: AttachmentWithUrl[] }).data;
+  }
+  return [];
+}
+
+function attachmentFilename(att: AttachmentWithUrl, index: number): string {
+  const raw =
+    (att.filename || "").trim() ||
+    (att.content_id ? `inline-${att.content_id}` : `attachment-${index + 1}`);
+  return raw.replace(/[/\\]+/g, "_").replace(/^\.+/, "_") || `attachment-${index + 1}`;
 }
 
 async function resendGet(env: Env, path: string): Promise<any> {
@@ -590,70 +613,83 @@ export const onRequest = async (context: CFContext) => {
 
   const message = Array.isArray(msgRes.data) ? msgRes.data[0] : msgRes.data;
 
-  // 2. Handle attachments — fetch from Resend Attachments API
-  const webhookAttachments = webhookData.attachments || fullEmail?.attachments || [];
-  if (webhookAttachments.length > 0) {
-    // Call the attachments API to get download URLs
-    const attachmentsData = await resendGet(env, `/emails/receiving/${emailId}/attachments`) as { data: AttachmentWithUrl[] } | null;
+  // Always fetch Resend attachments — iPhone inline often omits webhook attachments[].
+  // Never insert pending/ rows; skip if we cannot get bytes.
+  const webhookAttachments = attachmentsFromResend(
+    webhookData.attachments?.length
+      ? webhookData.attachments
+      : fullEmail?.attachments || []
+  );
+  const attachmentsData = await resendGet(env, `/emails/receiving/${emailId}/attachments`);
+  const apiAttachments = attachmentsFromResend(attachmentsData);
+  const candidates = apiAttachments.length > 0 ? apiAttachments : webhookAttachments;
 
-    if (attachmentsData?.data) {
-      for (const att of attachmentsData.data) {
-        const storagePath = `${matchedDomain.domain}/${message.id}/${att.filename}`;
-
-        // Download the attachment from Resend's signed URL
-        try {
-          const downloadRes = await fetch(att.download_url);
-          if (!downloadRes.ok) {
-            console.error(`Failed to download attachment ${att.filename}: ${downloadRes.status}`);
-            continue;
-          }
-
-          const fileBuffer = await downloadRes.arrayBuffer();
-
-          // Upload to Supabase Storage
-          const uploadUrl = `${env.SUPABASE_URL}/storage/v1/object/email-attachments/${storagePath}`;
-          const uploadRes = await fetch(uploadUrl, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-              "Content-Type": att.content_type || "application/octet-stream",
-            },
-            body: fileBuffer,
-          });
-
-          if (!uploadRes.ok) {
-            console.error(`Failed to upload attachment to storage: ${uploadRes.status}`);
-          }
-        } catch (e) {
-          console.error("Attachment download/upload error:", e);
-        }
-
-        // Record in DB
-        await supabaseQuery(env, "/email_attachments", {
-          method: "POST",
-          body: {
-            message_id: message.id,
-            filename: att.filename,
-            content_type: att.content_type,
-            size_bytes: att.size || 0,
-            storage_path: storagePath,
-          },
-        });
+  const seenNames = new Set<string>();
+  try {
+    const existingAtts = await supabaseQuery(
+      env,
+      `/email_attachments?message_id=eq.${message.id}&select=filename`
+    );
+    if (existingAtts.ok && Array.isArray(existingAtts.data)) {
+      for (const row of existingAtts.data as Array<{ filename?: string }>) {
+        if (row.filename) seenNames.add(row.filename);
       }
-    } else {
-      // Fallback: just store metadata from webhook if API call failed
-      for (const att of webhookAttachments) {
-        await supabaseQuery(env, "/email_attachments", {
-          method: "POST",
-          body: {
-            message_id: message.id,
-            filename: att.filename,
-            content_type: att.content_type,
-            size_bytes: 0,
-            storage_path: `pending/${emailId}/${att.filename}`,
-          },
-        });
+    }
+  } catch (e) {
+    console.error("Attachment dedup lookup failed (non-fatal):", e);
+  }
+
+  for (let i = 0; i < candidates.length; i++) {
+    const att = candidates[i];
+    const filename = attachmentFilename(att, i);
+    if (seenNames.has(filename)) continue;
+
+    const downloadUrl = att.download_url;
+    if (!downloadUrl) {
+      console.error(`Skip attachment ${filename}: no download_url (not storing pending/)`);
+      continue;
+    }
+
+    try {
+      const downloadRes = await fetch(downloadUrl);
+      if (!downloadRes.ok) {
+        console.error(`Failed to download attachment ${filename}: ${downloadRes.status}`);
+        continue;
       }
+
+      const fileBuffer = await downloadRes.arrayBuffer();
+      const contentType =
+        att.content_type || downloadRes.headers.get("content-type") || "application/octet-stream";
+      const storagePath = `${matchedDomain.domain}/${message.id}/${filename}`;
+
+      const uploadUrl = `${env.SUPABASE_URL}/storage/v1/object/email-attachments/${storagePath}`;
+      const uploadRes = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+          "Content-Type": contentType,
+        },
+        body: fileBuffer,
+      });
+
+      if (!uploadRes.ok) {
+        console.error(`Failed to upload attachment to storage: ${uploadRes.status}`);
+        continue;
+      }
+
+      seenNames.add(filename);
+      await supabaseQuery(env, "/email_attachments", {
+        method: "POST",
+        body: {
+          message_id: message.id,
+          filename,
+          content_type: contentType,
+          size_bytes: att.size || att.size_bytes || fileBuffer.byteLength || 0,
+          storage_path: storagePath,
+        },
+      });
+    } catch (e) {
+      console.error("Attachment download/upload error:", e);
     }
   }
 

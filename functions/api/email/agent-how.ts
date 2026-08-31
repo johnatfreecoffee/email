@@ -57,8 +57,9 @@ export const onRequest = async (context: CFContext) => {
         { n: 4, title: "Is this agent checked for them?", body: "On the list but this agent unchecked → Grok still does not start. They get a short denial email. Other checked agents still work." },
         { n: 5, title: "Grok starts with a hidden pre-prompt", body: "Only then do we spawn Grok. We prepend a lock the sender never sees, plus tool blocks so it cannot ignore the note." },
         { n: 6, title: "Reply is a normal email", body: "Hey FirstName, then a short take in normal sentences. Bullets only if a list helps. 30,000-foot view. Expand only if they ask. Signs off with a short closer + the agent name." },
-        { n: 7, title: "Long jobs stay on the thread", body: "Still running after a few seconds → got-it note. Then one finished reply — a normal email, no thinking dump, no mid-job check-ins." },
-        { n: 8, title: "To and CC", body: "Reply stays on the thread. Allowed people already on the email stay on To/CC. “Loop them in” / “talk to them, keep me CC’d” works. Not on the list → never mailed." },
+        { n: 7, title: "Long jobs stay on the thread", body: "A few seconds in → got-it note. Every 15 minutes if it is still running → still-working note (skipped if they already emailed back). Finished mail is this turn is done and what shipped, or one waiting question. No thinking dump." },
+        { n: 8, title: "If it dies, the card is Stuck", body: "Dies, times out, or comes back empty → honest “it died / did not finish” mail. The card goes Stuck, not a fake done." },
+        { n: 9, title: "To and CC", body: "Reply stays on the thread. Allowed people already on the email stay on To/CC. “Loop them in” / “talk to them, keep me CC’d” works. Not on the list → never mailed." },
       ],
       stops: [
         { id: "unknown", title: "Not on the list", grok: false, reply: "None — silent. We do not confirm the mailbox exists." },

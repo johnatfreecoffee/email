@@ -31,9 +31,14 @@ ROOT="$LIB"
 mkdir -p "\$ROOT/logs" "\$ROOT/state"
 exec >> "\$ROOT/logs/worker.log" 2>&1
 echo "\$(date '+%Y-%m-%d %H:%M:%S') email worker start (installed)"
+# caffeinate -i: stay awake through idle sleep. Lid-close still sleeps the Mac.
+if [[ -x /usr/bin/caffeinate ]]; then
+  exec /usr/bin/caffeinate -i /usr/bin/python3 "\$ROOT/bin/worker.py"
+fi
 exec /usr/bin/python3 "\$ROOT/bin/worker.py"
 EOF
 chmod +x "$LIB/run-worker.sh"
+rm -f "$LIB/run-agent-mail.sh"
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -53,7 +58,7 @@ cat > "$PLIST" <<EOF
   <key>ThrottleInterval</key>
   <integer>15</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>WorkingDirectory</key>
   <string>${LIB}</string>
   <key>StandardOutPath</key>

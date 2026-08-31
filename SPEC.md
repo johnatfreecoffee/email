@@ -1,54 +1,54 @@
-# Spec: Agent Kanban + done signaling + parallel sessions
+# Spec: Agent reply pipeline + 48h backfill
 
 ## Done
 
-John can send several agent emails in a row (new subject = new session) and they run in parallel without freezing.
+Last 48 hours of agent mail: attachments readable, work actually finished, NokNok jobs shipped to main, one honest finished mail per chain (or one waiting question).
 
-Each agent email chain is a Kanban card in the mail app. He opens the app, not the inbox, to see status.
+New mail always gets: got-it ack (~25s) → every 15 min “still working” until finish → done mail (what shipped / questions) or died mail. Never `EMPTY_DONE`. Never thinking dumps.
 
-A finished agent reply says the work is done. He does not have to write “are you done?”. If more work is possible, the agent still says it is done for this turn, then offers to go deeper.
+John’s replies stay in the same app/Gmail chain and the same Kanban card.
 
-The subject context tag shows **this session’s** used tokens vs the 500K window (`usedK/500K`). It is not stuck at `500/500K` on every reply.
+Mac worker stays up while the Mac is awake; lid-close / process death is honest; one-time Settings listed if anything is still gated.
 
 ## Not doing
 
-- A new product or a second app
-- Rewriting inbox, compose, settings, or non-agent mail
-- Full project management (sprints, story points, multi-human assignees, estimates)
-- Changing allowlist / Access / agent create-archive
-- Changing the human reply voice (`Hey {First},` 30k-foot, closer + agent name, no thinking dumps)
-- Cloud-only worker rewrite; local worker stays the runner
+- A new product, second app, Fly box, or cloud-only worker rewrite
+- Rewriting inbox, compose, settings chrome, or allowlist
+- Changing the human voice (`Hey {First},` 30k-foot, closer + agent name)
+- Re-running Hunt test sessions 999001–999003
+- Dual Mac+HP workers in this factory
 
 ## Accept
 
-**Parallel sessions**
-- New email subject (no existing `(ID: n)`) = new session
-- Reply in the same thread / same `(ID: n)` = same session
-- Several sessions can run at once; one long job does not block the others
+**Replies (HARD)**
+- Ack ~25s if still running
+- Every 15 minutes if not done: short “still on {topic}, still working.” Skip the pulse if John already emailed back on that session
+- Finished mail is only: (a) this turn is done + what shipped, or (b) one waiting question. No play-by-play
+- Max-turns / empty stdout / crash / timeout: do not mail `EMPTY_DONE`. Do not mark Done. Honest mail + stage `stuck`, or auto-continue one more Grok turn (cap 2). Then tell the truth if it still died
+- If John replies while a job is running: no more 15-min pulses; after the current Grok exits, pick up the new mail on the same session
 
-**Done signaling**
-- When the job is finished, the mailed reply is the finished human reply and states that this turn is done
-- Vague “I looked / write back if you want deeper” without a done line is a fail
-- Long jobs still: got-it ack ~25s, then one finished reply — no mid-job check-ins
+**Attachments (HARD)**
+- Inbound files (including iPhone inline images) stored for real, not `pending/`
+- Worker downloads onto disk and the prompt lists absolute paths
+- Grok must read images/PDFs before answering. Empty inbound-files on a mail that had screenshots = fail
 
-**Context tag**
-- Reply subject: `Re: {base} (ID: {n} - {usedK}/500K)`
-- `{usedK}` is cumulative tokens **for that session only**, from this session’s history + this turn
-- A brand-new subject starts at a small usedK, not 500
-- Cross-session bleed is a fail
+**Threads (HARD)**
+- One session = one `email_thread_id` (sticky from first inbound). Outbound persist uses that, not a newly minted inbound thread
+- `In-Reply-To` + full `References` chain so Gmail/iPhone stay in one thread
+- Kanban card shows John’s mails and agent mails together
 
-**Kanban (inside the mail app)**
-- One card per agent session / email chain
-- Columns: **Received** (mail landed / queued) → **Working** (agent running) → **Waiting** (agent asked John something) → **Done** (finished reply sent) ; **Stuck** when no progress past a timeout
-- Filters: agent mailbox + stage
-- Click a card: open the thread (messages + timestamps + agent notes)
-- Timestamps on: opened/received, agent started, each status change, each agent reply
-- Agent can write notes onto the card; prompt tells the agent the board exists
-- **Remind** on a stuck/waiting card nudges that session (same session, not a new one)
+**Ship (HARD)**
+- NokNok (`a.noknok`) finished mail only after the change is on main / live `noknok-app`. Same for other project agents when the ask was fix/ship
+- Email UI/API: push main → CF Pages `email-app`. Worker: `./scripts/install-local-worker.sh` (do not overwrite `config.env`)
 
-**Look**
-- Same Apple Mail chrome as the rest of this app (sidebar, type, chips, empty states)
-- No purple / violet / indigo / fuchsia. Grok = blue pill
+**Mac stay-alive**
+- LaunchAgent: KeepAlive, RunAtLoad, ProcessType=Standard (not Background), wrap with `caffeinate -i`
+- Delete leftover `run-agent-mail.sh` Documents path
+- On worker start: any Kanban `working` with no live Grok = died mail + `stuck`
+- Lid closed: Mac sleeps. One human toggle: System Settings → Energy → Prevent automatic sleeping on power adapter when the display is off. Background Items already lists Agent Mail
+
+**Kanban**
+- Empty/canned/max-turns ≠ Done. `waiting` only when the mailed body is a real question. `stuck` on died/timeout/empty. Remind still same session
 
 ## Keep
 
@@ -56,5 +56,5 @@ The subject context tag shows **this session’s** used tokens vs the 500K windo
 - Agent mail stays in `folder=agent`; hidden from inbox
 - Settings → Agents (Users / Access / Mailboxes / How it works)
 - Worker deny-by-default (unknown / archived / agent off → no Grok)
-- Deploy: commit + push `main` → CF Pages `email-app`; worker install after `worker/*.py` edits
 - Existing mail UX, threading, compose, settings
+- Apple Mail chrome. No purple / violet / indigo / fuchsia

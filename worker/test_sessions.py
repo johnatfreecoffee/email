@@ -162,13 +162,16 @@ class DoneSignaling(unittest.TestCase):
     def test_empty_body_not_vague_fallback(self):
         out = worker.shape_human_email("", "John", "Agent NokNok")
         self.assertNotIn(worker.VAGUE_FALLBACK, out)
-        self.assertRegex(out, worker.DONE_LINE_RE)
+        self.assertNotIn(worker.EMPTY_DONE, out)
+        self.assertIn("did not finish", out.lower())
         self.assertTrue(out.startswith("Hey John"))
+        self.assertFalse(worker.DONE_LINE_RE.search(out))
 
     def test_vague_string_replaced(self):
         out = worker.shape_human_email(worker.VAGUE_FALLBACK, "John", "Agent NokNok")
         self.assertNotIn(worker.VAGUE_FALLBACK, out)
-        self.assertRegex(out, worker.DONE_LINE_RE)
+        self.assertNotIn(worker.EMPTY_DONE, out)
+        self.assertIn("did not finish", out.lower())
 
     def test_ensure_done_inserts_before_signoff(self):
         raw = "Hey John,\n\nShipped the fix.\n\nAll set,\nAgent NokNok"
@@ -353,6 +356,39 @@ class KanbanPayload(unittest.TestCase):
         self.assertEqual(
             worker.finish_stage(False, "Shipped the login. This turn is done."), "done"
         )
+        self.assertEqual(
+            worker.finish_stage(False, worker.STUCK_EMPTY, unfinished=True), "stuck"
+        )
+        self.assertEqual(worker.finish_stage(False, worker.EMPTY_DONE), "stuck")
+        self.assertEqual(
+            worker.finish_stage(False, worker.status_note("died", "John", "Agent", "x")),
+            "stuck",
+        )
+
+
+class HonestStatus(unittest.TestCase):
+    def test_pulse_and_died_notes(self):
+        pulse = worker.status_note("pulse", "John", "Agent NokNok", "Chat problems")
+        self.assertIn("Still on", pulse)
+        self.assertIn("Still working", pulse)
+        self.assertTrue(pulse.startswith("Hey John"))
+        died = worker.status_note("died", "John", "Agent NokNok", "Chat problems")
+        self.assertIn("died", died.lower())
+        self.assertIn("didn't finish", died.lower())
+
+    def test_unfinished_stub(self):
+        self.assertTrue(worker.is_unfinished_stub(worker.EMPTY_DONE))
+        self.assertTrue(worker.is_unfinished_stub(worker.STUCK_EMPTY))
+        self.assertFalse(worker.is_unfinished_stub("Hey John,\n\nShipped the fix. This turn is done."))
+
+    def test_thread_headers_chain(self):
+        rec = {"rfc_ids": ["aaa", "<bbb>"]}
+        msg = {"resend_email_id": "ccc"}
+        h = worker.thread_headers(msg, rec)
+        self.assertEqual(h["In-Reply-To"], "<ccc>")
+        self.assertIn("<aaa>", h["References"])
+        self.assertIn("<bbb>", h["References"])
+        self.assertIn("<ccc>", h["References"])
 
 
 class NoteTrailer(unittest.TestCase):

@@ -39,6 +39,9 @@ except ImportError:
 CONTEXT_MAX_K = 500  # display denominator
 TOKENS_PER_MIN = 2500  # tool-loop estimate; wall-clock is minutes, not seconds
 MAX_PARALLEL = 4
+DEFAULT_MAX_TURNS = 120
+MAX_CONTINUES = 2
+PULSE_AFTER_S = 15 * 60
 ID_RE = re.compile(r"\(ID:\s*(\d+)(?:\s*-\s*[^)]*)?\)", re.I)
 ID_ONLY_RE = re.compile(r"\bID:\s*(\d+)\b", re.I)
 REPLY_PREFIX_RE = re.compile(r"^(re|fwd|fw)\s*:", re.I)
@@ -63,13 +66,26 @@ EMPTY_DONE = (
     "This turn is done. I ran the job but didn't have a note to send — nothing useful finished. "
     "Write back with a shorter ask and I'll pick it up."
 )
+STUCK_EMPTY = (
+    "This turn did not finish. I ran the job but had no note to send. "
+    "I'm marking it stuck — reply on this thread and I'll pick it up."
+)
 TIMEOUT_PARTIAL = (
-    "This turn is done. I ran out of time. What finished is in the note above; "
-    "the rest of this turn did not finish. Write back if you want me to keep going."
+    "I ran out of time. What finished is in the note above; "
+    "the rest did not. Write back if you want me to keep going."
 )
 TIMEOUT_EMPTY = (
-    "This turn is done. I started but ran out of time — nothing useful finished; "
-    "the rest of this turn did not. Reply on this thread and I'll pick it up."
+    "I started but ran out of time — this turn did not finish. "
+    "Reply on this thread and I'll pick it up."
+)
+DIED_BODY = (
+    "This turn died while I was on {topic}. I didn't finish. "
+    "Reply on this thread and I'll pick it up."
+)
+CONTINUE_HINT = (
+    "You hit the turn cap with no finished email. Print ONLY the finished human email now. "
+    "Do not start a new exploration. If the work shipped, say what shipped. "
+    "If it did not, say what is still open. One short note."
 )
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -219,6 +235,48 @@ def fetch_attachments(cfg: dict, message_id: str) -> list[dict]:
     return []
 
 
+def message_resend_id(cfg: dict, message_id: str) -> str:
+    row = fetch_message_by_id(cfg, message_id)
+    if not row:
+        return ""
+    return str(row.get("resend_email_id") or "")
+
+
+def resend_download_attachment(cfg: dict, resend_email_id: str, filename: str, dest: Path) -> bool:
+    """Pull bytes from Resend receiving attachments when storage is pending/missing."""
+    key = cfg.get("RESEND_API_KEY") or ""
+    rid = (resend_email_id or "").strip().strip("<>")
+    if not key or not rid:
+        return False
+    try:
+        code, data = curl_json(
+            "GET",
+            f"https://api.resend.com/emails/receiving/{rid}/attachments",
+            {"Authorization": f"Bearer {key}"},
+        )
+    except Exception as e:
+        log(f"resend attachments list failed: {e}")
+        return False
+    rows = []
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        rows = data["data"]
+    elif isinstance(data, list):
+        rows = data
+    want = (filename or "").lower()
+    for att in rows:
+        if not isinstance(att, dict):
+            continue
+        name = str(att.get("filename") or "")
+        url = str(att.get("download_url") or "")
+        if not url:
+            continue
+        if want and name.lower() != want and safe_filename(name).lower() != want:
+            continue
+        if curl_download(url, {}, dest):
+            return True
+    return False
+
+
 def format_files_block(files: list[dict]) -> str:
     if not files:
         return "No files were on this email."
@@ -266,10 +324,20 @@ def materialize_attachments(cfg: dict, message_id: str, dest_dir: Path) -> list[
             log(f"skip large file {filename} bytes={size}")
             continue
         dest = dest_dir / filename
-        url = storage_object_url(cfg, storage_path)
-        if not curl_download(url, sb_headers(cfg), dest):
-            log(f"file download failed {filename}")
-            continue
+        ok = False
+        if storage_path and not storage_path.startswith("pending/"):
+            url = storage_object_url(cfg, storage_path)
+            ok = curl_download(url, sb_headers(cfg), dest)
+            if not ok:
+                log(f"file download failed {filename}")
+        if not ok:
+            resend_id = str(row.get("resend_email_id") or "")
+            if not resend_id:
+                resend_id = message_resend_id(cfg, message_id)
+            ok = resend_download_attachment(cfg, resend_id, filename, dest)
+            if not ok:
+                log(f"file resend retry failed {filename}")
+                continue
         dest = maybe_jpeg_preview(dest)
         out.append(
             {
@@ -702,13 +770,43 @@ def looks_like_waiting_question(text: str) -> bool:
     return True
 
 
+def is_unfinished_stub(text: str) -> bool:
+    """Canned empty/died/timeout copy — never a successful Done."""
+    compact = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not compact:
+        return True
+    if VAGUE_FALLBACK.lower() in compact:
+        return True
+    if "nothing useful finished" in compact:
+        return True
+    if "had no note to send" in compact:
+        return True
+    if "this turn did not finish" in compact:
+        return True
+    if "this turn died" in compact:
+        return True
+    return False
+
+
+def is_max_turns_err(stderr: str, rc: int) -> bool:
+    if int(rc or 0) == 0:
+        return False
+    return "max turns" in (stderr or "").lower()
+
+
+def is_stuck_copy(text: str) -> bool:
+    compact = re.sub(r"\s+", " ", text or "").strip().lower()
+    return is_unfinished_stub(compact) or "ran out of time" in compact
+
+
 def finish_stage(
     timed_out: bool,
     reply_text: str,
     questions_only: bool = False,
     process_error: bool = False,
+    unfinished: bool = False,
 ) -> str:
-    if timed_out or process_error:
+    if timed_out or process_error or unfinished or is_unfinished_stub(reply_text):
         return "stuck"
     if questions_only or looks_like_waiting_question(reply_text):
         return "waiting"
@@ -1147,8 +1245,17 @@ def looks_like_job(msg: dict, questions_only: bool) -> bool:
 
 def status_note(kind: str, first: str, display: str, topic: str) -> str:
     topic = re.sub(r"\s+", " ", topic or "this").strip()[:90].rstrip(" .") or "this"
-    body = f"Got this — I'm on {topic}. I'll write back when it's done."
-    closer = pick_closer(topic + "ack", ACK_CLOSERS)
+    first = first or "there"
+    display = display or "Agent"
+    if kind == "pulse":
+        body = f"Still on {topic}. Still working — I'll write when it's done or if it dies."
+        closer = pick_closer(topic + "pulse", ACK_CLOSERS)
+    elif kind == "died":
+        body = DIED_BODY.format(topic=topic)
+        closer = pick_closer(topic + "died", DONE_CLOSERS)
+    else:
+        body = f"Got this — I'm on {topic}. I'll write back when it's done."
+        closer = pick_closer(topic + "ack", ACK_CLOSERS)
     return f"Hey {first},\n\n{body}\n\n{closer},\n{display}"
 
 
@@ -1231,17 +1338,19 @@ def ensure_done_line(text: str) -> str:
 
 
 def shape_human_email(text: str, first: str, display: str) -> str:
-    """Guarantee Hey First + closer + agent name + this-turn-is-done."""
+    """Guarantee Hey First + closer + agent name. Done-line only on real finishes."""
     body = (text or "").strip()
     first = first or "there"
     display = display or "Agent"
-    if not body or body == VAGUE_FALLBACK:
-        body = EMPTY_DONE
+    if not body or body == VAGUE_FALLBACK or EMPTY_DONE in body:
+        body = STUCK_EMPTY
     if not GREET_RE.match(body):
         body = f"Hey {first},\n\n{body}"
     if not _has_signoff(body, display):
         closer = pick_closer(body, DONE_CLOSERS)
         body = f"{body.rstrip()}\n\n{closer},\n{display}"
+    if is_stuck_copy(body):
+        return body
     return ensure_done_line(body)
 
 
@@ -1619,7 +1728,7 @@ def run_grok(
     """
     grok = cfg.get("GROK_BIN") or str(Path.home() / ".grok/bin/grok")
     workspace = agent["workspace"]
-    max_turns = cfg.get("MAX_TURNS", "40")
+    max_turns = cfg.get("MAX_TURNS") or str(DEFAULT_MAX_TURNS)
     body = plain_text(msg)
     mid = str(msg.get("id") or "")
     files: list[dict] = []
@@ -1692,9 +1801,10 @@ Your stdout IS the email they receive. Print only the finished note, then a rout
 HARD — one email, nothing else:
 - Do the work with tools silently. Print ZERO words until the job is done.
 - No thinking. No diary. No "I'll look up". No "next I'll". No status. No play-by-play.
-- The worker already sent a "got it" note if this is a long job. Do not write another "I'm on it" or "still working".
+- The worker sends got-it and 15-minute still-working notes. Do not write "I'm on it" or "still working".
 - When done, print one normal human email. That is the only thing they should ever see.
-- The finished email must say this turn is done. If more work is possible, still say this turn is done, then offer to go deeper.
+- Finished email is either (a) this turn is done + what shipped, or (b) one waiting question.
+- If the ask was a product fix (especially NokNok), ship to main / live before you print the done email.
 - Never send a vague "I looked / write back if you want deeper" without a done line.
 
 EMAIL SHAPE (HARD):
@@ -1768,97 +1878,145 @@ Rules:
 
     append_history(session_id, "user", f"Subject: {subject}\n\n{body}\n\n{files_block}")
 
-    cmd = [grok, "--cwd", workspace]
-    if flags.get("always_approve", True):
-        cmd += ["--always-approve"]
-    cmd += ["--permission-mode", str(flags.get("permission_mode") or "bypassPermissions")]
-    if flags.get("disallowed_tools"):
-        cmd += ["--disallowed-tools", ",".join(flags["disallowed_tools"])]
-    for rule in flags.get("deny_rules") or []:
-        cmd += ["--deny", rule]
-    cmd += ["--output-format", "json", "--max-turns", str(max_turns), "-p", prompt]
     env = os.environ.copy()
     env["PATH"] = f"/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:{Path.home()}/.grok/bin:" + env.get("PATH", "")
-    log(
-        f"grok start session={session_id} new={is_new} agent={agent['local_part']} "
-        f"msg={str(msg.get('id'))[:8]} timeout={timeout_s}s max_turns={max_turns} "
-        f"perm={flags.get('permission_mode')} ask_only={flags.get('questions_only')}"
-    )
-    t0 = time.time()
+    cwd = workspace if Path(workspace).is_dir() else str(Path.home())
+
+    def grok_cmd(prompt_text: str) -> list[str]:
+        cmd = [grok, "--cwd", workspace]
+        if flags.get("always_approve", True):
+            cmd += ["--always-approve"]
+        cmd += ["--permission-mode", str(flags.get("permission_mode") or "bypassPermissions")]
+        if flags.get("disallowed_tools"):
+            cmd += ["--disallowed-tools", ",".join(flags["disallowed_tools"])]
+        for rule in flags.get("deny_rules") or []:
+            cmd += ["--deny", rule]
+        cmd += ["--output-format", "json", "--max-turns", str(max_turns), "-p", prompt_text]
+        return cmd
+
+    sent_ack = False
+    last_pulse_at = 0.0
+    t_all = time.time()
     timed_out = False
     stdout = ""
     stderr = ""
     rc = -1
-    sent_ack = False
     usage_tokens: int | None = None
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            cwd=workspace if Path(workspace).is_dir() else str(Path.home()),
-        )
+    text = ""
+    continues = 0
+    prompt_used = prompt
+
+    def wait_proc(proc: subprocess.Popen) -> None:
+        nonlocal timed_out, sent_ack, last_pulse_at
+        t0 = time.time()
         while True:
-            elapsed = time.time() - t0
-            if elapsed >= timeout_s:
+            elapsed_all = time.time() - t_all
+            if elapsed_all >= timeout_s:
                 proc.kill()
                 timed_out = True
-                break
-            wakes = [timeout_s - elapsed]
+                return
+            remaining = timeout_s - elapsed_all
+            wakes = [remaining]
             if on_slow and not sent_ack:
-                wakes.append(max(0.2, ACK_AFTER_S - elapsed))
+                wakes.append(max(0.2, ACK_AFTER_S - (time.time() - t_all)))
+            elif on_slow and sent_ack:
+                wakes.append(max(0.2, PULSE_AFTER_S - (elapsed_all - last_pulse_at)))
             try:
                 proc.wait(timeout=min(wakes))
-                break
+                return
             except subprocess.TimeoutExpired:
                 touch_lock()
-                elapsed = time.time() - t0
-                if on_slow and not sent_ack and elapsed >= ACK_AFTER_S:
+                elapsed_all = time.time() - t_all
+                if on_slow and not sent_ack and elapsed_all >= ACK_AFTER_S:
                     try:
                         on_slow("ack")
                     except Exception as e:
                         log(f"ack send failed: {e}")
                     sent_ack = True
-        out, err = proc.communicate()
-        stdout, usage_tokens = parse_grok_stdout(out or "")
-        stderr = err or ""
-        rc = -1 if timed_out else int(proc.returncode if proc.returncode is not None else -1)
-    except Exception as e:
-        log(f"grok spawn failed session={session_id}: {e}")
-        stdout = ""
-        stderr = str(e)
-        rc = -1
-        usage_tokens = None
-    if timed_out:
-        log(f"grok TIMEOUT session={session_id} after {timeout_s}s partial_out={len(stdout)} partial_err={len(stderr)}")
-    duration_s = time.time() - t0
+                    last_pulse_at = elapsed_all
+                elif on_slow and sent_ack and elapsed_all - last_pulse_at >= PULSE_AFTER_S:
+                    try:
+                        on_slow("pulse")
+                    except Exception as e:
+                        log(f"pulse send failed: {e}")
+                    last_pulse_at = elapsed_all
+            _ = t0
 
+    while True:
+        log(
+            f"grok start session={session_id} new={is_new} agent={agent['local_part']} "
+            f"msg={str(msg.get('id'))[:8]} timeout={timeout_s}s max_turns={max_turns} "
+            f"perm={flags.get('permission_mode')} ask_only={flags.get('questions_only')} "
+            f"continue={continues}"
+        )
+        try:
+            proc = subprocess.Popen(
+                grok_cmd(prompt_used),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                cwd=cwd,
+            )
+            wait_proc(proc)
+            out, err = proc.communicate()
+            stdout, usage_tokens = parse_grok_stdout(out or "")
+            stderr = err or ""
+            rc = -1 if timed_out else int(proc.returncode if proc.returncode is not None else -1)
+        except Exception as e:
+            log(f"grok spawn failed session={session_id}: {e}")
+            stdout = ""
+            stderr = str(e)
+            rc = -1
+            usage_tokens = None
+            break
+        if timed_out:
+            log(
+                f"grok TIMEOUT session={session_id} after {timeout_s}s "
+                f"partial_out={len(stdout)} partial_err={len(stderr)}"
+            )
+            break
+        if rc != 0:
+            log(f"grok nonzero rc={rc} err={stderr[:400]}")
+        text = clean_email_reply(stdout, first, display)
+        usable = bool(text.strip()) and not is_unfinished_stub(text)
+        if (not usable) and continues < MAX_CONTINUES:
+            continues += 1
+            log(f"grok continue {continues}/{MAX_CONTINUES} session={session_id}")
+            extra_block = f"\n{CONTINUE_HINT}\n"
+            prompt_used = prompt.replace(
+                "Your stdout IS the email they receive.",
+                extra_block + "Your stdout IS the email they receive.",
+                1,
+            )
+            continue
+        break
+
+    duration_s = time.time() - t_all
     if timed_out:
         partial = clean_email_reply(stdout, first, display)
-        if partial and len(re.sub(r"\s+", " ", partial)) > 120:
+        if partial and not is_unfinished_stub(partial) and len(re.sub(r"\s+", " ", partial)) > 120:
             text = shape_human_email(partial[:11000].rstrip() + "\n\n" + TIMEOUT_PARTIAL, first, display)
         else:
             text = shape_human_email(TIMEOUT_EMPTY, first, display)
     else:
-        if rc != 0:
-            log(f"grok nonzero rc={rc} err={stderr[:400]}")
         text = clean_email_reply(stdout, first, display)
-        if not text.strip() or VAGUE_FALLBACK in text:
-            text = shape_human_email(EMPTY_DONE, first, display)
+        if not text.strip() or is_unfinished_stub(text):
+            text = shape_human_email(STUCK_EMPTY, first, display)
 
     append_history(session_id, "assistant", text)
     # Subject numerator is this session's wall-clock estimate only.
     # Grok JSON total_tokens is the model window — never paint that as used.
     _ = usage_tokens
     turn_tokens = estimate_turn_tokens(
-        prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
+        prompt_used, stdout, stderr, duration_s=duration_s, timed_out=timed_out
     )
     process_error = (not timed_out) and rc != 0 and not (stdout or "").strip()
+    unfinished = (not timed_out) and is_unfinished_stub(text)
     log(
         f"grok done session={session_id} timed_out={timed_out} "
-        f"dur={duration_s:.0f}s turn_tokens≈{turn_tokens} reply_chars={len(text)}"
+        f"dur={duration_s:.0f}s turn_tokens≈{turn_tokens} reply_chars={len(text)} "
+        f"continues={continues} unfinished={unfinished}"
     )
     return text, {
         "turn_tokens": turn_tokens,
@@ -1866,7 +2024,34 @@ Rules:
         "timed_out": timed_out,
         "returncode": rc,
         "process_error": process_error,
+        "unfinished": unfinished,
+        "continues": continues,
     }
+
+
+def _angle_id(raw: str) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    return s if s.startswith("<") else f"<{s}>"
+
+
+def thread_headers(msg: dict, rec: dict | None = None) -> dict[str, str]:
+    """In-Reply-To + full References so Gmail/iPhone stay on one chain."""
+    rec = rec or {}
+    chain: list[str] = []
+    for item in rec.get("rfc_ids") or []:
+        angled = _angle_id(str(item))
+        if angled and angled not in chain:
+            chain.append(angled)
+    rid = msg.get("resend_email_id") or msg.get("in_reply_to")
+    if rid:
+        angled = _angle_id(str(rid))
+        if angled and angled not in chain:
+            chain.append(angled)
+    if not chain:
+        return {}
+    return {"In-Reply-To": chain[-1], "References": " ".join(chain)}
 
 
 def send_reply(
@@ -1878,6 +2063,7 @@ def send_reply(
     *,
     to: list[str] | None = None,
     cc: list[str] | None = None,
+    rec: dict | None = None,
 ) -> bool:
     from_addr = agent.get("email") or f"{agent['local_part']}@{(load_agents().get('domain') or 'localhost')}"
     from_header = f"{agent['display_name']} <{from_addr}>"
@@ -1900,13 +2086,7 @@ def send_reply(
     }
     if cc_list:
         payload["cc"] = cc_list
-    # Thread for Apple Mail / Gmail / our app — use angle-bracket Message-IDs
-    headers = {}
-    rid = msg.get("resend_email_id")
-    if rid:
-        mid = rid if str(rid).startswith("<") else f"<{rid}>"
-        headers["In-Reply-To"] = mid
-        headers["References"] = mid
+    headers = thread_headers(msg, rec)
     if headers:
         payload["headers"] = headers
 
@@ -1926,9 +2106,14 @@ def send_reply(
             f"id={rid}"
         )
         try:
-            persist_outbound_reply(cfg, agent, msg, subject, reply_text, to_list, cc_list, rid)
+            persist_outbound_reply(cfg, agent, msg, subject, reply_text, to_list, cc_list, rid, rec=rec)
         except Exception as e:
             log(f"persist outbound: {e}")
+        if rid and rec is not None:
+            ids = list(rec.get("rfc_ids") or [])
+            if rid not in ids:
+                ids.append(str(rid))
+            rec["rfc_ids"] = ids[-20:]
         return True
     log(f"send failed code={code} {str(data)[:300]}")
     return False
@@ -1943,6 +2128,7 @@ def persist_outbound_reply(
     to_list: list[str],
     cc_list: list[str],
     resend_id: str | None,
+    rec: dict | None = None,
 ) -> None:
     """Store the sent agent reply so the Kanban card thread can show it."""
     base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
@@ -1950,6 +2136,7 @@ def persist_outbound_reply(
     if not base or not key:
         return
     from_addr = agent.get("email") or f"{agent['local_part']}@freecoffee.dev"
+    tid = (rec or {}).get("email_thread_id") or msg.get("thread_id")
     payload = {
         "domain_id": msg.get("domain_id"),
         "address_id": msg.get("address_id"),
@@ -1962,7 +2149,7 @@ def persist_outbound_reply(
         "subject": subject,
         "body_text": reply_text,
         "body_html": reply_html(reply_text),
-        "thread_id": msg.get("thread_id"),
+        "thread_id": tid,
         "is_read": True,
         "folder": "agent",
         "received_at": datetime.now(timezone.utc).isoformat(),
@@ -1980,6 +2167,62 @@ def persist_outbound_reply(
     )
     if code not in (200, 201, 204):
         log(f"persist outbound code={code} {str(data)[:200]}")
+
+
+def stick_inbound_thread(cfg: dict, rec: dict, msg: dict) -> None:
+    """Keep one session = one thread. Patch inbound onto the session thread if it split."""
+    tid = rec.get("email_thread_id") or msg.get("thread_id")
+    if tid and not rec.get("email_thread_id"):
+        rec["email_thread_id"] = tid
+    inbound_tid = msg.get("thread_id")
+    mid = str(msg.get("id") or "")
+    if not tid or not inbound_tid or inbound_tid == tid or not mid or not UUID_RE.match(mid):
+        return
+    rec["email_thread_id"] = tid
+    base = sb_base(cfg)
+    if not base:
+        return
+    try:
+        code, data = curl_json(
+            "PATCH",
+            f"{base}/rest/v1/email_messages?id=eq.{mid}",
+            sb_headers(cfg, {"Prefer": "return=minimal"}),
+            {"thread_id": tid},
+        )
+        if code not in (200, 201, 204):
+            log(f"stick thread failed code={code} {str(data)[:160]}")
+        else:
+            log(f"stuck inbound {mid[:8]} onto thread {str(tid)[:8]}")
+            msg["thread_id"] = tid
+    except Exception as e:
+        log(f"stick thread: {e}")
+
+
+def newer_mail_for_session(cfg: dict, agent: dict, session_id: int, current_mid: str) -> bool:
+    """True if John already emailed back on this session while Grok is still running."""
+    local = agent.get("local_part") or ""
+    try:
+        msgs = fetch_new_messages(cfg, [local], set())
+    except Exception:
+        return False
+    current = str(current_mid or "")
+    for msg in msgs:
+        mid = str(msg.get("id") or "")
+        if not mid or mid == current:
+            continue
+        if str(msg.get("_agent_local") or "") != local:
+            continue
+        sid = parse_session_id(msg.get("subject") or "")
+        if sid == int(session_id):
+            return True
+        # same open session via resolve without allocating
+        with _state_lock:
+            sessions = load_sessions()
+            rec = sessions["by_id"].get(str(session_id)) or {}
+        if rec.get("email_thread_id") and msg.get("thread_id") == rec.get("email_thread_id"):
+            if base_subject(msg.get("subject") or "") == rec.get("base_subject"):
+                return True
+    return False
 
 
 def claim_message(cfg: dict, mid: str, via: str) -> bool:
@@ -2158,18 +2401,29 @@ def _execute_session_turn(
     default_to, default_cc = resolve_recipients(
         msg, local, cloud_store, [], [], rec_snap.get("thread_people") or []
     )
+    stick_inbound_thread(cfg, rec_snap, msg)
     write_kanban_stage(cfg, "working", agent=agent, session_id=sid, rec=rec_snap, msg=msg)
 
     def send_status(kind: str) -> None:
         with _state_lock:
             live = load_sessions()["by_id"].get(str(sid)) or rec_snap
+        if kind == "pulse" and newer_mail_for_session(cfg, agent, sid, mid):
+            log(f"pulse skip newer inbound session={sid}")
+            return
         topic = live.get("base_subject") or base_subject(msg.get("subject") or "")
         used_k = int(live.get("used_k") or 1)
         subj_s = format_reply_subject(topic, sid, used_k)
         note = status_note(kind, first, display, topic)
-        send_reply(cfg, agent, msg, note, subj_s, to=default_to, cc=default_cc)
+        send_reply(cfg, agent, msg, note, subj_s, to=default_to, cc=default_cc, rec=live)
         append_history(sid, "assistant", note)
         log(f"{kind} sent session={sid} to={default_to}")
+        if kind in ("ack", "pulse", "died") and live is not rec_snap:
+            with _state_lock:
+                sessions = load_sessions()
+                row = sessions["by_id"].get(str(sid))
+                if row is not None and live.get("rfc_ids"):
+                    row["rfc_ids"] = live.get("rfc_ids")
+                    save_sessions(sessions)
 
     reply, meta = run_grok(
         cfg,
@@ -2216,14 +2470,23 @@ def _execute_session_turn(
         save_sessions(sessions)
         topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
         rec_live = dict(rec)
+    stick_inbound_thread(cfg, rec_live, msg)
     mailed = body or reply
     subj = format_reply_subject(topic, sid, used_k)
-    sent = send_reply(cfg, agent, msg, mailed, subj, to=to_list, cc=cc_list)
+    sent = send_reply(cfg, agent, msg, mailed, subj, to=to_list, cc=cc_list, rec=rec_live)
+    if rec_live.get("rfc_ids"):
+        with _state_lock:
+            sessions = load_sessions()
+            row = sessions["by_id"].get(str(sid))
+            if row is not None:
+                row["rfc_ids"] = rec_live.get("rfc_ids")
+                save_sessions(sessions)
     stage = finish_stage(
         bool(meta.get("timed_out")),
         mailed,
         questions_only=q_only,
         process_error=bool(meta.get("process_error")) or not sent,
+        unfinished=bool(meta.get("unfinished")),
     )
     extras: list[tuple[str, str | None]] = []
     if sent:
@@ -2301,8 +2564,22 @@ def _run_claimed_job(
             with _state_lock:
                 rec = load_sessions()["by_id"].get(str(sid))
             write_kanban_stage(cfg, "stuck", agent=agent, session_id=sid, rec=rec, msg=msg)
-        except Exception:
-            pass
+            topic = (rec or {}).get("base_subject") or base_subject(msg.get("subject") or "")
+            used_k = int((rec or {}).get("used_k") or 1)
+            display = agent.get("display_name") or "Agent"
+            first_name = sender_first_name(msg.get("from_address") or "", None, msg)
+            note = status_note("died", first_name, display, topic)
+            send_reply(
+                cfg,
+                agent,
+                msg,
+                note,
+                format_reply_subject(topic, sid, used_k),
+                rec=rec,
+            )
+            append_history(sid, "assistant", note)
+        except Exception as mail_e:
+            log(f"died mail failed: {mail_e}")
         release_claim(cfg, str(mid))
     finally:
         mark_session_inflight(sid, False)
@@ -2327,6 +2604,74 @@ def fetch_message_by_id(cfg: dict, mid: str) -> dict | None:
     except Exception as e:
         log(f"kanban fetch message failed: {e}")
     return None
+
+
+def fetch_jobs_stage(cfg: dict, stage: str) -> list[dict]:
+    base = sb_base(cfg)
+    if not base or not stage:
+        return []
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/agent_jobs?stage=eq.{stage}&select={JOB_SELECT}&order=updated_at.asc",
+            sb_headers(cfg),
+        )
+        if is_missing_table(code, data):
+            return []
+        if code != 200 or not isinstance(data, list):
+            return []
+        return [j for j in data if isinstance(j, dict)]
+    except Exception as e:
+        log(f"kanban fetch stage={stage} failed: {e}")
+        return []
+
+
+def reclaim_orphans(cfg: dict, agents: dict[str, dict], cloud_store: dict | None) -> None:
+    """Working cards with no live Grok after a restart → died mail + stuck."""
+    jobs = fetch_jobs_stage(cfg, "working")
+    if not jobs:
+        return
+    log(f"orphan working cards n={len(jobs)}")
+    for job in jobs:
+        sid = int(job.get("session_id") or 0)
+        local = str(job.get("agent_local") or "").strip().lower()
+        agent = agents.get(local)
+        if not agent or sid <= 0:
+            continue
+        if session_is_inflight(sid):
+            continue
+        try:
+            with _state_lock:
+                rec = load_sessions()["by_id"].get(str(sid)) or {}
+            src = fetch_message_by_id(cfg, str(job.get("last_message_id") or ""))
+            msg = dict(src or {})
+            if job.get("email_thread_id") and not msg.get("thread_id"):
+                msg["thread_id"] = job.get("email_thread_id")
+            if not msg.get("from_address"):
+                people = rec.get("thread_people") or []
+                if people:
+                    msg["from_address"] = people[0]
+            if not msg.get("subject"):
+                msg["subject"] = f"Re: {rec.get('base_subject') or job.get('base_subject') or '(no subject)'}"
+            from_addr = msg.get("from_address") or ""
+            first = sender_first_name(from_addr, cloud_store, msg) if from_addr else "there"
+            display = agent.get("display_name") or "Agent"
+            topic = rec.get("base_subject") or job.get("base_subject") or "this"
+            used_k = int(rec.get("used_k") or job.get("used_k") or 1)
+            note = status_note("died", first, display, topic)
+            send_reply(
+                cfg,
+                agent,
+                msg,
+                note,
+                format_reply_subject(str(topic), sid, used_k),
+                rec=rec,
+            )
+            append_history(sid, "assistant", note)
+            write_kanban_stage(cfg, "stuck", agent=agent, session_id=sid, rec=rec, msg=msg)
+            log(f"orphan died session={sid} agent={local}")
+        except Exception as e:
+            log(f"orphan reclaim failed session={sid}: {e}")
 
 
 def fetch_remind_jobs(cfg: dict) -> list[dict]:
@@ -2590,6 +2935,12 @@ def main() -> int:
         log("another worker holds lock; exiting")
         return 0
     try:
+        try:
+            agents_doc = load_agents(cfg)
+            cloud_store = fetch_allowlist(cfg) if access else None
+            reclaim_orphans(cfg, by_local(agents_doc), cloud_store)
+        except Exception as e:
+            log(f"orphan boot: {e}")
         while True:
             try:
                 heartbeat(cfg)

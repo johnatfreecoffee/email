@@ -162,20 +162,25 @@ export function howItWorks() {
       {
         n: 7,
         title: "Long jobs stay on the thread",
-        body: "If the work is still running after a few seconds they get a got-it note. Then one finished reply — a normal email, no thinking dump, no mid-job check-ins.",
+        body: "A few seconds in → got-it note. Every 15 minutes if it is still running → still-working note (skipped if they already emailed back). Finished mail is this turn is done and what shipped, or one waiting question. No thinking dump.",
       },
       {
         n: 8,
+        title: "If it dies, the card is Stuck",
+        body: "Dies, times out, or comes back empty → honest “it died / did not finish” mail. The card goes Stuck, not a fake done.",
+      },
+      {
+        n: 9,
         title: "To and CC",
         body: "The agent replies on the same thread. Anyone already on the email who is on Users (this agent on) stays on To/CC. You can say “loop them in” or “talk to them, keep me CC’d.” People not on the list are never mailed.",
       },
       {
-        n: 9,
+        n: 10,
         title: "If this machine is offline",
         body: "Questions-only senders get a Cloud chat reply (xAI, no file tools). Anyone with write access gets: need This machine or Cloud box. Local worker wins again when it comes back.",
       },
       {
-        n: 10,
+        n: 11,
         title: "Cloud box (optional)",
         body: "Same worker in Docker, workspace = git clone. Heartbeats separately. A claim row means local and box cannot both run the same email.",
       },
