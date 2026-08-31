@@ -1313,7 +1313,7 @@ def fetch_new_messages(cfg: dict, agent_locals: list[str], processed: set[str]) 
     base = cfg["SUPABASE_URL"].rstrip("/")
     url = (
         f"{base}/rest/v1/email_messages"
-        f"?select=id,address_id,from_address,from_name,to_addresses,cc_addresses,subject,body_text,body_html,"
+        f"?select=id,domain_id,address_id,from_address,from_name,to_addresses,cc_addresses,subject,body_text,body_html,"
         f"thread_id,resend_email_id,received_at,direction,folder,is_spam,is_trash,is_archived"
         f"&direction=eq.inbound&is_spam=eq.false&is_trash=eq.false"
         f"&order=received_at.desc&limit=40"
@@ -1753,13 +1753,66 @@ def send_reply(
         payload,
     )
     if code in (200, 201):
+        rid = data.get("id") if isinstance(data, dict) else None
         log(
             f"sent reply session_subj={subject!r} to={to_list} cc={cc_list} "
-            f"id={data.get('id') if isinstance(data, dict) else data}"
+            f"id={rid}"
         )
+        try:
+            persist_outbound_reply(cfg, agent, msg, subject, reply_text, to_list, cc_list, rid)
+        except Exception as e:
+            log(f"persist outbound: {e}")
         return True
     log(f"send failed code={code} {str(data)[:300]}")
     return False
+
+
+def persist_outbound_reply(
+    cfg: dict,
+    agent: dict,
+    msg: dict,
+    subject: str,
+    reply_text: str,
+    to_list: list[str],
+    cc_list: list[str],
+    resend_id: str | None,
+) -> None:
+    """Store the sent agent reply so the Kanban card thread can show it."""
+    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    if not base or not key:
+        return
+    from_addr = agent.get("email") or f"{agent['local_part']}@freecoffee.dev"
+    payload = {
+        "domain_id": msg.get("domain_id"),
+        "address_id": msg.get("address_id"),
+        "resend_email_id": resend_id,
+        "direction": "outbound",
+        "from_address": from_addr,
+        "from_name": agent.get("display_name") or "Agent",
+        "to_addresses": to_list,
+        "cc_addresses": cc_list,
+        "subject": subject,
+        "body_text": reply_text,
+        "body_html": reply_html(reply_text),
+        "thread_id": msg.get("thread_id"),
+        "is_read": True,
+        "folder": "agent",
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    code, data = curl_json(
+        "POST",
+        f"{base}/rest/v1/email_messages",
+        {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Prefer": "return=minimal",
+        },
+        payload,
+    )
+    if code not in (200, 201, 204):
+        log(f"persist outbound code={code} {str(data)[:200]}")
 
 
 def claim_message(cfg: dict, mid: str, via: str) -> bool:
