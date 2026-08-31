@@ -37,7 +37,7 @@ Source: `SPEC.md`. If it is not in the spec, it does not exist.
 - Click card → thread + timestamps + notes. Remind button on stuck/waiting.
 - Apple Mail chrome. No purple. Empty/loading/error states.
 
-## UI match
+## UI match [x]
 Diff every new/changed screen vs existing Agents sidebar + Settings cards. Desktop + ~390 mobile. No new color language.
 
 ## Hunt
