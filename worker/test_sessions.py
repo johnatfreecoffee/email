@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import tempfile
 import threading
@@ -12,7 +13,11 @@ from pathlib import Path
 _TMP = tempfile.mkdtemp(prefix="am-test-")
 os.environ["AGENTMAIL_HOME"] = _TMP
 
-import worker  # noqa: E402
+_WORKER_PY = Path(__file__).resolve().parent / "worker.py"
+_spec = importlib.util.spec_from_file_location("agentmail_worker", _WORKER_PY)
+assert _spec and _spec.loader
+worker = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(worker)
 
 
 def _agent(local: str = "a.noknok") -> dict:
