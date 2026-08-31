@@ -40,7 +40,7 @@ Source: `SPEC.md`. If it is not in the spec, it does not exist.
 ## UI match [x]
 Diff every new/changed screen vs existing Agents sidebar + Settings cards. Desktop + ~390 mobile. No new color language.
 
-## Hunt
+## Hunt [x]
 Console, network, frontend, backend, channels (test@freecoffee.dev if a mail send is in scope), broken-path. Identities: `johnfrankromanojr@gmail.com` / Voice 504-535-4551 / `test@freecoffee.dev`.
 
 ## Clean run
