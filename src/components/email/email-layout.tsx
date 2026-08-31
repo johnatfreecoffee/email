@@ -1377,7 +1377,14 @@ export function EmailLayout() {
             mobileView === "folders" ? "mc-pane-off" : ""
           }`}
         >
-          <AgentKanban onMobileMenuClick={() => setMobileView("folders")} />
+          <AgentKanban
+            onMobileMenuClick={() => setMobileView("folders")}
+            agents={domains.flatMap((d) =>
+              (d.addresses || [])
+                .filter((a) => a.is_active && isAgentAddress(a))
+                .map((a) => ({ local: a.address, label: a.display_name || a.address }))
+            )}
+          />
         </div>
       ) : (
       <>

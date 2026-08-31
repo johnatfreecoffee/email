@@ -82,8 +82,10 @@ function agentLabel(local: string): string {
 
 export function AgentKanban({
   onMobileMenuClick,
+  agents: agentCatalog = [],
 }: {
   onMobileMenuClick?: () => void;
+  agents?: { local: string; label: string }[];
 }) {
   const [jobs, setJobs] = useState<AgentJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -166,10 +168,20 @@ export function AgentKanban({
   }, [selectedId]);
 
   const agents = useMemo(() => {
-    const set = new Set<string>();
-    for (const j of jobs) if (j.agent_local) set.add(j.agent_local);
-    return [...set].sort();
-  }, [jobs]);
+    const seen = new Set<string>();
+    const out: { local: string; label: string }[] = [];
+    for (const a of agentCatalog) {
+      if (!a.local || seen.has(a.local)) continue;
+      seen.add(a.local);
+      out.push(a);
+    }
+    for (const j of jobs) {
+      if (!j.agent_local || seen.has(j.agent_local)) continue;
+      seen.add(j.agent_local);
+      out.push({ local: j.agent_local, label: agentLabel(j.agent_local) });
+    }
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+  }, [agentCatalog, jobs]);
 
   const byStage = useMemo(() => {
     const map: Record<Stage, AgentJob[]> = {
@@ -239,41 +251,67 @@ export function AgentKanban({
           Kanban
         </span>
         <div className="flex-1" />
-        <select
-          value={agent}
-          onChange={(e) => setAgent(e.target.value)}
-          className="h-7 rounded-md text-[12px] px-2 border bg-transparent"
-          style={{ borderColor: "var(--mc-border)", color: "var(--mc-text-secondary)" }}
-        >
-          <option value="">All agents</option>
-          {agents.map((a) => (
-            <option key={a} value={a}>
-              {agentLabel(a)}
-            </option>
-          ))}
-        </select>
-        <select
-          value={stage}
-          onChange={(e) => setStage((e.target.value || "") as "" | Stage)}
-          className="h-7 rounded-md text-[12px] px-2 border bg-transparent"
-          style={{ borderColor: "var(--mc-border)", color: "var(--mc-text-secondary)" }}
-        >
-          <option value="">All stages</option>
-          {STAGES.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
         <button
           type="button"
           onClick={() => load()}
-          className="h-7 w-7 flex items-center justify-center rounded-md"
+          className="p-1.5 rounded-md"
           style={{ color: "var(--mc-text-muted)" }}
           aria-label="Refresh"
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw className="h-4 w-4" />
         </button>
+      </div>
+      <div
+        className={`flex flex-wrap items-center gap-1.5 px-3 py-2 ${selectedId ? "hidden md:flex" : ""}`}
+        style={{ borderBottom: "1px solid var(--mc-border)" }}
+      >
+        <button
+          type="button"
+          onClick={() => setAgent("")}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
+            !agent ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
+          }`}
+        >
+          All agents
+        </button>
+        {agents.map((a) => (
+          <button
+            key={a.local}
+            type="button"
+            onClick={() => setAgent(a.local === agent ? "" : a.local)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium max-w-[140px] ${
+              agent === a.local ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
+            }`}
+          >
+            <span className="truncate">{a.label}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        className={`flex flex-wrap items-center gap-1.5 px-3 py-2 ${selectedId ? "hidden md:flex" : ""}`}
+        style={{ borderBottom: "1px solid var(--mc-border)" }}
+      >
+        <button
+          type="button"
+          onClick={() => setStage("")}
+          className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
+            !stage ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
+          }`}
+        >
+          All
+        </button>
+        {STAGES.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => setStage(stage === s.id ? "" : s.id)}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
+              stage === s.id ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
+            }`}
+          >
+            {s.label}
+          </button>
+        ))}
       </div>
 
       {error && (
@@ -299,7 +337,45 @@ export function AgentKanban({
               </div>
             </div>
           ) : (
-            <div className="h-full min-h-0 grid grid-cols-5 gap-2 p-2 min-w-[720px]">
+            <>
+            <div className="md:hidden p-3 space-y-4 overflow-y-auto h-full">
+              {STAGES.filter((col) => !stage || stage === col.id).map((col) => (
+                <div key={col.id}>
+                  <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+                    {col.label}
+                    <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+                  </div>
+                  <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+                    {byStage[col.id].length === 0 ? (
+                      <div className="px-3 py-2.5 text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
+                        None
+                      </div>
+                    ) : (
+                      byStage[col.id].map((job, i, arr) => (
+                        <button
+                          key={job.id}
+                          type="button"
+                          onClick={() => setSelectedId(job.id)}
+                          className="w-full text-left px-3 py-2.5 min-h-[44px]"
+                          style={{
+                            borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)",
+                            backgroundColor: selectedId === job.id ? "var(--mc-accent-bg)" : "transparent",
+                          }}
+                        >
+                          <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
+                            {job.base_subject || "(no subject)"}
+                          </div>
+                          <div className="text-[11px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+                            {agentLabel(job.agent_local)} · {Math.max(1, Number(job.used_k) || 1)}/500K · {relTime(job.last_reply_at || job.updated_at)}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:grid h-full min-h-0 grid-cols-5 gap-2 p-2">
               {STAGES.map((col) => (
                 <div
                   key={col.id}
@@ -307,45 +383,43 @@ export function AgentKanban({
                   style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
                 >
                   <div
-                    className="flex-shrink-0 px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide"
-                    style={{ color: "var(--mc-text-muted)" }}
+                    className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold"
+                    style={{ color: "var(--mc-text-faint)" }}
                   >
                     {col.label}
                     <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
                   </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto px-1.5 pb-2 space-y-1.5">
-                    {byStage[col.id].map((job) => {
-                      const active = selectedId === job.id;
-                      return (
-                        <button
-                          key={job.id}
-                          type="button"
-                          onClick={() => setSelectedId(job.id)}
-                          className="w-full text-left rounded-[8px] px-2.5 py-2"
-                          style={{
-                            backgroundColor: active ? "var(--mc-accent-bg)" : "var(--mc-card)",
-                            boxShadow: "0 0.5px 0 var(--mc-card-border)",
-                          }}
-                        >
-                          <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
-                            {job.base_subject || "(no subject)"}
-                          </div>
-                          <div className="mt-0.5 flex items-center gap-2 text-[11px]" style={{ color: "var(--mc-text-muted)" }}>
-                            <span className="truncate">{agentLabel(job.agent_local)}</span>
-                            <span className="tabular-nums flex-shrink-0">
-                              {Math.max(1, Number(job.used_k) || 1)}/500K
-                            </span>
-                          </div>
-                          <div className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
-                            {relTime(job.last_reply_at || job.updated_at)}
-                          </div>
-                        </button>
-                      );
-                    })}
+                  <div className="flex-1 min-h-0 overflow-y-auto">
+                    {byStage[col.id].map((job, i, arr) => (
+                      <button
+                        key={job.id}
+                        type="button"
+                        onClick={() => setSelectedId(job.id)}
+                        className="w-full text-left px-3 py-2"
+                        style={{
+                          borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)",
+                          backgroundColor: selectedId === job.id ? "var(--mc-accent-bg)" : "transparent",
+                        }}
+                      >
+                        <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
+                          {job.base_subject || "(no subject)"}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-[11px]" style={{ color: "var(--mc-text-muted)" }}>
+                          <span className="truncate">{agentLabel(job.agent_local)}</span>
+                          <span className="tabular-nums flex-shrink-0">
+                            {Math.max(1, Number(job.used_k) || 1)}/500K
+                          </span>
+                        </div>
+                        <div className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+                          {relTime(job.last_reply_at || job.updated_at)}
+                        </div>
+                      </button>
+                    ))}
                   </div>
                 </div>
               ))}
             </div>
+            </>
           )}
         </div>
 
@@ -383,10 +457,10 @@ export function AgentKanban({
                   type="button"
                   onClick={remind}
                   disabled={remindBusy || !!selected.remind_requested_at}
-                  className="h-8 px-3 rounded-md text-[13px] font-medium"
+                  className="h-8 px-2 rounded-md text-[13px] font-medium"
                   style={{
-                    backgroundColor: "var(--mc-accent)",
-                    color: "#fff",
+                    color: "var(--mc-accent)",
+                    backgroundColor: "var(--mc-accent-bg)",
                     opacity: remindBusy || selected.remind_requested_at ? 0.6 : 1,
                   }}
                 >
