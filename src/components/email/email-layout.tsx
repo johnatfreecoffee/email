@@ -78,6 +78,8 @@ export interface EmailMessage {
     content_type: string;
     size_bytes: number;
     storage_path: string;
+    signed_url?: string | null;
+    url?: string | null;
   }>;
 }
 

@@ -1,4 +1,4 @@
-import { Env, jsonResponse, errorResponse, optionsResponse, supabaseQuery, checkAuth } from "./_shared";
+import { Env, jsonResponse, errorResponse, optionsResponse, supabaseQuery, checkAuth, withSignedAttachmentUrls } from "./_shared";
 
 interface CFContext {
   request: Request;
@@ -64,7 +64,8 @@ export const onRequest = async (context: CFContext) => {
       );
 
       const message = data[0];
-      message.attachments = Array.isArray(attRes.data) ? attRes.data : [];
+      const rawAtts = Array.isArray(attRes.data) ? (attRes.data as Array<Record<string, unknown>>) : [];
+      message.attachments = await withSignedAttachmentUrls(env, rawAtts);
 
       return jsonResponse(message, 200, origin);
     }

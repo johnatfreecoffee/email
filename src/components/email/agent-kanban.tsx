@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, Columns3, Loader2, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Loader2, Paperclip, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
+import { AttachmentChips, type MailAttachment } from "./attachment-chips";
 
 type Stage = "received" | "working" | "waiting" | "done" | "stuck";
 
@@ -13,6 +14,14 @@ const STAGES: { id: Stage; label: string }[] = [
   { id: "done", label: "Done" },
   { id: "stuck", label: "Stuck" },
 ];
+
+const STAGE_TONE: Record<Stage, { fg: string; bg: string; bar: string }> = {
+  received: { fg: "var(--mc-accent)", bg: "var(--mc-accent-bg)", bar: "var(--mc-accent)" },
+  working: { fg: "var(--mc-warning)", bg: "var(--mc-warning-bg)", bar: "var(--mc-warning)" },
+  waiting: { fg: "var(--mc-info)", bg: "var(--mc-info-bg)", bar: "var(--mc-info)" },
+  done: { fg: "var(--mc-success)", bg: "var(--mc-success-bg)", bar: "var(--mc-success)" },
+  stuck: { fg: "var(--mc-danger)", bg: "var(--mc-danger-bg)", bar: "var(--mc-danger)" },
+};
 
 const KIND_LABEL: Record<string, string> = {
   received: "Received",
@@ -59,6 +68,9 @@ interface JobMessage {
   received_at: string;
   direction: string;
   preview: string;
+  body?: string;
+  body_html?: string;
+  attachments?: MailAttachment[];
 }
 
 function relTime(iso: string | null | undefined): string {
@@ -97,10 +109,27 @@ function usedTag(job: AgentJob): string {
   return `${n}/500K`;
 }
 
-function pillClass(on: boolean): string {
-  return `flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
-    on ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
-  }`;
+function StageDot({ stage }: { stage: Stage }) {
+  return (
+    <span
+      className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+      style={{ backgroundColor: STAGE_TONE[stage].bar }}
+      aria-hidden
+    />
+  );
+}
+
+function StageChip({ stage }: { stage: Stage }) {
+  const tone = STAGE_TONE[stage];
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold"
+      style={{ color: tone.fg, backgroundColor: tone.bg }}
+    >
+      <StageDot stage={stage} />
+      {KIND_LABEL[stage] || stage}
+    </span>
+  );
 }
 
 function JobCard({
@@ -114,6 +143,7 @@ function JobCard({
   last: boolean;
   onClick: () => void;
 }) {
+  const tone = STAGE_TONE[job.stage] || STAGE_TONE.received;
   return (
     <button
       type="button"
@@ -122,6 +152,7 @@ function JobCard({
       style={{
         borderBottom: last ? "none" : "1px solid var(--mc-border-subtle)",
         backgroundColor: selected ? "var(--mc-accent-bg)" : "transparent",
+        borderLeft: `3px solid ${tone.bar}`,
       }}
     >
       <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
@@ -135,6 +166,138 @@ function JobCard({
         {relTime(job.last_reply_at || job.updated_at)}
       </div>
     </button>
+  );
+}
+
+function ThreadMail({
+  message,
+  expanded,
+  onToggle,
+}: {
+  message: JobMessage;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const files = Array.isArray(message.attachments) ? message.attachments : [];
+  const body = (message.body || message.preview || "").trim();
+  const html = (message.body_html || "").trim();
+  return (
+    <div className="rounded-[10px] min-w-0 overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full text-left px-3 py-2.5 min-w-0"
+      >
+        <div className="flex items-baseline justify-between gap-2 min-w-0">
+          <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
+            {message.from_name || message.from || (message.direction === "outbound" ? "Agent" : "Unknown")}
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {files.length > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+                <Paperclip className="h-3 w-3" />
+                {files.length}
+              </span>
+            )}
+            <span className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+              {clock(message.received_at)}
+            </span>
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
+            )}
+          </div>
+        </div>
+        {!expanded && (
+          <div className="text-[12px] mt-0.5 truncate" style={{ color: "var(--mc-text-muted)" }}>
+            {message.preview || message.subject || "(no preview)"}
+          </div>
+        )}
+      </button>
+      {expanded && (
+        <div className="px-3 pb-3 space-y-2">
+          {html ? (
+            <iframe
+              srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>:root{color-scheme:light}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.55;color:#1a1a1a!important;background:#fff!important;margin:0;padding:8px;word-wrap:break-word}a{color:#007AFF!important}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`}
+              sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              className="w-full min-h-[120px] rounded-md"
+              title={message.subject || "Email"}
+              style={{ background: "#fff", border: "1px solid var(--mc-border-subtle)" }}
+              onLoad={(e) => {
+                const iframe = e.target as HTMLIFrameElement;
+                const doc = iframe.contentDocument;
+                if (!doc) return;
+                iframe.style.height = Math.min((doc.body?.scrollHeight || 120) + 16, 720) + "px";
+              }}
+            />
+          ) : (
+            <pre
+              className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed"
+              style={{ color: "var(--mc-text)" }}
+            >
+              {body || "(no content)"}
+            </pre>
+          )}
+          <AttachmentChips attachments={files} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThreadSection({ messages }: { messages: JobMessage[] }) {
+  const ids = useMemo(() => messages.map((m) => m.id), [messages]);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(ids));
+  const allOpen = ids.length > 0 && ids.every((id) => open.has(id));
+
+  function toggle(id: string) {
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2 px-3 pb-1.5">
+        <div className="text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
+          Thread
+        </div>
+        {messages.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setOpen(allOpen ? new Set() : new Set(ids))}
+            className="text-[11px]"
+            style={{ color: "var(--mc-accent)" }}
+          >
+            {allOpen ? "Collapse" : "Read all"}
+          </button>
+        )}
+      </div>
+      {messages.length === 0 ? (
+        <div
+          className="rounded-[10px] px-3 py-2.5 text-[13px]"
+          style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}
+        >
+          No messages on this card
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {messages.map((m) => (
+            <ThreadMail
+              key={m.id}
+              message={m}
+              expanded={open.has(m.id)}
+              onToggle={() => toggle(m.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -349,14 +512,18 @@ export function AgentKanban({
             <div
               key={col.id}
               className="min-h-0 min-w-0 flex flex-col rounded-[10px] overflow-hidden"
-              style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
+              style={{
+                backgroundColor: "var(--mc-bg-tertiary)",
+                boxShadow: `inset 0 3px 0 ${STAGE_TONE[col.id].bar}`,
+              }}
             >
               <div
-                className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold truncate"
-                style={{ color: "var(--mc-text-faint)" }}
+                className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold truncate flex items-center gap-1.5"
+                style={{ color: STAGE_TONE[col.id].fg }}
               >
+                <StageDot stage={col.id} />
                 {col.label}
-                <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+                <span className="ml-0.5 tabular-nums opacity-80">{byStage[col.id].length}</span>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto">
                 {byStage[col.id].map((job, i, arr) => (
@@ -378,11 +545,21 @@ export function AgentKanban({
       <div className="p-3 space-y-4 overflow-y-auto h-full">
         {cols.filter((col) => byStage[col.id].length > 0).map((col) => (
           <div key={col.id}>
-            <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+            <div
+              className="text-[11px] font-semibold px-3 pb-1.5 flex items-center gap-1.5"
+              style={{ color: STAGE_TONE[col.id].fg }}
+            >
+              <StageDot stage={col.id} />
               {col.label}
-              <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+              <span className="ml-0.5 tabular-nums opacity-80">{byStage[col.id].length}</span>
             </div>
-            <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+            <div
+              className="rounded-[10px] overflow-hidden"
+              style={{
+                backgroundColor: "var(--mc-bg-tertiary)",
+                boxShadow: `inset 3px 0 0 ${STAGE_TONE[col.id].bar}`,
+              }}
+            >
               {byStage[col.id].map((job, i, arr) => (
                 <JobCard
                   key={job.id}
@@ -453,8 +630,10 @@ export function AgentKanban({
         <div className="text-[16px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>
           {selected.base_subject || "(no subject)"}
         </div>
-        <div className="text-[12px] mt-0.5 truncate" style={{ color: "var(--mc-text-muted)" }}>
-          {agentLabel(selected.agent_local)} · {KIND_LABEL[selected.stage] || selected.stage} · {usedTag(selected)}
+        <div className="text-[12px] mt-1 flex items-center gap-2 flex-wrap" style={{ color: "var(--mc-text-muted)" }}>
+          <span className="truncate">{agentLabel(selected.agent_local)}</span>
+          <StageChip stage={selected.stage} />
+          <span className="tabular-nums">{usedTag(selected)}</span>
         </div>
       </div>
       <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
@@ -525,38 +704,10 @@ export function AgentKanban({
           )}
         </div>
       </div>
-      <div>
-        <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
-          Thread
-        </div>
-        {(detail.messages || []).length === 0 ? (
-          <div className="rounded-[10px] px-3 py-2.5 text-[13px]" style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}>
-            No messages on this card
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {detail.messages.map((m) => (
-              <div
-                key={m.id}
-                className="rounded-[10px] px-3 py-2.5 min-w-0"
-                style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
-              >
-                <div className="flex items-baseline justify-between gap-2 min-w-0">
-                  <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
-                    {m.from_name || m.from}
-                  </div>
-                  <div className="text-[11px] flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
-                    {clock(m.received_at)}
-                  </div>
-                </div>
-                <div className="text-[12px] mt-0.5 break-words" style={{ color: "var(--mc-text-muted)" }}>
-                  {m.preview || m.subject}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <ThreadSection
+        key={(detail.messages || []).map((m) => m.id).join("|") || "empty"}
+        messages={detail.messages || []}
+      />
     </div>
   );
 
@@ -657,7 +808,16 @@ export function AgentKanban({
           className="flex flex-wrap items-center gap-1.5 px-3 py-2 flex-shrink-0"
           style={{ borderBottom: "1px solid var(--mc-border, rgba(255,255,255,0.06))" }}
         >
-          <button type="button" onClick={() => setStage("")} className={pillClass(!stage)}>
+          <button
+            type="button"
+            onClick={() => setStage("")}
+            className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all"
+            style={
+              !stage
+                ? { backgroundColor: "var(--mc-accent-bg)", color: "var(--mc-accent)" }
+                : { color: "var(--mc-text-muted)" }
+            }
+          >
             All
             {jobs.length > 0 && (
               <span className="text-[10px] font-semibold tabular-nums opacity-70">{jobs.length}</span>
@@ -665,13 +825,21 @@ export function AgentKanban({
           </button>
           {STAGES.map((s) => {
             const count = byStage[s.id].length;
+            const on = stage === s.id;
+            const tone = STAGE_TONE[s.id];
             return (
               <button
                 key={s.id}
                 type="button"
-                onClick={() => setStage(stage === s.id ? "" : s.id)}
-                className={pillClass(stage === s.id)}
+                onClick={() => setStage(on ? "" : s.id)}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all"
+                style={
+                  on
+                    ? { backgroundColor: tone.bg, color: tone.fg }
+                    : { color: "var(--mc-text-muted)" }
+                }
               >
+                <StageDot stage={s.id} />
                 {s.label}
                 {count > 0 && (
                   <span className="text-[10px] font-semibold tabular-nums opacity-70">{count}</span>

@@ -479,5 +479,45 @@ class RemindSession(unittest.TestCase):
             worker.curl_json = orig
 
 
+class InboundFiles(unittest.TestCase):
+    def test_safe_filename_strips_paths(self):
+        self.assertEqual(worker.safe_filename("../../x.png"), "x.png")
+        self.assertEqual(worker.safe_filename("My Shot 1.PNG"), "My_Shot_1.PNG")
+        self.assertTrue(worker.safe_filename("") )
+
+    def test_is_image_type(self):
+        self.assertTrue(worker.is_image_type("image/png", "a.png"))
+        self.assertTrue(worker.is_image_type("", "shot.HEIC"))
+        self.assertTrue(worker.is_image_type("image/jpeg; charset=binary", "x.jpg"))
+        self.assertFalse(worker.is_image_type("application/pdf", "a.pdf"))
+
+    def test_format_files_block_empty(self):
+        self.assertIn("No files", worker.format_files_block([]))
+
+    def test_format_files_block_paths(self):
+        block = worker.format_files_block(
+            [
+                {
+                    "path": "/tmp/a.png",
+                    "filename": "a.png",
+                    "content_type": "image/png",
+                    "size_bytes": 12,
+                    "is_image": True,
+                }
+            ]
+        )
+        self.assertIn("/tmp/a.png", block)
+        self.assertIn("screenshot", block.lower())
+        self.assertIn("file reader", block.lower())
+
+    def test_storage_object_url_encodes_segments(self):
+        url = worker.storage_object_url(
+            {"SUPABASE_URL": "https://example.supabase.co"},
+            "freecoffee.dev/abc/My Shot.png",
+        )
+        self.assertIn("/object/email-attachments/freecoffee.dev/", url)
+        self.assertIn("My%20Shot.png", url)
+
+
 if __name__ == "__main__":
     unittest.main()

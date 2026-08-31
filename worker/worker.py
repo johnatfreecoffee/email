@@ -16,6 +16,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 ROOT = Path(os.environ.get("AGENTMAIL_HOME") or (Path.home() / "Library" / "AgentMail"))
 CONFIG = ROOT / "config.env"
@@ -108,6 +109,21 @@ def load_config() -> dict[str, str]:
     return cfg
 
 
+IMAGE_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "image/tiff",
+    "image/bmp",
+}
+MAX_INBOUND_FILES = 20
+MAX_INBOUND_BYTES = 20 * 1024 * 1024
+
+
 def curl_json(method: str, url: str, headers: dict[str, str], body: dict | None = None) -> tuple[int, object]:
     cmd = ["/usr/bin/curl", "-sS", "-X", method, url, "-w", "\n%{http_code}"]
     for k, v in headers.items():
@@ -131,6 +147,141 @@ def curl_json(method: str, url: str, headers: dict[str, str], body: dict | None 
         return code, json.loads(body_s)
     except json.JSONDecodeError:
         return code, body_s
+
+
+def curl_download(url: str, headers: dict[str, str], dest: Path, timeout: int = 120) -> bool:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = ["/usr/bin/curl", "-sS", "-L", "-f", "-o", str(dest), "--max-time", str(timeout)]
+    for k, v in headers.items():
+        cmd += ["-H", f"{k}: {v}"]
+    cmd.append(url)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 15)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return r.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+
+
+def safe_filename(name: str) -> str:
+    base = Path(str(name or "file")).name
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "file"
+    return base[:180]
+
+
+def is_image_type(content_type: str, filename: str = "") -> bool:
+    t = (content_type or "").lower().split(";")[0].strip()
+    if t in IMAGE_TYPES or t.startswith("image/"):
+        return True
+    return bool(re.search(r"\.(png|jpe?g|gif|webp|heic|heif|bmp|tiff?)$", filename or "", re.I))
+
+
+def maybe_jpeg_preview(path: Path) -> Path:
+    if path.suffix.lower() not in (".heic", ".heif"):
+        return path
+    sips = Path("/usr/bin/sips")
+    if not sips.exists():
+        return path
+    out = path.with_suffix(".jpg")
+    try:
+        r = subprocess.run(
+            [str(sips), "-s", "format", "jpeg", str(path), "--out", str(out)],
+            capture_output=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return path
+    if r.returncode == 0 and out.exists() and out.stat().st_size > 0:
+        return out
+    return path
+
+
+def storage_object_url(cfg: dict, storage_path: str) -> str:
+    base = sb_base(cfg)
+    encoded = "/".join(quote(p, safe="") for p in str(storage_path).split("/") if p)
+    return f"{base}/storage/v1/object/email-attachments/{encoded}"
+
+
+def fetch_attachments(cfg: dict, message_id: str) -> list[dict]:
+    base = sb_base(cfg)
+    if not base or not message_id or not UUID_RE.match(str(message_id)):
+        return []
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/email_attachments?message_id=eq.{message_id}"
+            f"&select=id,filename,content_type,size_bytes,storage_path&order=filename.asc",
+            sb_headers(cfg),
+        )
+        if code == 200 and isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+    except Exception as e:
+        log(f"attachments fetch failed: {e}")
+    return []
+
+
+def format_files_block(files: list[dict]) -> str:
+    if not files:
+        return "No files were on this email."
+    lines = [
+        "Attached files (read these with tools so you can see screenshots and documents):"
+    ]
+    for f in files:
+        kind = "image" if f.get("is_image") else "file"
+        lines.append(
+            f"- {f.get('path')}  ({f.get('filename')}, {kind}, "
+            f"{f.get('content_type') or 'unknown'}, {int(f.get('size_bytes') or 0)} bytes)"
+        )
+    lines.append(
+        "If a path is an image or PDF, open it with the file reader before you answer. "
+        "Do not skip screenshots."
+    )
+    return "\n".join(lines)
+
+
+def materialize_attachments(cfg: dict, message_id: str, dest_dir: Path) -> list[dict]:
+    """Download inbound files onto disk so Grok can read screenshots."""
+    if not message_id or not UUID_RE.match(str(message_id)):
+        return []
+    rows = fetch_attachments(cfg, message_id)
+    if not rows:
+        return []
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    used_names: set[str] = set()
+    out: list[dict] = []
+    for row in rows[:MAX_INBOUND_FILES]:
+        filename = safe_filename(str(row.get("filename") or "file"))
+        if filename in used_names:
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            n = 2
+            while f"{stem}-{n}{suffix}" in used_names:
+                n += 1
+            filename = f"{stem}-{n}{suffix}"
+        used_names.add(filename)
+        storage_path = str(row.get("storage_path") or "")
+        if not storage_path or storage_path.startswith("pending/"):
+            continue
+        size = int(row.get("size_bytes") or 0)
+        if size > MAX_INBOUND_BYTES:
+            log(f"skip large file {filename} bytes={size}")
+            continue
+        dest = dest_dir / filename
+        url = storage_object_url(cfg, storage_path)
+        if not curl_download(url, sb_headers(cfg), dest):
+            log(f"file download failed {filename}")
+            continue
+        dest = maybe_jpeg_preview(dest)
+        out.append(
+            {
+                "id": row.get("id"),
+                "filename": dest.name,
+                "path": str(dest),
+                "content_type": row.get("content_type") or "",
+                "size_bytes": dest.stat().st_size,
+                "is_image": is_image_type(str(row.get("content_type") or ""), dest.name),
+            }
+        )
+    return out
 
 
 def load_processed() -> set[str]:
@@ -1470,6 +1621,20 @@ def run_grok(
     workspace = agent["workspace"]
     max_turns = cfg.get("MAX_TURNS", "40")
     body = plain_text(msg)
+    mid = str(msg.get("id") or "")
+    files: list[dict] = []
+    if mid and UUID_RE.match(mid):
+        dest = STATE_DIR / "inbound-files" / str(session_id) / mid
+        try:
+            files = materialize_attachments(cfg, mid, dest)
+        except Exception as e:
+            log(f"files failed session={session_id}: {e}")
+            files = []
+    files_block = format_files_block(files)
+    log(
+        f"files session={session_id} n={len(files)} "
+        f"names={[f.get('filename') for f in files][:8]}"
+    )
     subject = msg.get("subject") or "(no subject)"
     from_addr = msg.get("from_address") or ""
     display = agent["display_name"]
@@ -1590,6 +1755,8 @@ Subject: {subject}
 Email body:
 {body}
 
+{files_block}
+
 {lock}
 
 Rules:
@@ -1599,7 +1766,7 @@ Rules:
 - Prefer finishing with a partial useful answer over running forever.
 """
 
-    append_history(session_id, "user", f"Subject: {subject}\n\n{body}")
+    append_history(session_id, "user", f"Subject: {subject}\n\n{body}\n\n{files_block}")
 
     cmd = [grok, "--cwd", workspace]
     if flags.get("always_approve", True):

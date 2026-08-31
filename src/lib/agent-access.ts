@@ -132,7 +132,7 @@ export function howItWorks() {
       {
         n: 1,
         title: "Email hits an agent mailbox",
-        body: "Someone writes an a.* / e.* mailbox you created under Agents → Mailboxes. The worker picks it up.",
+        body: "Someone writes an a.* / e.* mailbox you created under Agents → Mailboxes. The worker picks it up, including screenshots and other files on the email so Grok can read them.",
       },
       {
         n: 2,

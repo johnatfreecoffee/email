@@ -11,8 +11,6 @@ import {
   Trash2,
   Archive,
   Paperclip,
-  Download,
-  ExternalLink,
   Copy,
   Check,
   MailOpen,
@@ -24,6 +22,7 @@ import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import type { EmailMessage } from "./email-layout";
 import { useSettings } from "@/lib/settings";
 import { stripRemoteContent } from "./remote-content";
+import { AttachmentChips } from "./attachment-chips";
 
 // Session-lifetime "load remote content" grants, keyed by message id.
 const revealedRemote = new Set<string>();
@@ -66,12 +65,6 @@ function formatReaderDate(dateStr: string): string {
     return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
   }
   return `${d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}, ${time}`;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function CopyableEmail({ email, name }: { email: string; name?: string }) {
@@ -473,57 +466,7 @@ function MessageReaderBody({
       {/* Attachments bar */}
       {message.attachments && message.attachments.length > 0 && (
         <div className="px-6 py-3" style={{ borderBottom: "1px solid var(--mc-border)", backgroundColor: "var(--mc-bg-hover)" }}>
-          <div className="flex items-center gap-2 mb-2">
-            <Paperclip className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
-            <span className="text-[12px]" style={{ color: "var(--mc-text-faint)" }}>
-              {message.attachments.length} attachment{message.attachments.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {message.attachments.map((att) => {
-              const supabaseUrl =
-                (typeof window !== "undefined"
-                  ? document.querySelector('meta[name="supabase-url"]')?.getAttribute("content")
-                  : null) ||
-                process.env.NEXT_PUBLIC_SUPABASE_URL ||
-                "";
-              const downloadUrl = `${supabaseUrl}/storage/v1/object/public/email-attachments/${att.storage_path}`;
-              const isImage = att.content_type?.startsWith("image/");
-              return (
-                <a
-                  key={att.id}
-                  href={downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  download={att.filename}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-[12px] transition-colors cursor-pointer group"
-                  style={{
-                    backgroundColor: "var(--mc-bg-active)",
-                    color: "var(--mc-text-secondary)",
-                  }}
-                  onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLElement).style.color = "var(--mc-accent)";
-                  }}
-                  onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.color = "var(--mc-text-secondary)";
-                  }}
-                >
-                  {isImage ? (
-                    <img
-                      src={downloadUrl}
-                      alt={att.filename}
-                      className="h-8 w-8 rounded object-cover flex-shrink-0"
-                    />
-                  ) : (
-                    <Download className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
-                  )}
-                  <span className="truncate max-w-[150px]">{att.filename}</span>
-                  <span className="text-[10px]" style={{ color: "var(--mc-text-faint)" }}>{formatSize(att.size_bytes)}</span>
-                  <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100" style={{ color: "var(--mc-text-faint)" }} />
-                </a>
-              );
-            })}
-          </div>
+          <AttachmentChips attachments={message.attachments} />
         </div>
       )}
 
@@ -866,6 +809,12 @@ function ConversationCard({
             <span className="text-[11px] flex-shrink-0 tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
               {formatReaderDate(msg.received_at)}
             </span>
+            {msg.attachments && msg.attachments.length > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[11px] flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
+                <Paperclip className="h-3 w-3" />
+                {msg.attachments.length}
+              </span>
+            )}
             {expanded ? (
               <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
             ) : (
@@ -952,6 +901,12 @@ function ConversationCard({
             <pre className="text-[13px] whitespace-pre-wrap font-sans leading-relaxed" style={{ color: "var(--mc-text-secondary)" }}>
               {msg.body_text || "Loading…"}
             </pre>
+          )}
+
+          {msg.attachments && msg.attachments.length > 0 && (
+            <div className="mt-3">
+              <AttachmentChips attachments={msg.attachments} />
+            </div>
           )}
 
           <div className="flex items-center gap-2 mt-3">

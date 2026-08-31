@@ -1,4 +1,12 @@
-import { Env, jsonResponse, errorResponse, optionsResponse, supabaseQuery, checkAuth } from "./_shared";
+import {
+  Env,
+  jsonResponse,
+  errorResponse,
+  optionsResponse,
+  supabaseQuery,
+  checkAuth,
+  withSignedAttachmentUrls,
+} from "./_shared";
 
 interface CFContext {
   request: Request;
@@ -50,20 +58,56 @@ async function loadEvents(env: Env, jobId: string) {
   );
 }
 
+const BODY_TEXT_CAP = 50_000;
+const BODY_HTML_CAP = 150_000;
+
+function clip(text: unknown, cap: number): string {
+  if (typeof text !== "string" || !text) return "";
+  return text.length > cap ? text.slice(0, cap) : text;
+}
+
+async function loadAttachmentsByMessage(env: Env, ids: string[]) {
+  const map = new Map<string, Array<Record<string, unknown>>>();
+  const clean = ids.filter((id) => UUID_RE.test(id));
+  if (!clean.length) return map;
+  const res = await supabaseQuery(
+    env,
+    `/email_attachments?message_id=in.(${clean.join(",")})&select=id,message_id,filename,content_type,size_bytes,storage_path&order=filename.asc`
+  );
+  if (!res.ok || !Array.isArray(res.data)) return map;
+  const signed = await withSignedAttachmentUrls(env, res.data as Array<Record<string, unknown>>);
+  for (const row of signed) {
+    const mid = String(row.message_id || "");
+    if (!mid) continue;
+    const list = map.get(mid) || [];
+    list.push(row);
+    map.set(mid, list);
+  }
+  return map;
+}
+
 async function loadMessages(env: Env, job: JobRow) {
-  const select = "id,from_address,from_name,subject,received_at,direction,body_text,thread_id";
-  const map = (rows: unknown) => {
+  const select =
+    "id,from_address,from_name,to_addresses,cc_addresses,subject,received_at,direction,body_text,body_html,thread_id";
+  const mapRows = async (rows: unknown) => {
     if (!Array.isArray(rows)) return [];
+    const ids = rows.map((row) => String((row as Record<string, unknown>).id || "")).filter(Boolean);
+    const atts = await loadAttachmentsByMessage(env, ids);
     return rows.map((row) => {
       const m = row as Record<string, unknown>;
+      const id = String(m.id || "");
       return {
-        id: m.id,
+        id,
         from: m.from_address || "",
         from_name: m.from_name || "",
+        to: m.to_addresses || [],
         subject: m.subject || "",
         received_at: m.received_at,
         direction: m.direction,
         preview: truncatePreview(m.body_text),
+        body: clip(m.body_text, BODY_TEXT_CAP),
+        body_html: clip(m.body_html, BODY_HTML_CAP),
+        attachments: atts.get(id) || [],
       };
     });
   };
@@ -74,7 +118,7 @@ async function loadMessages(env: Env, job: JobRow) {
       env,
       `/email_messages?thread_id=eq.${q(threadId)}&select=${select}&order=received_at.asc&limit=50`
     );
-    if (byThread.ok && Array.isArray(byThread.data) && byThread.data.length) return map(byThread.data);
+    if (byThread.ok && Array.isArray(byThread.data) && byThread.data.length) return mapRows(byThread.data);
   }
 
   const lastId = typeof job.last_message_id === "string" ? job.last_message_id : "";
@@ -87,9 +131,9 @@ async function loadMessages(env: Env, job: JobRow) {
         env,
         `/email_messages?thread_id=eq.${q(tid)}&select=${select}&order=received_at.asc&limit=50`
       );
-      if (byThread.ok && Array.isArray(byThread.data) && byThread.data.length) return map(byThread.data);
+      if (byThread.ok && Array.isArray(byThread.data) && byThread.data.length) return mapRows(byThread.data);
     }
-    if (one.ok && row) return map([row]);
+    if (one.ok && row) return mapRows([row]);
   }
   return [];
 }

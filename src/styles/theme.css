@@ -31,6 +31,11 @@
   --mc-warning: #FF9500;
   --mc-danger: #FF3B30;
   --mc-star: #FF9500;
+  --mc-info: #32ADE6;
+  --mc-info-bg: rgba(50, 173, 230, 0.16);
+  --mc-success-bg: rgba(52, 199, 89, 0.16);
+  --mc-warning-bg: rgba(255, 149, 0, 0.16);
+  --mc-danger-bg: rgba(255, 59, 48, 0.16);
 
   --mc-header-bg: rgba(243, 243, 247, 0.82);
   --mc-sidebar-bg: rgba(243, 243, 247, 0.82);
@@ -70,6 +75,11 @@
   --mc-warning: #FF9F0A;
   --mc-danger: #FF453A;
   --mc-star: #FF9F0A;
+  --mc-info: #64D2FF;
+  --mc-info-bg: rgba(100, 210, 255, 0.18);
+  --mc-success-bg: rgba(48, 209, 88, 0.18);
+  --mc-warning-bg: rgba(255, 159, 10, 0.18);
+  --mc-danger-bg: rgba(255, 69, 58, 0.18);
 
   --mc-header-bg: rgba(35, 35, 38, 0.75);
   --mc-sidebar-bg: rgba(35, 35, 38, 0.75);

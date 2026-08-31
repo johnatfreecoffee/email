@@ -138,6 +138,87 @@ export async function resendAPI(
   return { data, status: res.status, ok: res.ok };
 }
 
+/** Sign a private Storage object for browser <img> / <a href>. */
+export async function signStoragePath(
+  env: Env,
+  bucket: string,
+  path: string,
+  expiresIn = 86400
+): Promise<string | null> {
+  const clean = String(path || "").replace(/^\/+/, "");
+  if (!clean || !env.SUPABASE_URL || !env.SUPABASE_SERVICE_KEY) return null;
+  const encoded = clean
+    .split("/")
+    .filter(Boolean)
+    .map((p) => encodeURIComponent(p))
+    .join("/");
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/sign/${bucket}/${encoded}`, {
+      method: "POST",
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ expiresIn }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { signedURL?: string; signedUrl?: string };
+    const rel = data.signedURL || data.signedUrl;
+    if (!rel || typeof rel !== "string") return null;
+    if (/^https?:\/\//i.test(rel)) return rel;
+    const pathPart = rel.startsWith("/") ? rel : `/${rel}`;
+    return `${env.SUPABASE_URL}/storage/v1${pathPart}`;
+  } catch {
+    return null;
+  }
+}
+
+export async function withSignedAttachmentUrls(
+  env: Env,
+  rows: Array<Record<string, unknown>>
+): Promise<Array<Record<string, unknown>>> {
+  return Promise.all(
+    rows.map(async (row) => {
+      const storagePath = typeof row.storage_path === "string" ? row.storage_path : "";
+      const signed = storagePath ? await signStoragePath(env, "email-attachments", storagePath) : null;
+      const publicUrl = storagePath
+        ? `${env.SUPABASE_URL}/storage/v1/object/public/email-attachments/${storagePath}`
+        : "";
+      return {
+        ...row,
+        signed_url: signed || publicUrl || null,
+        url: signed || publicUrl || null,
+      };
+    })
+  );
+}
+
+export async function fetchStorageObject(
+  env: Env,
+  bucket: string,
+  path: string
+): Promise<Response | null> {
+  const clean = String(path || "").replace(/^\/+/, "");
+  if (!clean) return null;
+  const encoded = clean
+    .split("/")
+    .filter(Boolean)
+    .map((p) => encodeURIComponent(p))
+    .join("/");
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${bucket}/${encoded}`, {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+      },
+    });
+    return res.ok ? res : null;
+  } catch {
+    return null;
+  }
+}
+
 // Cloudflare DNS API helper
 export async function cloudflareDNS(
   env: Env,
