@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Columns3, Loader2, RefreshCw } from "lucide-react";
+import { ChevronLeft, Columns3, Loader2, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 
 type Stage = "received" | "working" | "waiting" | "done" | "stuck";
@@ -228,11 +228,11 @@ export function AgentKanban({
         <button
           type="button"
           className="md:hidden h-8 w-8 flex items-center justify-center rounded-md"
-          onClick={onMobileMenuClick}
+          onClick={() => (selectedId ? setSelectedId(null) : onMobileMenuClick?.())}
           style={{ color: "var(--mc-accent)" }}
-          aria-label="Mailboxes"
+          aria-label={selectedId ? "Board" : "Mailboxes"}
         >
-          <Columns3 className="h-4 w-4" />
+          <ChevronLeft className="h-5 w-5" />
         </button>
         <Columns3 className="hidden md:block h-[15px] w-[15px]" style={{ color: "var(--mc-accent)" }} />
         <span className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>
@@ -283,7 +283,7 @@ export function AgentKanban({
       )}
 
       <div className="flex-1 min-h-0 flex">
-        <div className="flex-1 min-w-0 overflow-x-auto">
+        <div className={`flex-1 min-w-0 overflow-x-auto ${selectedId ? "hidden md:block" : ""}`}>
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: "var(--mc-text-muted)" }}>
               <Loader2 className="h-5 w-5 animate-spin" />
@@ -350,7 +350,7 @@ export function AgentKanban({
         </div>
 
         <div
-          className="hidden md:flex w-[340px] flex-shrink-0 flex-col border-l overflow-hidden"
+          className={`${selectedId ? "flex" : "hidden md:flex"} w-full md:w-[340px] flex-shrink-0 flex-col md:border-l overflow-hidden`}
           style={{ borderColor: "var(--mc-border)", backgroundColor: "var(--mc-bg)" }}
         >
           {!selectedId ? (
