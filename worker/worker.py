@@ -2480,7 +2480,7 @@ def _execute_session_turn(
         grant=grant,
         store=cloud_store,
         first_name=first,
-        on_slow=send_status if looks_like_job(msg, q_only) else None,
+        on_slow=send_status if (looks_like_job(msg, q_only) or extra_instruction) else None,
         extra_instruction=extra_instruction,
     )
     history = load_history(sid)
