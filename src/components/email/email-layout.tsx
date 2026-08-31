@@ -9,12 +9,12 @@ import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
 import { SettingsModal } from "./settings/settings-modal";
-import { AgentBoard, AgentBoardDetail } from "./agent-board";
 import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { playNotificationSound } from "@/lib/notification-sound";
 import { collapseThreads, threadKey } from "@/lib/email-threads";
-import { AGENT_FOLDER, BOARD_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AgentKanban } from "./agent-kanban";
 
 const API_BASE = "/api/email";
 
@@ -103,7 +103,7 @@ const FOLDER_LABELS: Record<string, string> = {
   starred: "Starred",
   all: "All Mail",
   agent: "Agents",
-  board: "Board",
+  kanban: "Kanban",
 };
 
 // Unread counts shape returned by /api/email/unread-counts
@@ -193,11 +193,6 @@ export function EmailLayout() {
     return [...members].sort((a, b) => +new Date(a.received_at) - +new Date(b.received_at));
   }, [selectedMessage, threadCollapse, selectedThreadKey]);
   const [activeFolder, setActiveFolder] = useState("inbox");
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  const [isDesktop, setIsDesktop] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return window.matchMedia("(min-width: 768px)").matches;
-  });
   const [loading, setLoading] = useState(false);
   const [showCompose, setShowCompose] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<{ tab: SettingsTab; domainId: string | null } | null>(null);
@@ -223,14 +218,6 @@ export function EmailLayout() {
       const l = parseInt(localStorage.getItem(LIST_W_KEY) || "");
       if (!Number.isNaN(l) && l >= LIST_W_MIN) setListColWidth(l);
     } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mq = window.matchMedia("(min-width: 768px)");
-    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
   }, []);
 
   // Drag resize handlers
@@ -379,7 +366,7 @@ export function EmailLayout() {
   //   poll  — background freshness: merges page 1 into the accumulated list
   //           without ever touching the scrollback tail.
   const loadPage = useCallback(async (kind: "reset" | "more" | "poll") => {
-    if (activeFolder === BOARD_FOLDER) return;
+    if (activeFolder === KANBAN_FOLDER) return;
     if (domains.length === 0) return;
     if (kind === "more" && (!hasMoreRef.current || loadingMoreRef.current || !nextCursorRef.current)) return;
 
@@ -1045,19 +1032,6 @@ export function EmailLayout() {
         return;
       }
       if (settingsTarget) return; // settings modal owns its own keys
-      if (activeFolder === BOARD_FOLDER) {
-        if (e.key === "c") {
-          e.preventDefault();
-          openCompose("new");
-        } else if (e.key === "Escape" && selectedJobId) {
-          setSelectedJobId(null);
-          setMobileView("list");
-        } else if (e.key === "?") {
-          e.preventDefault();
-          setShowShortcuts((prev) => !prev);
-        }
-        return;
-      }
 
       const currentMessages = activeFolder === "drafts"
         ? drafts
@@ -1179,7 +1153,7 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, selectedJobId, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
+  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
 
   // Push prompt banner — same shared store as the footer bell and Settings,
   // so enabling anywhere updates everywhere instantly.
@@ -1208,7 +1182,7 @@ export function EmailLayout() {
       {/* Dynamic width override — only applies at md+; mobile remains w-full */}
       <style>{`
         @media (min-width: 768px) {
-          .mc-email-list-col { width: ${activeFolder === BOARD_FOLDER ? "auto" : `${listColWidth}px`} !important; }
+          .mc-email-list-col { width: ${listColWidth}px !important; }
         }
         /* --- Mobile (< md) iOS Mail navigation stack --- */
         @media (max-width: 767px) {
@@ -1283,7 +1257,6 @@ export function EmailLayout() {
             setActiveFilter("all");
             setCatchAllOnly(false);
             setSelectedMessage(null);
-            if (f !== BOARD_FOLDER) setSelectedJobId(null);
             setMobileView("list");
             isFirstFetch.current = true;
             setScrollResetSignal((n) => n + 1);
@@ -1302,7 +1275,6 @@ export function EmailLayout() {
             setCatchAllOnly(false);
             setActiveFilter("all");
             setSelectedMessage(null);
-            setSelectedJobId(null);
             setMobileView("list");
             isFirstFetch.current = true;
             setScrollResetSignal((n) => n + 1);
@@ -1399,29 +1371,33 @@ export function EmailLayout() {
         />
       </div>
 
-      {/* Center: Message List — slides in over the mailboxes on mobile.
-          Board replaces the list on desktop (flex-1) and is the list pane on mobile. */}
+      {activeFolder === KANBAN_FOLDER ? (
+        <div
+          className={`flex-1 min-w-0 overflow-hidden z-20 mc-mobile-pane ${
+            mobileView === "folders" ? "mc-pane-off" : ""
+          }`}
+        >
+          <AgentKanban
+            onMobileMenuClick={() => setMobileView("folders")}
+            agents={domains.flatMap((d) =>
+              (d.addresses || [])
+                .filter((a) => a.is_active && isAgentAddress(a))
+                .map((a) => ({ local: a.address, label: a.display_name || a.address }))
+            )}
+          />
+        </div>
+      ) : (
+      <>
+      {/* Center: Message List — slides in over the mailboxes on mobile */}
       <div
-        className={`mc-email-list-col mc-mobile-pane z-20 w-full overflow-hidden md:block ${
-          activeFolder === BOARD_FOLDER ? "md:flex-1 md:min-w-0" : "flex-shrink-0"
-        } ${mobileView === "folders" ? "mc-pane-off" : ""}`}
+        className={`mc-email-list-col mc-mobile-pane z-20 w-full flex-shrink-0 overflow-hidden md:block ${
+          mobileView === "folders" ? "mc-pane-off" : ""
+        }`}
         style={{
-          borderRight: activeFolder === BOARD_FOLDER && isDesktop ? "none" : "1px solid var(--mc-border)",
+          borderRight: "1px solid var(--mc-border)",
           backgroundColor: "var(--mc-bg-secondary)",
         }}
       >
-        {activeFolder === BOARD_FOLDER ? (
-          <AgentBoard
-            domains={domains}
-            selectedId={selectedJobId}
-            onSelect={(id) => {
-              setSelectedJobId(id);
-              setMobileView("reader");
-            }}
-            onMobileMenuClick={() => setMobileView("folders")}
-            inlineDetail={isDesktop}
-          />
-        ) : (
         <MessageList
           messages={activeFolder === "drafts" ? drafts.map((d: any) => ({
             id: d.id,
@@ -1523,13 +1499,12 @@ export function EmailLayout() {
             }
           }}
         />
-        )}
       </div>
 
       {/* List ↔ Reader resizer (desktop only) */}
       <div
         onMouseDown={startListDrag}
-        className={`flex-shrink-0 group ${activeFolder === BOARD_FOLDER ? "hidden" : "hidden md:block"}`}
+        className="hidden md:block flex-shrink-0 group"
         style={{
           width: "5px",
           cursor: "col-resize",
@@ -1555,26 +1530,14 @@ export function EmailLayout() {
       </div>
 
       {/* Right: Message Reader — desktop inline column; on mobile a full-screen
-          pane that slides in from the right over the list (iOS Mail push).
-          Board uses this pane on mobile only; desktop detail is inline in AgentBoard. */}
+          pane that slides in from the right over the list (iOS Mail push). */}
       <div
         ref={readerRef}
-        className={`mc-mobile-pane z-30 flex-1 min-w-0 overflow-y-auto ${
-          activeFolder === BOARD_FOLDER ? "" : "md:block"
-        } ${mobileView === "reader" ? "" : "mc-pane-off"}`}
-        style={{
-          backgroundColor: "var(--mc-bg)",
-          display: activeFolder === BOARD_FOLDER && isDesktop ? "none" : undefined,
-        }}
+        className={`mc-mobile-pane z-30 flex-1 min-w-0 overflow-y-auto md:block ${
+          mobileView === "reader" ? "" : "mc-pane-off"
+        }`}
+        style={{ backgroundColor: "var(--mc-bg)" }}
       >
-        {activeFolder === BOARD_FOLDER ? (
-          isDesktop ? null : (
-            <AgentBoardDetail
-              jobId={selectedJobId}
-              onBack={() => setMobileView("list")}
-            />
-          )
-        ) : (
         <MessageReader
           message={selectedMessage}
           threadMessages={selectedThreadMessages}
@@ -1603,8 +1566,9 @@ export function EmailLayout() {
             }
           }}
         />
-        )}
       </div>
+      </>
+      )}
 
       {/* Compose Modal */}
       {showCompose && (

@@ -40,7 +40,7 @@ import { usePush } from "@/lib/push-notifications";
 import { useTheme, type ThemePref } from "@/lib/theme";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { type FavoriteRef, favKey } from "./favorites";
-import { AGENT_FOLDER, BOARD_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -1094,9 +1094,9 @@ export function FolderList({
                       />
                       <IosRow
                         icon={Columns3}
-                        label="Board"
-                        active={activeFolder === BOARD_FOLDER}
-                        onClick={() => onFolderChange(BOARD_FOLDER)}
+                        label="Kanban"
+                        active={activeFolder === KANBAN_FOLDER}
+                        onClick={() => onFolderChange(KANBAN_FOLDER)}
                         last={!agentsExpanded && !hasAddresses}
                         showChevron={!editing}
                       />
@@ -1560,10 +1560,10 @@ export function FolderList({
                               />
                               <SidebarRow
                                 icon={Columns3}
-                                label="Board"
-                                active={activeFolder === BOARD_FOLDER}
+                                label="Kanban"
+                                active={activeFolder === KANBAN_FOLDER}
                                 depth={1}
-                                onClick={() => onFolderChange(BOARD_FOLDER)}
+                                onClick={() => onFolderChange(KANBAN_FOLDER)}
                               />
                               {agentsExpanded &&
                                 agentAddrs.map((addr) => {
