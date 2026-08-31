@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, Columns3, Loader2, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 
@@ -13,6 +13,17 @@ const STAGES: { id: Stage; label: string }[] = [
   { id: "done", label: "Done" },
   { id: "stuck", label: "Stuck" },
 ];
+
+const KIND_LABEL: Record<string, string> = {
+  received: "Received",
+  working: "Working",
+  waiting: "Waiting",
+  done: "Done",
+  stuck: "Stuck",
+  reply: "Reply",
+  note: "Note",
+  remind: "Remind",
+};
 
 export interface AgentJob {
   id: string;
@@ -80,6 +91,53 @@ function agentLabel(local: string): string {
   return s || local;
 }
 
+function usedTag(job: AgentJob): string {
+  const k = Number(job.used_k);
+  const n = Number.isFinite(k) && k > 0 ? Math.round(k) : 0;
+  return `${n}/500K`;
+}
+
+function pillClass(on: boolean): string {
+  return `flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
+    on ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
+  }`;
+}
+
+function JobCard({
+  job,
+  selected,
+  last,
+  onClick,
+}: {
+  job: AgentJob;
+  selected: boolean;
+  last: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full min-w-0 text-left px-3 py-2.5 min-h-[44px] md:min-h-0 md:py-2"
+      style={{
+        borderBottom: last ? "none" : "1px solid var(--mc-border-subtle)",
+        backgroundColor: selected ? "var(--mc-accent-bg)" : "transparent",
+      }}
+    >
+      <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
+        {job.base_subject || "(no subject)"}
+      </div>
+      <div className="mt-0.5 flex items-center gap-2 text-[11px] min-w-0" style={{ color: "var(--mc-text-muted)" }}>
+        <span className="truncate">{agentLabel(job.agent_local)}</span>
+        <span className="tabular-nums flex-shrink-0">{usedTag(job)}</span>
+      </div>
+      <div className="text-[11px] truncate" style={{ color: "var(--mc-text-faint)" }}>
+        {relTime(job.last_reply_at || job.updated_at)}
+      </div>
+    </button>
+  );
+}
+
 export function AgentKanban({
   onMobileMenuClick,
   agents: agentCatalog = [],
@@ -89,6 +147,7 @@ export function AgentKanban({
 }) {
   const [jobs, setJobs] = useState<AgentJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agent, setAgent] = useState("");
   const [stage, setStage] = useState<"" | Stage>("");
@@ -99,26 +158,33 @@ export function AgentKanban({
     messages: JobMessage[];
   } | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [remindBusy, setRemindBusy] = useState(false);
-  const [notesDraft, setNotesDraft] = useState("");
-  const [notesBusy, setNotesBusy] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
+  const agentDropRef = useRef<HTMLDivElement | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setError(null);
     const params = new URLSearchParams();
     if (agent) params.set("agent", agent);
-    if (stage) params.set("stage", stage);
     const qs = params.toString();
     const res = await apiFetch(`/api/email/agent-jobs${qs ? `?${qs}` : ""}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      setError(typeof data.error === "string" ? data.error : "Couldn't load the board");
+      if (!silent) {
+        setError(typeof data.error === "string" ? data.error : "Couldn't load the board");
+        setJobs([]);
+      }
+      return;
+    }
+    if (data.needs_migration) {
+      setError("Couldn't load the board");
       setJobs([]);
       return;
     }
+    setError(null);
     setJobs(Array.isArray(data.jobs) ? data.jobs : []);
-  }, [agent, stage]);
+  }, [agent]);
 
   useEffect(() => {
     let cancelled = false;
@@ -136,37 +202,71 @@ export function AgentKanban({
   }, [load]);
 
   useEffect(() => {
+    const t = setInterval(() => {
+      load(true).catch(() => {});
+    }, 10_000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const loadDetail = useCallback(async (id: string, silent = false) => {
+    if (!silent) {
+      setDetailLoading(true);
+      setDetailError(null);
+    }
+    try {
+      const res = await apiFetch(`/api/email/agent-jobs?id=${encodeURIComponent(id)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.job) {
+        if (!silent) {
+          setDetail(null);
+          setDetailError(typeof data.error === "string" ? data.error : "Couldn't load this card");
+        }
+        return;
+      }
+      setDetailError(null);
+      setDetail({
+        job: data.job,
+        events: Array.isArray(data.events) ? data.events : [],
+        messages: Array.isArray(data.messages) ? data.messages : [],
+      });
+    } catch {
+      if (!silent) {
+        setDetail(null);
+        setDetailError("Couldn't load this card");
+      }
+    } finally {
+      if (!silent) setDetailLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!selectedId) {
       setDetail(null);
+      setDetailError(null);
       return;
     }
     let cancelled = false;
-    setDetailLoading(true);
-    apiFetch(`/api/email/agent-jobs?id=${encodeURIComponent(selectedId)}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok || !data.job) {
-          setDetail(null);
-          return;
-        }
-        setDetail({
-          job: data.job,
-          events: Array.isArray(data.events) ? data.events : [],
-          messages: Array.isArray(data.messages) ? data.messages : [],
-        });
-        setNotesDraft(typeof data.job.notes === "string" ? data.job.notes : "");
-      })
-      .catch(() => {
-        if (!cancelled) setDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
-      });
+    loadDetail(selectedId).catch(() => {
+      if (!cancelled) setDetailError("Couldn't load this card");
+    });
+    const t = setInterval(() => {
+      loadDetail(selectedId, true).catch(() => {});
+    }, 10_000);
     return () => {
       cancelled = true;
+      clearInterval(t);
     };
-  }, [selectedId]);
+  }, [selectedId, loadDetail]);
+
+  useEffect(() => {
+    if (!agentOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t?.closest?.("[data-mc-kanban-agent-dropdown]")) setAgentOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [agentOpen]);
 
   const agents = useMemo(() => {
     const seen = new Set<string>();
@@ -199,6 +299,26 @@ export function AgentKanban({
     return map;
   }, [jobs]);
 
+  const visibleStages = useMemo(
+    () => STAGES.filter((col) => !stage || stage === col.id),
+    [stage],
+  );
+
+  const visibleCount = useMemo(
+    () => visibleStages.reduce((n, col) => n + byStage[col.id].length, 0),
+    [visibleStages, byStage],
+  );
+
+  async function refresh() {
+    setRefreshing(true);
+    try {
+      await load();
+      if (selectedId) await loadDetail(selectedId, true);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function remind() {
     if (!selectedId) return;
     setRemindBusy(true);
@@ -206,369 +326,417 @@ export function AgentKanban({
       await apiFetch(`/api/email/agent-jobs?id=${encodeURIComponent(selectedId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: selectedId }),
+        body: JSON.stringify({ op: "remind", id: selectedId }),
       });
-      await load();
+      await Promise.all([load(true), loadDetail(selectedId, true)]);
     } finally {
       setRemindBusy(false);
     }
   }
 
-  async function saveNotes() {
-    if (!selectedId) return;
-    setNotesBusy(true);
-    try {
-      await apiFetch(`/api/email/agent-jobs?id=${encodeURIComponent(selectedId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: notesDraft }),
-      });
-      await load();
-    } finally {
-      setNotesBusy(false);
-    }
-  }
-
   const selected = detail?.job;
   const canRemind = selected && (selected.stage === "stuck" || selected.stage === "waiting");
+  const showBoard = !selectedId;
+  const showFive = showBoard && !stage;
+  const agentCurrent = agents.find((a) => a.local === agent);
 
-  return (
-    <div className="h-full min-h-0 flex flex-col" style={{ backgroundColor: "var(--mc-bg-secondary)" }}>
-      <div
-        className="flex-shrink-0 flex items-center gap-2 px-3 h-12 border-b"
-        style={{ borderColor: "var(--mc-border)", backgroundColor: "var(--mc-header-bg)" }}
-      >
-        <button
-          type="button"
-          className="md:hidden h-8 w-8 flex items-center justify-center rounded-md"
-          onClick={() => (selectedId ? setSelectedId(null) : onMobileMenuClick?.())}
-          style={{ color: "var(--mc-accent)" }}
-          aria-label={selectedId ? "Board" : "Mailboxes"}
-        >
-          <ChevronLeft className="h-5 w-5" />
-        </button>
-        <Columns3 className="hidden md:block h-[15px] w-[15px]" style={{ color: "var(--mc-accent)" }} />
-        <span className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>
-          Kanban
-        </span>
-        <div className="flex-1" />
-        <div className={`relative ${selectedId ? "hidden md:block" : ""}`}>
-          <button
-            type="button"
-            onClick={() => setAgentOpen((v) => !v)}
-            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] min-w-[160px] max-w-[220px]"
-            style={{
-              color: agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
-              backgroundColor: agent ? "var(--mc-accent-bg)" : "var(--mc-bg-hover)",
-              border: "1px solid var(--mc-border)",
-            }}
-          >
-            <span className="truncate">
-              {agent ? agents.find((a) => a.local === agent)?.label || agentLabel(agent) : "All agents"}
-            </span>
-            <ChevronDown className="h-3 w-3 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
-          </button>
-          {agentOpen && (
+  function renderGroups(opts: { five: boolean }) {
+    const cols = visibleStages;
+    if (opts.five) {
+      return (
+        <div className="hidden md:grid flex-1 min-h-0 grid-cols-5 gap-2 p-2">
+          {cols.map((col) => (
             <div
-              className="absolute right-0 top-full mt-1 rounded-lg z-30 py-1 max-h-[240px] overflow-y-auto min-w-[200px]"
-              style={{ backgroundColor: "var(--mc-bg)", border: "1px solid var(--mc-border)", boxShadow: "var(--mc-shadow)" }}
+              key={col.id}
+              className="min-h-0 min-w-0 flex flex-col rounded-[10px] overflow-hidden"
+              style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
             >
-              <button
-                type="button"
-                onClick={() => { setAgent(""); setAgentOpen(false); }}
-                className="w-full text-left px-3 py-1.5 text-[11px]"
-                style={{
-                  color: !agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                  backgroundColor: !agent ? "var(--mc-accent-bg)" : "transparent",
-                }}
+              <div
+                className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold truncate"
+                style={{ color: "var(--mc-text-faint)" }}
               >
-                All agents
-              </button>
-              {agents.map((a) => (
-                <button
-                  key={a.local}
-                  type="button"
-                  onClick={() => { setAgent(a.local); setAgentOpen(false); }}
-                  className="w-full text-left px-3 py-1.5 text-[11px] truncate"
-                  style={{
-                    color: agent === a.local ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                    backgroundColor: agent === a.local ? "var(--mc-accent-bg)" : "transparent",
-                  }}
-                >
-                  {a.label}
-                </button>
+                {col.label}
+                <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                {byStage[col.id].map((job, i, arr) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    selected={selectedId === job.id}
+                    last={i === arr.length - 1}
+                    onClick={() => setSelectedId(job.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return (
+      <div className="p-3 space-y-4 overflow-y-auto h-full">
+        {cols.filter((col) => byStage[col.id].length > 0).map((col) => (
+          <div key={col.id}>
+            <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+              {col.label}
+              <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+            </div>
+            <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+              {byStage[col.id].map((job, i, arr) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  selected={selectedId === job.id}
+                  last={i === arr.length - 1}
+                  onClick={() => setSelectedId(job.id)}
+                />
               ))}
             </div>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={() => load()}
-          className="p-1.5 rounded-md"
-          style={{ color: "var(--mc-text-muted)" }}
-          aria-label="Refresh"
-        >
-          <RefreshCw className="h-4 w-4" />
-        </button>
-      </div>
-      <div
-        className={`flex flex-wrap items-center gap-1.5 px-3 py-2 ${selectedId ? "hidden md:flex" : ""}`}
-        style={{ borderBottom: "1px solid var(--mc-border)" }}
-      >
-        <button
-          type="button"
-          onClick={() => setStage("")}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
-            !stage ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
-          }`}
-        >
-          All
-        </button>
-        {STAGES.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            onClick={() => setStage(stage === s.id ? "" : s.id)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
-              stage === s.id ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
-            }`}
-          >
-            {s.label}
-          </button>
+          </div>
         ))}
       </div>
+    );
+  }
 
-      {error && (
-        <div className="px-4 py-2 text-[13px]" style={{ color: "var(--mc-danger)" }}>
-          {error}
+  const boardBody = loading ? (
+    <div className="flex items-center justify-center py-12">
+      <Loader2 className="h-5 w-5 text-mc-teal animate-spin" />
+    </div>
+  ) : jobs.length === 0 ? (
+    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+      <Columns3 className="h-6 w-6 mb-2 opacity-40" />
+      <p className="text-[13px]">No agent jobs yet</p>
+      <p className="text-[11px] mt-1" style={{ color: "var(--mc-text-faint)" }}>
+        Mail an agent and the card shows up here.
+      </p>
+    </div>
+  ) : visibleCount === 0 ? (
+    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+      <Columns3 className="h-6 w-6 mb-2 opacity-40" />
+      <p className="text-[13px]">No {stage} jobs</p>
+      <button
+        type="button"
+        onClick={() => setStage("")}
+        className="text-[11px] text-mc-teal hover:underline mt-1"
+      >
+        Show all
+      </button>
+    </div>
+  ) : (
+    <>
+      <div className={showFive ? "md:hidden flex-1 min-h-0 overflow-hidden" : "flex-1 min-h-0 overflow-hidden"}>
+        {renderGroups({ five: false })}
+      </div>
+      {showFive && renderGroups({ five: true })}
+    </>
+  );
+
+  const detailBody = !selectedId ? null : detailLoading && !selected ? (
+    <div className="flex items-center justify-center py-12">
+      <Loader2 className="h-5 w-5 text-mc-teal animate-spin" />
+    </div>
+  ) : detailError || !selected ? (
+    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground px-6 text-center">
+      <p className="text-[13px]">{detailError || "Couldn't load this card"}</p>
+      <button
+        type="button"
+        onClick={() => selectedId && loadDetail(selectedId)}
+        className="text-[11px] text-mc-teal hover:underline mt-1"
+      >
+        Try again
+      </button>
+    </div>
+  ) : (
+    <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+      <div className="min-w-0">
+        <div className="text-[16px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>
+          {selected.base_subject || "(no subject)"}
         </div>
-      )}
-
-      <div className="flex-1 min-h-0 flex">
-        <div className={`flex-1 min-w-0 overflow-x-auto ${selectedId ? "hidden md:block" : ""}`}>
-          {loading ? (
-            <div className="h-full flex items-center justify-center" style={{ color: "var(--mc-text-muted)" }}>
-              <Loader2 className="h-5 w-5 animate-spin" />
+        <div className="text-[12px] mt-0.5 truncate" style={{ color: "var(--mc-text-muted)" }}>
+          {agentLabel(selected.agent_local)} · {KIND_LABEL[selected.stage] || selected.stage} · {usedTag(selected)}
+        </div>
+      </div>
+      <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+        {[
+          ["Received", selected.received_at],
+          ["Started", selected.started_at],
+          ["Last reply", selected.last_reply_at],
+          selected.done_at ? ["Done", selected.done_at] : null,
+          selected.stuck_at ? ["Stuck", selected.stuck_at] : null,
+        ]
+          .filter((row): row is [string, string | null] => !!row)
+          .map(([label, at], i, arr) => (
+            <div
+              key={label}
+              className="flex items-center justify-between gap-3 px-3 py-2.5 min-h-[40px]"
+              style={{ borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)" }}
+            >
+              <div className="text-[13px]" style={{ color: "var(--mc-text)" }}>{label}</div>
+              <div className="text-[13px] flex-shrink-0" style={{ color: "var(--mc-text-muted)" }}>{clock(at)}</div>
             </div>
-          ) : jobs.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center gap-1 px-6 text-center">
-              <Columns3 className="h-8 w-8 mb-2" style={{ color: "var(--mc-text-ghost)" }} />
-              <div className="text-[15px] font-medium" style={{ color: "var(--mc-text)" }}>
-                No agent jobs yet
-              </div>
-              <div className="text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
-                Mail an agent and the card shows up here.
-              </div>
+          ))}
+      </div>
+      <div>
+        <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+          Notes
+        </div>
+        <div className="rounded-[10px] p-3 min-w-0" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+          {selected.notes ? (
+            <div className="text-[13px] leading-5 whitespace-pre-wrap break-words" style={{ color: "var(--mc-text)" }}>
+              {selected.notes}
             </div>
           ) : (
-            <>
-            <div className="md:hidden p-3 space-y-4 overflow-y-auto h-full">
-              {STAGES.filter((col) => !stage || stage === col.id).map((col) => (
-                <div key={col.id}>
-                  <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
-                    {col.label}
-                    <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
+            <div className="text-[13px]" style={{ color: "var(--mc-text-muted)" }}>No notes</div>
+          )}
+        </div>
+      </div>
+      <div>
+        <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+          Timeline
+        </div>
+        <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+          {(detail.events || []).length === 0 ? (
+            <div className="px-3 py-2.5 text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
+              No events yet
+            </div>
+          ) : (
+            detail.events.map((ev, i, arr) => (
+              <div
+                key={ev.id}
+                className="px-3 py-2.5 min-w-0"
+                style={{ borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)" }}
+              >
+                <div className="flex items-baseline justify-between gap-2 min-w-0">
+                  <span className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
+                    {KIND_LABEL[ev.kind] || ev.kind}
+                  </span>
+                  <span className="text-[11px] flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
+                    {clock(ev.at)}
+                  </span>
+                </div>
+                {ev.detail && (
+                  <div className="text-[12px] mt-0.5 break-words" style={{ color: "var(--mc-text-muted)" }}>
+                    {ev.detail}
                   </div>
-                  <div className="rounded-[10px] overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
-                    {byStage[col.id].length === 0 ? (
-                      <div className="px-3 py-2.5 text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
-                        None
-                      </div>
-                    ) : (
-                      byStage[col.id].map((job, i, arr) => (
-                        <button
-                          key={job.id}
-                          type="button"
-                          onClick={() => setSelectedId(job.id)}
-                          className="w-full text-left px-3 py-2.5 min-h-[44px]"
-                          style={{
-                            borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)",
-                            backgroundColor: selectedId === job.id ? "var(--mc-accent-bg)" : "transparent",
-                          }}
-                        >
-                          <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
-                            {job.base_subject || "(no subject)"}
-                          </div>
-                          <div className="text-[11px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
-                            {agentLabel(job.agent_local)} · {Math.max(1, Number(job.used_k) || 1)}/500K · {relTime(job.last_reply_at || job.updated_at)}
-                          </div>
-                        </button>
-                      ))
-                    )}
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+      <div>
+        <div className="text-[11px] font-semibold px-3 pb-1.5" style={{ color: "var(--mc-text-faint)" }}>
+          Thread
+        </div>
+        {(detail.messages || []).length === 0 ? (
+          <div className="rounded-[10px] px-3 py-2.5 text-[13px]" style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}>
+            No messages on this card
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {detail.messages.map((m) => (
+              <div
+                key={m.id}
+                className="rounded-[10px] px-3 py-2.5 min-w-0"
+                style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
+              >
+                <div className="flex items-baseline justify-between gap-2 min-w-0">
+                  <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
+                    {m.from_name || m.from}
+                  </div>
+                  <div className="text-[11px] flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
+                    {clock(m.received_at)}
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="hidden md:grid h-full min-h-0 grid-cols-5 gap-2 p-2">
-              {STAGES.map((col) => (
-                <div
-                  key={col.id}
-                  className="min-h-0 flex flex-col rounded-[10px] overflow-hidden"
-                  style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
-                >
-                  <div
-                    className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold"
-                    style={{ color: "var(--mc-text-faint)" }}
+                <div className="text-[12px] mt-0.5 break-words" style={{ color: "var(--mc-text-muted)" }}>
+                  {m.preview || m.subject}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="h-full min-h-0 min-w-0 flex overflow-hidden" style={{ backgroundColor: "var(--mc-bg-secondary)" }}>
+      <div
+        className={`min-h-0 min-w-0 flex flex-col overflow-hidden ${
+          selectedId ? "hidden md:flex md:w-[380px] md:flex-shrink-0" : "flex flex-1"
+        }`}
+        style={selectedId ? { borderRight: "1px solid var(--mc-border)" } : undefined}
+      >
+        <div className="p-3 flex-shrink-0" style={{ borderBottom: "1px solid var(--mc-border)" }}>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onMobileMenuClick?.()}
+              className="md:hidden flex items-center gap-0.5 -ml-1 pr-1 rounded-lg transition-opacity active:opacity-60"
+              style={{ color: "var(--mc-accent)" }}
+              aria-label="Back to mailboxes"
+            >
+              <ChevronLeft className="h-6 w-6 -mr-1" />
+              <span className="text-[15px] mc-touch-exempt">Mailboxes</span>
+            </button>
+            {agents.length > 0 ? (
+              <div className="flex-1 min-w-0 relative" data-mc-kanban-agent-dropdown ref={agentDropRef}>
+                  <button
+                    type="button"
+                    onClick={() => setAgentOpen((v) => !v)}
+                    className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors"
+                    style={{
+                      color: agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                      backgroundColor: agent ? "var(--mc-accent-bg)" : "var(--mc-bg-hover, rgba(255,255,255,0.04))",
+                      border: "1px solid var(--mc-border)",
+                    }}
+                    title="Filter by agent mailbox"
                   >
-                    {col.label}
-                    <span className="ml-1 tabular-nums">{byStage[col.id].length}</span>
-                  </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto">
-                    {byStage[col.id].map((job, i, arr) => (
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--mc-text-faint)" }}>
+                        Agent:
+                      </span>
+                      <span className="truncate">{agentCurrent ? agentCurrent.label : "All agents"}</span>
+                    </span>
+                    <ChevronDown className="h-3 w-3 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
+                  </button>
+                  {agentOpen && (
+                    <div
+                      className="absolute left-0 right-0 top-full mt-1 rounded-lg shadow-xl z-30 py-1 max-h-[240px] overflow-y-auto"
+                      style={{ backgroundColor: "var(--mc-bg)", border: "1px solid var(--mc-border)" }}
+                    >
                       <button
-                        key={job.id}
                         type="button"
-                        onClick={() => setSelectedId(job.id)}
-                        className="w-full text-left px-3 py-2"
+                        onClick={() => { setAgent(""); setAgentOpen(false); }}
+                        className="w-full text-left px-3 py-1.5 text-[11px] transition-colors"
                         style={{
-                          borderBottom: i === arr.length - 1 ? "none" : "1px solid var(--mc-border-subtle)",
-                          backgroundColor: selectedId === job.id ? "var(--mc-accent-bg)" : "transparent",
+                          color: !agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                          backgroundColor: !agent ? "var(--mc-accent-bg)" : "transparent",
                         }}
                       >
-                        <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
-                          {job.base_subject || "(no subject)"}
-                        </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-[11px]" style={{ color: "var(--mc-text-muted)" }}>
-                          <span className="truncate">{agentLabel(job.agent_local)}</span>
-                          <span className="tabular-nums flex-shrink-0">
-                            {Math.max(1, Number(job.used_k) || 1)}/500K
-                          </span>
-                        </div>
-                        <div className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
-                          {relTime(job.last_reply_at || job.updated_at)}
-                        </div>
+                        All agents
                       </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-            </>
-          )}
+                      {agents.map((a) => {
+                        const on = a.local === agent;
+                        return (
+                          <button
+                            key={a.local}
+                            type="button"
+                            onClick={() => { setAgent(on ? "" : a.local); setAgentOpen(false); }}
+                            className="w-full text-left px-3 py-1.5 text-[11px] transition-colors truncate"
+                            style={{
+                              color: on ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                              backgroundColor: on ? "var(--mc-accent-bg)" : "transparent",
+                            }}
+                          >
+                            {a.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+              </div>
+            ) : (
+              <div className="flex-1 min-w-0" />
+            )}
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              className="p-1.5 rounded-md transition-colors"
+              style={{ color: "var(--mc-text-muted)" }}
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         </div>
 
         <div
-          className={`${selectedId ? "flex" : "hidden md:flex"} w-full md:w-[340px] flex-shrink-0 flex-col md:border-l overflow-hidden`}
-          style={{ borderColor: "var(--mc-border)", backgroundColor: "var(--mc-bg)" }}
+          className="flex flex-wrap items-center gap-1.5 px-3 py-2 flex-shrink-0"
+          style={{ borderBottom: "1px solid var(--mc-border, rgba(255,255,255,0.06))" }}
         >
-          {!selectedId ? (
-            <div className="h-full flex items-center justify-center text-[13px] px-6 text-center" style={{ color: "var(--mc-text-muted)" }}>
-              Select a card
-            </div>
-          ) : detailLoading || !selected ? (
-            <div className="h-full flex items-center justify-center" style={{ color: "var(--mc-text-muted)" }}>
-              <Loader2 className="h-5 w-5 animate-spin" />
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-              <div>
-                <div className="text-[16px] font-semibold" style={{ color: "var(--mc-text)" }}>
-                  {selected.base_subject}
-                </div>
-                <div className="text-[12px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
-                  {agentLabel(selected.agent_local)} · {selected.stage} · {Math.max(1, Number(selected.used_k) || 1)}/500K
-                </div>
-              </div>
-              <div className="text-[12px] space-y-1" style={{ color: "var(--mc-text-secondary)" }}>
-                <div>Received {clock(selected.received_at)}</div>
-                <div>Started {clock(selected.started_at)}</div>
-                <div>Last reply {clock(selected.last_reply_at)}</div>
-                {selected.done_at && <div>Done {clock(selected.done_at)}</div>}
-                {selected.stuck_at && <div>Stuck {clock(selected.stuck_at)}</div>}
-              </div>
-              {canRemind && (
-                <button
-                  type="button"
-                  onClick={remind}
-                  disabled={remindBusy || !!selected.remind_requested_at}
-                  className="h-8 px-2 rounded-md text-[13px] font-medium"
-                  style={{
-                    color: "var(--mc-accent)",
-                    backgroundColor: "var(--mc-accent-bg)",
-                    opacity: remindBusy || selected.remind_requested_at ? 0.6 : 1,
-                  }}
-                >
-                  {selected.remind_requested_at ? "Remind queued" : remindBusy ? "Reminding…" : "Remind"}
-                </button>
-              )}
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--mc-text-muted)" }}>
-                  Notes
-                </div>
-                <textarea
-                  value={notesDraft}
-                  onChange={(e) => setNotesDraft(e.target.value)}
-                  rows={3}
-                  className="w-full rounded-md text-[13px] p-2 border resize-y"
-                  style={{
-                    borderColor: "var(--mc-border)",
-                    backgroundColor: "var(--mc-bg-secondary)",
-                    color: "var(--mc-text)",
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={saveNotes}
-                  disabled={notesBusy}
-                  className="mt-1.5 h-7 px-2 rounded-md text-[12px]"
-                  style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-secondary)" }}
-                >
-                  {notesBusy ? "Saving…" : "Save note"}
-                </button>
-              </div>
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--mc-text-muted)" }}>
-                  Timeline
-                </div>
-                {(detail.events || []).length === 0 ? (
-                  <div className="text-[12px]" style={{ color: "var(--mc-text-faint)" }}>
-                    No events yet
-                  </div>
-                ) : (
-                  <ul className="space-y-1">
-                    {detail.events.map((ev) => (
-                      <li key={ev.id} className="text-[12px]" style={{ color: "var(--mc-text-secondary)" }}>
-                        <span className="font-medium">{ev.kind}</span>
-                        <span className="ml-1" style={{ color: "var(--mc-text-faint)" }}>
-                          {clock(ev.at)}
-                        </span>
-                        {ev.detail && <div style={{ color: "var(--mc-text-muted)" }}>{ev.detail}</div>}
-                      </li>
-                    ))}
-                  </ul>
+          <button type="button" onClick={() => setStage("")} className={pillClass(!stage)}>
+            All
+            {jobs.length > 0 && (
+              <span className="text-[10px] font-semibold tabular-nums opacity-70">{jobs.length}</span>
+            )}
+          </button>
+          {STAGES.map((s) => {
+            const count = byStage[s.id].length;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setStage(stage === s.id ? "" : s.id)}
+                className={pillClass(stage === s.id)}
+              >
+                {s.label}
+                {count > 0 && (
+                  <span className="text-[10px] font-semibold tabular-nums opacity-70">{count}</span>
                 )}
-              </div>
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide mb-1" style={{ color: "var(--mc-text-muted)" }}>
-                  Thread
-                </div>
-                {(detail.messages || []).length === 0 ? (
-                  <div className="text-[12px]" style={{ color: "var(--mc-text-faint)" }}>
-                    No messages on this card
-                  </div>
-                ) : (
-                  <ul className="space-y-2">
-                    {detail.messages.map((m) => (
-                      <li
-                        key={m.id}
-                        className="rounded-md px-2 py-1.5"
-                        style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
-                      >
-                        <div className="text-[12px] font-medium" style={{ color: "var(--mc-text)" }}>
-                          {m.from_name || m.from} · {clock(m.received_at)}
-                        </div>
-                        <div className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>
-                          {m.preview || m.subject}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
+              </button>
+            );
+          })}
+        </div>
+
+        {error && (
+          <div className="mx-3 mt-2 flex-shrink-0 rounded-[10px] p-3" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+            <div className="text-[13px] font-medium" style={{ color: "var(--mc-text)" }}>{error}</div>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="text-[11px] text-mc-teal hover:underline mt-1"
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        <div className="relative flex-1 min-h-0 overflow-hidden flex flex-col">
+          {boardBody}
         </div>
       </div>
+
+      {selectedId && (
+        <div
+          className="flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden"
+          style={{ backgroundColor: "var(--mc-bg)" }}
+        >
+          <div
+            className={`flex items-center gap-0.5 px-3 py-2 flex-shrink-0 ${canRemind ? "" : "md:hidden"}`}
+            style={{ borderBottom: "1px solid var(--mc-border)" }}
+          >
+            <button
+              type="button"
+              onClick={() => setSelectedId(null)}
+              className="md:hidden flex items-center gap-0.5 pr-2 py-2 -ml-1 rounded-lg transition-all active:opacity-60"
+              style={{ color: "var(--mc-accent)" }}
+            >
+              <ChevronLeft className="h-6 w-6 -mr-1" />
+              <span className="text-[16px] max-w-[9rem] truncate">Kanban</span>
+            </button>
+            <div className="flex-1" />
+            {canRemind && (
+              <button
+                type="button"
+                onClick={() => void remind()}
+                disabled={remindBusy || !!selected?.remind_requested_at}
+                className="h-8 px-2 rounded-md text-[13px] font-medium"
+                style={{
+                  color: "var(--mc-accent)",
+                  backgroundColor: "var(--mc-accent-bg)",
+                  opacity: remindBusy || selected?.remind_requested_at ? 0.6 : 1,
+                }}
+              >
+                {selected?.remind_requested_at ? "Remind queued" : remindBusy ? "Reminding…" : "Remind"}
+              </button>
+            )}
+          </div>
+          {detailBody}
+        </div>
+      )}
     </div>
   );
 }

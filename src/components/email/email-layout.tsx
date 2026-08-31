@@ -1373,7 +1373,7 @@ export function EmailLayout() {
 
       {activeFolder === KANBAN_FOLDER ? (
         <div
-          className={`flex-1 min-w-0 overflow-hidden z-20 mc-mobile-pane ${
+          className={`flex-1 min-w-0 h-full overflow-hidden z-20 mc-mobile-pane ${
             mobileView === "folders" ? "mc-pane-off" : ""
           }`}
         >
