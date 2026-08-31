@@ -352,6 +352,48 @@ def materialize_attachments(cfg: dict, message_id: str, dest_dir: Path) -> list[
     return out
 
 
+def materialize_session_files(cfg: dict, msg: dict, dest_root: Path) -> list[dict]:
+    """Current mail plus earlier inbound on the same thread (screenshots live on the first send)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    ids: list[str] = []
+    mid = str(msg.get("id") or "")
+    if mid and UUID_RE.match(mid):
+        ids.append(mid)
+    tid = str(msg.get("thread_id") or "")
+    base = sb_base(cfg)
+    if tid and base:
+        try:
+            code, data = curl_json(
+                "GET",
+                f"{base}/rest/v1/email_messages?thread_id=eq.{tid}"
+                f"&direction=eq.inbound&select=id&order=received_at.asc&limit=30",
+                sb_headers(cfg),
+            )
+            if code == 200 and isinstance(data, list):
+                for row in data:
+                    rid = str((row or {}).get("id") or "")
+                    if rid and UUID_RE.match(rid) and rid not in ids:
+                        ids.append(rid)
+        except Exception as e:
+            log(f"thread file list failed: {e}")
+    for message_id in ids:
+        dest = dest_root / message_id
+        try:
+            chunk = materialize_attachments(cfg, message_id, dest)
+        except Exception as e:
+            log(f"files failed msg={message_id[:8]}: {e}")
+            chunk = []
+        for f in chunk:
+            key = str(f.get("id") or f.get("path") or "")
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            out.append(f)
+    return out
+
+
 def load_processed() -> set[str]:
     with _state_lock:
         if not PROCESSED.exists():
@@ -1732,13 +1774,12 @@ def run_grok(
     body = plain_text(msg)
     mid = str(msg.get("id") or "")
     files: list[dict] = []
-    if mid and UUID_RE.match(mid):
-        dest = STATE_DIR / "inbound-files" / str(session_id) / mid
-        try:
-            files = materialize_attachments(cfg, mid, dest)
-        except Exception as e:
-            log(f"files failed session={session_id}: {e}")
-            files = []
+    dest = STATE_DIR / "inbound-files" / str(session_id)
+    try:
+        files = materialize_session_files(cfg, msg, dest)
+    except Exception as e:
+        log(f"files failed session={session_id}: {e}")
+        files = []
     files_block = format_files_block(files)
     log(
         f"files session={session_id} n={len(files)} "
@@ -1898,6 +1939,7 @@ Rules:
     last_pulse_at = 0.0
     t_all = time.time()
     timed_out = False
+    spawn_failed = False
     stdout = ""
     stderr = ""
     rc = -1
@@ -1969,6 +2011,7 @@ Rules:
             stderr = str(e)
             rc = -1
             usage_tokens = None
+            spawn_failed = True
             break
         if timed_out:
             log(
@@ -1993,7 +2036,10 @@ Rules:
         break
 
     duration_s = time.time() - t_all
-    if timed_out:
+    topic = base_subject(subject)
+    if spawn_failed:
+        text = status_note("died", first, display, topic)
+    elif timed_out:
         partial = clean_email_reply(stdout, first, display)
         if partial and not is_unfinished_stub(partial) and len(re.sub(r"\s+", " ", partial)) > 120:
             text = shape_human_email(partial[:11000].rstrip() + "\n\n" + TIMEOUT_PARTIAL, first, display)
@@ -2011,10 +2057,10 @@ Rules:
     turn_tokens = estimate_turn_tokens(
         prompt_used, stdout, stderr, duration_s=duration_s, timed_out=timed_out
     )
-    process_error = (not timed_out) and rc != 0 and not (stdout or "").strip()
+    process_error = spawn_failed or ((not timed_out) and rc != 0 and not (stdout or "").strip())
     unfinished = (not timed_out) and is_unfinished_stub(text)
     log(
-        f"grok done session={session_id} timed_out={timed_out} "
+        f"grok done session={session_id} timed_out={timed_out} spawn_failed={spawn_failed} "
         f"dur={duration_s:.0f}s turn_tokens≈{turn_tokens} reply_chars={len(text)} "
         f"continues={continues} unfinished={unfinished}"
     )

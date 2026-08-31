@@ -390,6 +390,94 @@ class HonestStatus(unittest.TestCase):
         self.assertIn("<bbb>", h["References"])
         self.assertIn("<ccc>", h["References"])
 
+    def test_pulse_skip_newer_inbound(self):
+        agent = _agent()
+        newer = [
+            {
+                "id": "msg-new",
+                "_agent_local": "a.noknok",
+                "subject": "Re: Chat problems (ID: 7 - 1/500K)",
+                "thread_id": "tid-1",
+            }
+        ]
+        orig = worker.fetch_new_messages
+        worker.fetch_new_messages = lambda *a, **k: newer
+        try:
+            self.assertTrue(worker.newer_mail_for_session({}, agent, 7, "msg-old"))
+            self.assertFalse(worker.newer_mail_for_session({}, agent, 7, "msg-new"))
+            self.assertFalse(worker.newer_mail_for_session({}, agent, 9, "msg-old"))
+        finally:
+            worker.fetch_new_messages = orig
+
+        worker.save_sessions(
+            {
+                "next_id": 8,
+                "by_id": {
+                    "7": {
+                        "id": 7,
+                        "email_thread_id": "tid-1",
+                        "base_subject": "Chat problems",
+                    }
+                },
+            }
+        )
+        untagged = [
+            {
+                "id": "msg-reply",
+                "_agent_local": "a.noknok",
+                "subject": "Re: Chat problems",
+                "thread_id": "tid-1",
+            }
+        ]
+        worker.fetch_new_messages = lambda *a, **k: untagged
+        try:
+            self.assertTrue(worker.newer_mail_for_session({}, agent, 7, "msg-old"))
+            worker.fetch_new_messages = lambda *a, **k: []
+            self.assertFalse(worker.newer_mail_for_session({}, agent, 7, "msg-old"))
+        finally:
+            worker.fetch_new_messages = orig
+
+    def test_spawn_fail_died_not_empty_done(self):
+        orig = worker.subprocess.Popen
+
+        def boom(*_a, **_k):
+            raise OSError("no grok")
+
+        worker.subprocess.Popen = boom
+        try:
+            text, meta = worker.run_grok(
+                {"GROK_BIN": "/no/such/grok", "GROK_TIMEOUT": "30", "MAX_TURNS": "8"},
+                _agent(),
+                {
+                    "id": "local-1",
+                    "subject": "Chat problems",
+                    "from_address": "john@x.com",
+                    "body_text": "hi",
+                },
+                7,
+                True,
+                first_name="John",
+            )
+        finally:
+            worker.subprocess.Popen = orig
+        self.assertIn("died", text.lower())
+        self.assertNotIn(worker.EMPTY_DONE, text)
+        self.assertTrue(meta.get("process_error"))
+        self.assertTrue(meta.get("unfinished"))
+        self.assertEqual(
+            worker.finish_stage(
+                bool(meta.get("timed_out")),
+                text,
+                process_error=bool(meta.get("process_error")),
+                unfinished=bool(meta.get("unfinished")),
+            ),
+            "stuck",
+        )
+
+    def test_max_turns_default_120(self):
+        self.assertEqual(worker.DEFAULT_MAX_TURNS, 120)
+        self.assertEqual(worker.MAX_CONTINUES, 2)
+
 
 class NoteTrailer(unittest.TestCase):
     def test_note_after_to_cc_stripped_from_mail(self):
