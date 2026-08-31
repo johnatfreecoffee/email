@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, Columns3, Loader2, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronLeft, Columns3, Loader2, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 
 type Stage = "received" | "working" | "waiting" | "done" | "stuck";
@@ -102,6 +102,7 @@ export function AgentKanban({
   const [remindBusy, setRemindBusy] = useState(false);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesBusy, setNotesBusy] = useState(false);
+  const [agentOpen, setAgentOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -251,6 +252,55 @@ export function AgentKanban({
           Kanban
         </span>
         <div className="flex-1" />
+        <div className={`relative ${selectedId ? "hidden md:block" : ""}`}>
+          <button
+            type="button"
+            onClick={() => setAgentOpen((v) => !v)}
+            className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] min-w-[160px] max-w-[220px]"
+            style={{
+              color: agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
+              backgroundColor: agent ? "var(--mc-accent-bg)" : "var(--mc-bg-hover)",
+              border: "1px solid var(--mc-border)",
+            }}
+          >
+            <span className="truncate">
+              {agent ? agents.find((a) => a.local === agent)?.label || agentLabel(agent) : "All agents"}
+            </span>
+            <ChevronDown className="h-3 w-3 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
+          </button>
+          {agentOpen && (
+            <div
+              className="absolute right-0 top-full mt-1 rounded-lg z-30 py-1 max-h-[240px] overflow-y-auto min-w-[200px]"
+              style={{ backgroundColor: "var(--mc-bg)", border: "1px solid var(--mc-border)", boxShadow: "var(--mc-shadow)" }}
+            >
+              <button
+                type="button"
+                onClick={() => { setAgent(""); setAgentOpen(false); }}
+                className="w-full text-left px-3 py-1.5 text-[11px]"
+                style={{
+                  color: !agent ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                  backgroundColor: !agent ? "var(--mc-accent-bg)" : "transparent",
+                }}
+              >
+                All agents
+              </button>
+              {agents.map((a) => (
+                <button
+                  key={a.local}
+                  type="button"
+                  onClick={() => { setAgent(a.local); setAgentOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 text-[11px] truncate"
+                  style={{
+                    color: agent === a.local ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                    backgroundColor: agent === a.local ? "var(--mc-accent-bg)" : "transparent",
+                  }}
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => load()}
@@ -260,32 +310,6 @@ export function AgentKanban({
         >
           <RefreshCw className="h-4 w-4" />
         </button>
-      </div>
-      <div
-        className={`flex flex-wrap items-center gap-1.5 px-3 py-2 ${selectedId ? "hidden md:flex" : ""}`}
-        style={{ borderBottom: "1px solid var(--mc-border)" }}
-      >
-        <button
-          type="button"
-          onClick={() => setAgent("")}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium ${
-            !agent ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
-          }`}
-        >
-          All agents
-        </button>
-        {agents.map((a) => (
-          <button
-            key={a.local}
-            type="button"
-            onClick={() => setAgent(a.local === agent ? "" : a.local)}
-            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium max-w-[140px] ${
-              agent === a.local ? "bg-mc-teal-dim text-mc-teal" : "text-muted-foreground hover:bg-muted/40"
-            }`}
-          >
-            <span className="truncate">{a.label}</span>
-          </button>
-        ))}
       </div>
       <div
         className={`flex flex-wrap items-center gap-1.5 px-3 py-2 ${selectedId ? "hidden md:flex" : ""}`}
