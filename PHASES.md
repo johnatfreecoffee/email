@@ -40,11 +40,11 @@ Source: `SPEC.md`. If it is not in the spec, it does not exist.
 ### P6 — Ship pipeline [x]
 - Tests, commit, push main (email-app). Install worker. Confirm heartbeat
 
-### P7 — 48h backfill [ ] (only after P6)
+### P7 — 48h backfill [x] (only after P6)
 Must finish: 999004, 999006, 45, 46. Audit 37–44. Skip 999001–999003.
 NokNok backfill = real product fix on `~/Documents/noknok.pro`, merge main, live noknok-app, then the done email.
 
-## UI match [ ]
+## UI match [x]
 How-it-works + Setup copy vs existing Agents/Settings tiles. Desktop + ~390. No new chrome.
 
 ## Hunt [ ]
