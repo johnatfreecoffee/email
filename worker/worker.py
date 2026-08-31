@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,19 +36,48 @@ except ImportError:
     access = None  # type: ignore
 
 CONTEXT_MAX_K = 500  # display denominator
+TOKENS_PER_MIN = 2500  # tool-loop estimate; wall-clock is minutes, not seconds
+MAX_PARALLEL = 4
 ID_RE = re.compile(r"\(ID:\s*(\d+)(?:\s*-\s*[^)]*)?\)", re.I)
 ID_ONLY_RE = re.compile(r"\bID:\s*(\d+)\b", re.I)
+REPLY_PREFIX_RE = re.compile(r"^(re|fwd|fw)\s*:", re.I)
+DONE_LINE_RE = re.compile(
+    r"\b(this turn is done|this turn'?s done|that'?s done for this turn|done for this turn)\b",
+    re.I,
+)
+VAGUE_FALLBACK = "I looked at this — write back if you want me to go deeper on any piece."
+EMPTY_DONE = (
+    "This turn is done. I ran the job but didn't have a note to send — nothing useful finished. "
+    "Write back with a shorter ask and I'll pick it up."
+)
+TIMEOUT_PARTIAL = (
+    "This turn is done. I ran out of time. What finished is in the note above; "
+    "the rest of this turn did not finish. Write back if you want me to keep going."
+)
+TIMEOUT_EMPTY = (
+    "This turn is done. I started but ran out of time — nothing useful finished; "
+    "the rest of this turn did not. Reply on this thread and I'll pick it up."
+)
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_state_lock = threading.RLock()
+_log_lock = threading.Lock()
+_session_locks_guard = threading.Lock()
+_session_locks: dict[int, threading.Lock] = {}
+_inflight: set[str] = set()
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
 
 
 def log(msg: str) -> None:
     line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}"
     print(line, flush=True)
     try:
-        with LOG_FILE.open("a") as f:
-            f.write(line + "\n")
+        with _log_lock:
+            with LOG_FILE.open("a") as f:
+                f.write(line + "\n")
     except OSError:
         pass
 
@@ -89,33 +121,93 @@ def curl_json(method: str, url: str, headers: dict[str, str], body: dict | None 
 
 
 def load_processed() -> set[str]:
-    if not PROCESSED.exists():
-        return set()
-    try:
-        return set(json.loads(PROCESSED.read_text()))
-    except Exception:
-        return set()
+    with _state_lock:
+        if not PROCESSED.exists():
+            return set()
+        try:
+            return set(json.loads(PROCESSED.read_text()))
+        except Exception:
+            return set()
 
 
 def save_processed(ids: set[str]) -> None:
-    lst = sorted(ids)[-5000:]
-    PROCESSED.write_text(json.dumps(lst))
+    with _state_lock:
+        lst = sorted(ids)[-5000:]
+        PROCESSED.write_text(json.dumps(lst))
 
 
 def load_sessions() -> dict:
-    if not SESSIONS.exists():
-        return {"next_id": 1, "by_id": {}}
-    try:
-        data = json.loads(SESSIONS.read_text())
-        data.setdefault("next_id", 1)
-        data.setdefault("by_id", {})
-        return data
-    except Exception:
-        return {"next_id": 1, "by_id": {}}
+    with _state_lock:
+        if not SESSIONS.exists():
+            return {"next_id": 1, "by_id": {}}
+        try:
+            data = json.loads(SESSIONS.read_text())
+            data.setdefault("next_id", 1)
+            data.setdefault("by_id", {})
+            return data
+        except Exception:
+            return {"next_id": 1, "by_id": {}}
 
 
 def save_sessions(data: dict) -> None:
-    SESSIONS.write_text(json.dumps(data, indent=2) + "\n")
+    with _state_lock:
+        SESSIONS.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def session_lock_for(sid: int) -> threading.Lock:
+    with _session_locks_guard:
+        lock = _session_locks.get(sid)
+        if lock is None:
+            lock = threading.Lock()
+            _session_locks[sid] = lock
+        return lock
+
+
+def get_job_pool() -> ThreadPoolExecutor:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(max_workers=MAX_PARALLEL, thread_name_prefix="am-job")
+        return _pool
+
+
+def touch_lock() -> None:
+    try:
+        if LOCK.exists():
+            LOCK.touch()
+        else:
+            LOCK.write_text(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def mark_processed(mid: str) -> None:
+    """Atomically add one id so parallel jobs cannot drop siblings."""
+    with _state_lock:
+        ids: set[str] = set()
+        if PROCESSED.exists():
+            try:
+                ids = set(json.loads(PROCESSED.read_text()))
+            except Exception:
+                ids = set()
+        ids.add(str(mid))
+        PROCESSED.write_text(json.dumps(sorted(ids)[-5000:]))
+
+
+def inflight_count() -> int:
+    with _state_lock:
+        return len(_inflight)
+
+
+def wait_inflight(timeout: float = 15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with _state_lock:
+            empty = not _inflight
+        if empty:
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def _expand_path(raw: str) -> Path:
@@ -620,19 +712,48 @@ def _has_signoff(text: str, display: str) -> bool:
     return bool(disp and any(ln.lower() == disp for ln in tail))
 
 
+def ensure_done_line(text: str) -> str:
+    """Finished replies must state this turn is done. Insert before signoff if missing."""
+    body = (text or "").strip()
+    if not body:
+        return body
+    if DONE_LINE_RE.search(body):
+        return body
+    lines = body.splitlines()
+    i = len(lines) - 1
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    name_i = i
+    i -= 1
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    closer_i = i
+    if (
+        closer_i >= 0
+        and name_i > closer_i
+        and SIGNOFF_RE.match(lines[closer_i].strip().rstrip(","))
+    ):
+        insert_at = closer_i
+        while insert_at > 0 and not lines[insert_at - 1].strip():
+            insert_at -= 1
+        lines = lines[:insert_at] + ["", "This turn is done."] + lines[insert_at:]
+        return "\n".join(lines).strip()
+    return body.rstrip() + "\n\nThis turn is done."
+
+
 def shape_human_email(text: str, first: str, display: str) -> str:
-    """Guarantee Hey First + closer + agent name."""
+    """Guarantee Hey First + closer + agent name + this-turn-is-done."""
     body = (text or "").strip()
     first = first or "there"
     display = display or "Agent"
-    if not body:
-        body = "I looked at this — write back if you want me to go deeper on any piece."
+    if not body or body == VAGUE_FALLBACK:
+        body = EMPTY_DONE
     if not GREET_RE.match(body):
         body = f"Hey {first},\n\n{body}"
     if not _has_signoff(body, display):
         closer = pick_closer(body, DONE_CLOSERS)
         body = f"{body.rstrip()}\n\n{closer},\n{display}"
-    return body
+    return ensure_done_line(body)
 
 
 def parse_grok_stdout(raw: str) -> tuple[str, int | None]:
@@ -797,8 +918,6 @@ def format_reply_subject(base: str, session_id: int, used_k: int) -> str:
 
 def tokens_to_used_k(used_tokens: int) -> int:
     """Convert accumulated token estimate → subject numerator (K)."""
-    import math
-
     return max(1, min(CONTEXT_MAX_K, int(math.ceil(max(0, int(used_tokens)) / 1000.0))))
 
 
@@ -822,7 +941,7 @@ def estimate_turn_tokens(
     text_tokens = max(0, int(len(text) / 3.0))
     # Tool-loop baseline + ~2.5k tokens per minute of agent wall time
     wall = max(0.0, float(duration_s or 0.0))
-    tool_tokens = 12_000 + int(wall * 2_500)
+    tool_tokens = 12_000 + int((wall / 60.0) * TOKENS_PER_MIN)
     # Timed-out runs almost always burned a large window — floor so the
     # subject actually advances instead of looking frozen.
     if timed_out:
@@ -835,8 +954,6 @@ def estimate_used_k(history: list[dict], prev_used_k: int = 1, used_tokens: int 
     """Prefer cumulative used_tokens; fall back to history-only for old sessions."""
     if used_tokens is not None and int(used_tokens) > 0:
         return max(tokens_to_used_k(int(used_tokens)), int(prev_used_k or 1))
-
-    import math
 
     total_chars = 0
     user_turns = 0
@@ -875,9 +992,11 @@ def fetch_new_messages(cfg: dict, agent_locals: list[str], processed: set[str]) 
 
     out = []
     agent_set = set(agent_locals)
+    with _state_lock:
+        inflight = set(_inflight)
     for msg in data:
         mid = msg.get("id")
-        if not mid or mid in processed:
+        if not mid or mid in processed or str(mid) in inflight:
             continue
         local = extract_agent_local(msg.get("to_addresses"), msg.get("cc_addresses"))
         if not local or local not in agent_set:
@@ -930,39 +1049,62 @@ def alloc_session(sessions: dict, agent: dict, msg: dict, base: str) -> tuple[in
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "status": "open",
         "used_k": 1,
+        "used_tokens": 0,
     }
     sessions["by_id"][str(sid)] = rec
     save_sessions(sessions)
     return sid, rec
 
 
+def is_reply_subject(subject: str) -> bool:
+    return bool(REPLY_PREFIX_RE.match(strip_id_tag(subject or "").strip()))
+
+
 def resolve_session(sessions: dict, agent: dict, msg: dict) -> tuple[int, dict, bool]:
-    """Return (session_id, record, is_new)."""
+    """Return (session_id, record, is_new).
+
+    Same session: (ID: n) + same agent, or Re:/Fwd: of the same base + same agent,
+    or same email_thread_id + same base + same agent.
+    New session: no ID and a different base_subject — never reuse thread_id alone.
+    """
     subj = msg.get("subject") or ""
+    local = agent["local_part"]
     sid = parse_session_id(subj)
     if sid is not None and str(sid) in sessions["by_id"]:
         rec = sessions["by_id"][str(sid)]
-        # only continue if same agent mailbox
-        if rec.get("agent_local") == agent["local_part"]:
+        if rec.get("agent_local") == local:
             rec["updated_at"] = datetime.now(timezone.utc).isoformat()
             rec["status"] = "open"
             save_sessions(sessions)
             return sid, rec, False
 
-    # match open session by email thread_id + agent
+    base = base_subject(subj)
     tid = msg.get("thread_id")
+
+    def same_agent_open(rec: dict) -> bool:
+        return rec.get("agent_local") == local and rec.get("status") == "open"
+
+    if is_reply_subject(subj):
+        for k, rec in sessions["by_id"].items():
+            if same_agent_open(rec) and rec.get("base_subject") == base:
+                rec["updated_at"] = datetime.now(timezone.utc).isoformat()
+                if tid and not rec.get("email_thread_id"):
+                    rec["email_thread_id"] = tid
+                save_sessions(sessions)
+                return int(k), rec, False
+
+    # Same thread + same base (clients that omit Re:). Never if the base differs.
     if tid:
         for k, rec in sessions["by_id"].items():
             if (
-                rec.get("agent_local") == agent["local_part"]
+                same_agent_open(rec)
                 and rec.get("email_thread_id") == tid
-                and rec.get("status") == "open"
+                and rec.get("base_subject") == base
             ):
                 rec["updated_at"] = datetime.now(timezone.utc).isoformat()
                 save_sessions(sessions)
                 return int(k), rec, False
 
-    base = base_subject(subj)
     sid, rec = alloc_session(sessions, agent, msg, base)
     return sid, rec, True
 
@@ -1044,6 +1186,8 @@ HARD — one email, nothing else:
 - No thinking. No diary. No "I'll look up". No "next I'll". No status. No play-by-play.
 - The worker already sent a "got it" note if this is a long job. Do not write another "I'm on it" or "still working".
 - When done, print one normal human email. That is the only thing they should ever see.
+- The finished email must say this turn is done. If more work is possible, still say this turn is done, then offer to go deeper.
+- Never send a vague "I looked / write back if you want deeper" without a done line.
 
 EMAIL SHAPE (HARD):
 Hey {first},
@@ -1177,12 +1321,13 @@ Rules:
         if partial and len(re.sub(r"\s+", " ", partial)) > 120:
             text = (
                 partial[:11000]
-                + "\n\nI ran out of time mid-reply. That's what I have so far — write back if you want me to keep going."
+                + "\n\nThis turn is done. I ran out of time mid-reply — that's what finished. "
+                "The rest did not. Write back if you want me to keep going."
             )
             text = shape_human_email(text, first, display)
         else:
             text = shape_human_email(
-                "I started but ran out of time before I had a clean answer. "
+                "This turn is done. I started but ran out of time, so nothing finished cleanly. "
                 "Reply on this thread and I'll pick it up.",
                 first,
                 display,
@@ -1191,20 +1336,15 @@ Rules:
         if rc != 0:
             log(f"grok nonzero rc={rc} err={stderr[:400]}")
         text = clean_email_reply(stdout, first, display)
-        if not text.strip():
-            text = shape_human_email(
-                "I ran the job but didn't have a note to send. Write back with a shorter ask?",
-                first,
-                display,
-            )
+        if not text.strip() or VAGUE_FALLBACK in text:
+            text = shape_human_email(EMPTY_DONE, first, display)
 
     append_history(session_id, "assistant", text)
-    turn_tokens = (
-        usage_tokens
-        if usage_tokens and usage_tokens > 0
-        else estimate_turn_tokens(
-            prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
-        )
+    # Subject numerator is this session's wall-clock estimate only.
+    # Grok JSON total_tokens is the model window — never paint that as used.
+    _ = usage_tokens
+    turn_tokens = estimate_turn_tokens(
+        prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
     )
     log(
         f"grok done session={session_id} timed_out={timed_out} "
@@ -1427,11 +1567,155 @@ def deny_reply(agent: dict, reason: str) -> str:
     return f"This mailbox is restricted. {name} didn't run your message."
 
 
+def _mark_processed(mid: str) -> None:
+    with _state_lock:
+        ids: set[str] = set()
+        if PROCESSED.exists():
+            try:
+                ids = set(json.loads(PROCESSED.read_text()))
+            except Exception:
+                ids = set()
+        ids.add(mid)
+        PROCESSED.write_text(json.dumps(sorted(ids)[-5000:]))
+    with _session_locks_guard:
+        _inflight.discard(str(mid))
+
+
+def _execute_session_turn(
+    cfg: dict,
+    agent: dict,
+    msg: dict,
+    sid: int,
+    is_new: bool,
+    grant: dict,
+    cloud_store: dict | None,
+    first: str,
+    q_only: bool,
+) -> None:
+    local = agent["local_part"]
+    mid = msg["id"]
+    from_addr = msg.get("from_address") or ""
+    display = agent.get("display_name") or "Agent"
+    with _state_lock:
+        sessions = load_sessions()
+        rec = sessions["by_id"].get(str(sid)) or {}
+        rec_snap = dict(rec)
+    default_to, default_cc = resolve_recipients(
+        msg, local, cloud_store, [], [], rec_snap.get("thread_people") or []
+    )
+
+    def send_status(kind: str) -> None:
+        with _state_lock:
+            live = load_sessions()["by_id"].get(str(sid)) or rec_snap
+        topic = live.get("base_subject") or base_subject(msg.get("subject") or "")
+        used_k = int(live.get("used_k") or 1)
+        subj_s = format_reply_subject(topic, sid, used_k)
+        note = status_note(kind, first, display, topic)
+        send_reply(cfg, agent, msg, note, subj_s, to=default_to, cc=default_cc)
+        append_history(sid, "assistant", note)
+        log(f"{kind} sent session={sid} to={default_to}")
+
+    reply, meta = run_grok(
+        cfg,
+        agent,
+        msg,
+        sid,
+        is_new,
+        grant=grant,
+        store=cloud_store,
+        first_name=first,
+        on_slow=send_status if looks_like_job(msg, q_only) else None,
+    )
+    history = load_history(sid)
+    with _state_lock:
+        sessions = load_sessions()
+        rec = sessions["by_id"].get(str(sid))
+        if rec is None:
+            rec = rec_snap
+            sessions["by_id"][str(sid)] = rec
+        prev_k = int(rec.get("used_k") or 1)
+        prev_tokens = int(rec.get("used_tokens") or 0)
+        if prev_tokens <= 0 and prev_k > 1:
+            prev_tokens = prev_k * 1000
+        turn_tokens = int(meta.get("turn_tokens") or 0)
+        used_tokens = prev_tokens + turn_tokens
+        used_k = estimate_used_k(history, prev_k, used_tokens=used_tokens)
+        rec["used_tokens"] = used_tokens
+        rec["used_k"] = used_k
+        rec["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if msg.get("thread_id") and not rec.get("email_thread_id"):
+            rec["email_thread_id"] = msg.get("thread_id")
+        body, route_to, route_cc = parse_route_block(reply)
+        to_list, cc_list = resolve_recipients(
+            msg,
+            local,
+            cloud_store,
+            route_to,
+            route_cc,
+            rec.get("thread_people") or [],
+        )
+        rec["thread_people"] = thread_people(msg, (rec.get("thread_people") or []) + to_list + cc_list)
+        sessions["by_id"][str(sid)] = rec
+        save_sessions(sessions)
+        topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
+    subj = format_reply_subject(topic, sid, used_k)
+    send_reply(cfg, agent, msg, body or reply, subj, to=to_list, cc=cc_list)
+
+    tdir = Path(agent["agent_dir"]) / "threads"
+    tdir.mkdir(parents=True, exist_ok=True)
+    (tdir / f"{sid}-{mid}.json").write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "is_new": is_new,
+                "used_k": used_k,
+                "used_tokens": used_tokens,
+                "turn_tokens": turn_tokens,
+                "timed_out": bool(meta.get("timed_out")),
+                "duration_s": meta.get("duration_s"),
+                "subject": subj,
+                "msg_id": mid,
+                "from": from_addr,
+                "reply_preview": reply[:2000],
+                "at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+    )
+
+
+def _run_claimed_job(
+    cfg: dict,
+    agent: dict,
+    msg: dict,
+    sid: int,
+    is_new: bool,
+    grant: dict,
+    cloud_store: dict | None,
+    first: str,
+    q_only: bool,
+) -> None:
+    mid = msg["id"]
+    try:
+        with session_lock_for(sid):
+            _execute_session_turn(
+                cfg, agent, msg, sid, is_new, grant, cloud_store, first, q_only
+            )
+    except Exception as e:
+        log(f"process error msg={str(mid)[:8]}: {e}")
+        traceback.print_exc()
+        release_claim(cfg, str(mid))
+    finally:
+        _mark_processed(mid)
+        touch_lock()
+
+
 def process_once(cfg: dict) -> None:
+    """Claim new mail and dispatch Grok jobs. Returns while other sessions still run."""
+    touch_lock()
     agents_doc = load_agents(cfg)
     agents = by_local(agents_doc)
     processed = load_processed()
-    sessions = load_sessions()
     cloud_store = None
     if access:
         access.ensure_store()
@@ -1442,17 +1726,20 @@ def process_once(cfg: dict) -> None:
         return
 
     log(f"found {len(msgs)} new agent mail(s)")
+    pool = get_job_pool()
     for msg in msgs:
         mid = msg["id"]
+        with _session_locks_guard:
+            if str(mid) in _inflight:
+                continue
         if cloud_already_handled(cfg, str(mid)):
             log(f"skip already-handled msg={str(mid)[:8]}")
-            processed.add(mid)
-            save_processed(processed)
+            _mark_processed(mid)
             continue
         local = msg["_agent_local"]
         agent = agents.get(local)
         if not agent:
-            processed.add(mid)
+            _mark_processed(mid)
             continue
         from_addr = msg.get("from_address") or ""
         if access:
@@ -1467,8 +1754,7 @@ def process_once(cfg: dict) -> None:
             ask = grant.get("mode") == "ask" or not any(perms.get(k) for k in ("write", "update", "delete"))
             if ask:
                 log(f"skip ask-only; hands=api msg={str(mid)[:8]}")
-                processed.add(mid)
-                save_processed(processed)
+                _mark_processed(mid)
                 continue
         if not auth.get("ok"):
             reason = auth.get("reason") or "unknown"
@@ -1479,109 +1765,40 @@ def process_once(cfg: dict) -> None:
                     send_reply(cfg, agent, msg, deny_reply(agent, reason), f"Re: {base}")
                 except Exception as e:
                     log(f"deny-reply failed: {e}")
-            processed.add(mid)
-            save_processed(processed)
+            _mark_processed(mid)
             continue
         via = (os.environ.get("AGENTMAIL_VIA") or "local").strip().lower()
         if not claim_message(cfg, str(mid), via):
             log(f"skip claimed msg={str(mid)[:8]}")
-            processed.add(mid)
-            save_processed(processed)
+            _mark_processed(mid)
             continue
-        try:
-            sid, rec, is_new = resolve_session(sessions, agent, msg)
-            grant = auth.get("grant") or {}
-            first = sender_first_name(from_addr, cloud_store, msg)
-            display = agent.get("display_name") or "Agent"
-            q_only = False
-            if access:
-                q_only = bool(access.grok_invocation(grant).get("questions_only"))
-            default_to, default_cc = resolve_recipients(
-                msg, local, cloud_store, [], [], rec.get("thread_people") or []
-            )
-
-            def send_status(kind: str) -> None:
-                topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
-                used_k = int(rec.get("used_k") or 1)
-                subj_s = format_reply_subject(topic, sid, used_k)
-                note = status_note(kind, first, display, topic)
-                send_reply(cfg, agent, msg, note, subj_s, to=default_to, cc=default_cc)
-                append_history(sid, "assistant", note)
-                log(f"{kind} sent session={sid} to={default_to}")
-
-            reply, meta = run_grok(
-                cfg,
-                agent,
-                msg,
-                sid,
-                is_new,
-                grant=grant,
-                store=cloud_store,
-                first_name=first,
-                on_slow=send_status if looks_like_job(msg, q_only) else None,
-            )
-            history = load_history(sid)
-            prev_k = int(rec.get("used_k") or 1)
-            prev_tokens = int(rec.get("used_tokens") or 0)
-            # Prefer cumulative used_tokens (real agent-loop estimate). Seed
-            # from prev_k*1000 so old sessions don't reset the counter.
-            if prev_tokens <= 0 and prev_k > 1:
-                prev_tokens = prev_k * 1000
-            turn_tokens = int(meta.get("turn_tokens") or 0)
-            used_tokens = prev_tokens + turn_tokens
-            used_k = estimate_used_k(history, prev_k, used_tokens=used_tokens)
-            rec["used_tokens"] = used_tokens
-            rec["used_k"] = used_k
-            rec["updated_at"] = datetime.now(timezone.utc).isoformat()
-            # Keep email_thread_id sticky so later mails on same thread continue
-            if msg.get("thread_id") and not rec.get("email_thread_id"):
-                rec["email_thread_id"] = msg.get("thread_id")
-            sessions["by_id"][str(sid)] = rec
-            save_sessions(sessions)
-
-            subj = format_reply_subject(rec.get("base_subject") or base_subject(msg.get("subject") or ""), sid, used_k)
-            body, route_to, route_cc = parse_route_block(reply)
-            to_list, cc_list = resolve_recipients(
-                msg,
-                local,
-                cloud_store,
-                route_to,
-                route_cc,
-                rec.get("thread_people") or [],
-            )
-            rec["thread_people"] = thread_people(msg, (rec.get("thread_people") or []) + to_list + cc_list)
-            sessions["by_id"][str(sid)] = rec
-            save_sessions(sessions)
-            send_reply(cfg, agent, msg, body or reply, subj, to=to_list, cc=cc_list)
-
-            tdir = Path(agent["agent_dir"]) / "threads"
-            tdir.mkdir(parents=True, exist_ok=True)
-            (tdir / f"{sid}-{mid}.json").write_text(
-                json.dumps(
-                    {
-                        "session_id": sid,
-                        "is_new": is_new,
-                        "used_k": used_k,
-                        "used_tokens": used_tokens,
-                        "turn_tokens": turn_tokens,
-                        "timed_out": bool(meta.get("timed_out")),
-                        "duration_s": meta.get("duration_s"),
-                        "subject": subj,
-                        "msg_id": mid,
-                        "from": from_addr,
-                        "reply_preview": reply[:2000],
-                        "at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    indent=2,
-                )
-            )
-        except Exception as e:
-            log(f"process error msg={str(mid)[:8]}: {e}")
-            traceback.print_exc()
-            release_claim(cfg, str(mid))
-        finally:
-            processed.add(mid)
-            save_processed(processed)
+        with _state_lock:
+            sessions = load_sessions()
+            sid, _rec, is_new = resolve_session(sessions, agent, msg)
+        grant = auth.get("grant") or {}
+        first = sender_first_name(from_addr, cloud_store, msg)
+        q_only = False
+        if access:
+            q_only = bool(access.grok_invocation(grant).get("questions_only"))
+        with _session_locks_guard:
+            _inflight.add(str(mid))
+        log(f"dispatch session={sid} new={is_new} agent={local} msg={str(mid)[:8]}")
+        fut = pool.submit(
+            _run_claimed_job,
+            cfg,
+            agent,
+            msg,
+            sid,
+            is_new,
+            grant,
+            cloud_store,
+            first,
+            q_only,
+        )
+        fut.add_done_callback(
+            lambda f: (log(f"job thread error: {f.exception()}") if f.exception() else None)
+        )
+        del rec
 
 
 def acquire_lock() -> bool:
@@ -1604,7 +1821,7 @@ def acquire_lock() -> bool:
 def main() -> int:
     cfg = load_config()
     poll = int(cfg.get("POLL_SECONDS", "30"))
-    log(f"email worker start poll={poll}s pid={os.getpid()} sessions=on")
+    log(f"email worker start poll={poll}s pid={os.getpid()} sessions=on parallel={MAX_PARALLEL}")
     try:
         boot_agents = load_agents(cfg)
         log(f"agents n={len(boot_agents.get('agents') or [])} workspaces={WORKSPACES_JSON.exists()} overlay={AGENTS_JSON.exists()}")
