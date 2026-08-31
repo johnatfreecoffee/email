@@ -37,7 +37,7 @@ Source: `SPEC.md`. If it is not in the spec, it does not exist.
 - Replace “ack then one mail, no check-ins” with ack / 15-min / done-or-questions / died
 - Stage colors unchanged (no purple)
 
-### P6 — Ship pipeline [ ]
+### P6 — Ship pipeline [x]
 - Tests, commit, push main (email-app). Install worker. Confirm heartbeat
 
 ### P7 — 48h backfill [ ] (only after P6)
