@@ -216,7 +216,7 @@ NEXT_PUBLIC_OWNER_PASSWORD=...`}</Code>
 # fill SUPABASE_*, RESEND_API_KEY, GROK_BIN
 # optional WORKSPACE_ROOT=~/Documents
 # optional ~/Library/AgentMail/workspaces.json  →  { "a.dev": "~/src/my-app" }`}</Code>
-          <p>The worker runs while this Mac is awake. Closing the lid sleeps the Mac unless System Settings → Energy → Prevent automatic sleeping on power adapter when the display is off. Create mailboxes under the Agents tab — the worker reads them from the database. Only add workspaces.json if a mailbox should open a folder that is not WORKSPACE_ROOT/name.</p>
+          <p>The worker runs on this Mac. On power, the Mac stays awake with the lid closed. Unplug and it sleeps like a laptop. Create mailboxes under the Agents tab — the worker reads them from the database. Only add workspaces.json if a mailbox should open a folder that is not WORKSPACE_ROOT/name.</p>
           <Status tiles={tiles} ids={["machine"]} />
           <Nav back={() => setStep("signin")} next={() => goNext("hands")} />
         </Block>
