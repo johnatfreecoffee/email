@@ -41,6 +41,18 @@ MAX_PARALLEL = 4
 ID_RE = re.compile(r"\(ID:\s*(\d+)(?:\s*-\s*[^)]*)?\)", re.I)
 ID_ONLY_RE = re.compile(r"\bID:\s*(\d+)\b", re.I)
 REPLY_PREFIX_RE = re.compile(r"^(re|fwd|fw)\s*:", re.I)
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
+JOB_SELECT = (
+    "id,session_id,agent_local,mailbox,base_subject,stage,email_thread_id,"
+    "last_message_id,used_k,used_tokens,received_at,started_at,last_reply_at,"
+    "done_at,stuck_at,updated_at,notes,remind_requested_at"
+)
+REMIND_USER_TEXT = (
+    "John tapped Remind on the board — pick this session back up and finish "
+    "or say what's blocking."
+)
 DONE_LINE_RE = re.compile(
     r"\b(this turn is done|this turn'?s done|that'?s done for this turn|done for this turn)\b",
     re.I,
@@ -67,6 +79,7 @@ _log_lock = threading.Lock()
 _session_locks_guard = threading.Lock()
 _session_locks: dict[int, threading.Lock] = {}
 _inflight: set[str] = set()
+_inflight_sessions: set[int] = set()
 _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
 
@@ -465,12 +478,13 @@ def thread_people(msg: dict, extra: list[str] | None = None) -> list[str]:
     return out
 
 
-def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
-    """Pull a trailing TO:/CC: block off the reply. Returns (body, to, cc)."""
+def parse_trailers(text: str) -> tuple[str, list[str], list[str], str]:
+    """Pull trailing TO:/CC:/NOTE: off the reply. Returns (body, to, cc, note)."""
     lines = (text or "").rstrip().splitlines()
     if not lines:
-        return "", [], []
+        return "", [], [], ""
     take: list[str] = []
+    notes: list[str] = []
     i = len(lines) - 1
     while i >= 0:
         s = lines[i].strip()
@@ -484,9 +498,16 @@ def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
             take.append(s)
             i -= 1
             continue
+        m = re.match(r"^NOTE\s*:\s*(.*)$", s, re.I)
+        if m:
+            n = m.group(1).strip()
+            if n:
+                notes.append(n)
+            i -= 1
+            continue
         break
-    if not take:
-        return (text or "").strip(), [], []
+    if not take and not notes:
+        return (text or "").strip(), [], [], ""
     body = "\n".join(lines[: i + 1]).rstrip()
     to: list[str] = []
     cc: list[str] = []
@@ -498,22 +519,22 @@ def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
         m = re.match(r"^CC\s*:\s*(.*)$", line, re.I)
         if m:
             cc.extend(emails_from_field(m.group(1)))
+    note = " ".join(reversed(notes)).strip()
+    return body, to, cc, note
+
+
+def parse_route_block(text: str) -> tuple[str, list[str], list[str]]:
+    """Pull a trailing TO:/CC: block off the reply. Returns (body, to, cc)."""
+    body, to, cc, _note = parse_trailers(text)
     return body, to, cc
 
 
 def parse_note_block(text: str) -> tuple[str, str]:
-    """Strip NOTE: lines (board card note). Returns (body, note)."""
-    notes: list[str] = []
-    keep: list[str] = []
-    for line in (text or "").splitlines():
-        m = re.match(r"^NOTE\s*:\s*(.*)$", line.strip(), re.I)
-        if m:
-            n = m.group(1).strip()
-            if n:
-                notes.append(n)
-            continue
-        keep.append(line)
-    return "\n".join(keep).rstrip(), " ".join(notes).strip()
+    """Strip a trailing NOTE: card trailer. Returns (body with TO/CC kept, note)."""
+    body, to, cc, note = parse_trailers(text)
+    if to or cc:
+        body = f"{body.rstrip()}\n\nTO: {', '.join(to)}\nCC: {', '.join(cc)}"
+    return body, note
 
 
 def looks_like_waiting_question(text: str) -> bool:
@@ -525,15 +546,296 @@ def looks_like_waiting_question(text: str) -> bool:
         return False
     if re.search(r"\b(shipped|fixed|deployed|merged|committed|patched|installed)\b", compact, re.I):
         return False
+    if re.search(r"\b(go deeper|write back if|want me to keep going)\b", compact, re.I):
+        return False
     return True
 
 
-def finish_stage(timed_out: bool, reply_text: str) -> str:
-    if timed_out:
+def finish_stage(
+    timed_out: bool,
+    reply_text: str,
+    questions_only: bool = False,
+    process_error: bool = False,
+) -> str:
+    if timed_out or process_error:
         return "stuck"
-    if looks_like_waiting_question(reply_text):
+    if questions_only or looks_like_waiting_question(reply_text):
         return "waiting"
     return "done"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def is_missing_table(code: int, data: object) -> bool:
+    if int(code or 0) == 404:
+        return True
+    if isinstance(data, dict):
+        err = str(data.get("code") or "")
+        if err in ("PGRST205", "42P01"):
+            return True
+        blob = f"{data.get('message') or ''} {data.get('hint') or ''}".lower()
+        if "does not exist" in blob or "schema cache" in blob:
+            return True
+    return False
+
+
+def as_record(data: object) -> dict | None:
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0]
+    if isinstance(data, dict) and not isinstance(data, list) and data.get("id"):
+        return data
+    return None
+
+
+def sb_headers(cfg: dict, extra: dict[str, str] | None = None) -> dict[str, str]:
+    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def sb_base(cfg: dict) -> str:
+    return (cfg.get("SUPABASE_URL") or "").rstrip("/")
+
+
+def remind_jobs_url(base: str) -> str:
+    return (
+        f"{base.rstrip('/')}/rest/v1/agent_jobs"
+        f"?remind_requested_at=not.is.null&select={JOB_SELECT}"
+        f"&order=remind_requested_at.asc"
+    )
+
+
+def job_upsert_payload(
+    stage: str,
+    *,
+    existing: dict | None,
+    agent: dict,
+    session_id: int,
+    rec: dict | None = None,
+    msg: dict | None = None,
+    used_k: int | None = None,
+    used_tokens: int | None = None,
+    notes: str | None = None,
+) -> dict:
+    """Shape a PostgREST agent_jobs row. received_at only on insert."""
+    rec = rec or {}
+    msg = msg or {}
+    existing = existing or None
+    now = now_iso()
+    local = (agent.get("local_part") or (existing or {}).get("agent_local") or "").strip().lower()
+    payload: dict = {
+        "session_id": int(session_id),
+        "agent_local": local,
+        "stage": stage,
+        "updated_at": now,
+    }
+    mailbox = agent.get("email") or (existing or {}).get("mailbox")
+    if mailbox:
+        payload["mailbox"] = mailbox
+    base = (
+        rec.get("base_subject")
+        or (existing or {}).get("base_subject")
+        or base_subject(msg.get("subject") or "")
+    )
+    payload["base_subject"] = base or "(no subject)"
+    tid = rec.get("email_thread_id") or msg.get("thread_id") or (existing or {}).get("email_thread_id")
+    if tid:
+        payload["email_thread_id"] = tid
+    mid = str(msg.get("id") or "")
+    if mid and UUID_RE.match(mid):
+        payload["last_message_id"] = mid
+    if used_k is not None:
+        payload["used_k"] = int(used_k)
+    elif existing is None:
+        payload["used_k"] = int(rec.get("used_k") or 1)
+    if used_tokens is not None:
+        payload["used_tokens"] = int(used_tokens)
+    elif existing is None:
+        payload["used_tokens"] = int(rec.get("used_tokens") or 0)
+    if notes is not None and str(notes).strip():
+        payload["notes"] = str(notes).strip()[:2000]
+    elif existing is None:
+        payload["notes"] = ""
+
+    if existing is None:
+        payload["received_at"] = now
+    if stage == "working" and not (existing or {}).get("started_at"):
+        payload["started_at"] = now
+    if stage in ("done", "waiting", "stuck"):
+        payload["last_reply_at"] = now
+    if stage == "done":
+        payload["done_at"] = now
+    if stage == "stuck":
+        payload["stuck_at"] = now
+    return payload
+
+
+def fetch_agent_job(cfg: dict, agent_local: str, session_id: int) -> dict | None:
+    base = sb_base(cfg)
+    if not base:
+        return None
+    url = (
+        f"{base}/rest/v1/agent_jobs?agent_local=eq.{agent_local}"
+        f"&session_id=eq.{int(session_id)}&select={JOB_SELECT}&limit=1"
+    )
+    code, data = curl_json("GET", url, sb_headers(cfg))
+    if is_missing_table(code, data):
+        return None
+    if code != 200:
+        return None
+    return as_record(data)
+
+
+def append_job_event(cfg: dict, job_id: str, kind: str, detail: str | None = None) -> None:
+    base = sb_base(cfg)
+    if not base or not job_id or not kind:
+        return
+    try:
+        code, data = curl_json(
+            "POST",
+            f"{base}/rest/v1/agent_job_events",
+            sb_headers(cfg, {"Prefer": "return=minimal"}),
+            {"job_id": job_id, "kind": kind, "detail": (detail[:2000] if detail else None)},
+        )
+        if is_missing_table(code, data):
+            log("kanban: agent_job_events missing — skip")
+    except Exception as e:
+        log(f"kanban event failed: {e}")
+
+
+def write_kanban_stage(
+    cfg: dict,
+    stage: str,
+    *,
+    agent: dict,
+    session_id: int,
+    rec: dict | None = None,
+    msg: dict | None = None,
+    used_k: int | None = None,
+    used_tokens: int | None = None,
+    notes: str | None = None,
+    extra_events: list[tuple[str, str | None]] | None = None,
+) -> dict | None:
+    """Upsert agent_jobs + events. Fail open — never raise to the mail path."""
+    base = sb_base(cfg)
+    if not base or not (cfg.get("SUPABASE_SERVICE_KEY") or ""):
+        return None
+    try:
+        local = (agent.get("local_part") or "").strip().lower()
+        existing = fetch_agent_job(cfg, local, session_id)
+        payload = job_upsert_payload(
+            stage,
+            existing=existing,
+            agent=agent,
+            session_id=session_id,
+            rec=rec,
+            msg=msg,
+            used_k=used_k,
+            used_tokens=used_tokens,
+            notes=notes,
+        )
+        headers = sb_headers(cfg, {"Prefer": "return=representation"})
+        if existing and existing.get("id"):
+            code, data = curl_json(
+                "PATCH",
+                f"{base}/rest/v1/agent_jobs?id=eq.{existing['id']}",
+                headers,
+                payload,
+            )
+        else:
+            code, data = curl_json("POST", f"{base}/rest/v1/agent_jobs", headers, payload)
+            if code in (409, 400) and not is_missing_table(code, data):
+                existing = fetch_agent_job(cfg, local, session_id)
+                if existing and existing.get("id"):
+                    payload = job_upsert_payload(
+                        stage,
+                        existing=existing,
+                        agent=agent,
+                        session_id=session_id,
+                        rec=rec,
+                        msg=msg,
+                        used_k=used_k,
+                        used_tokens=used_tokens,
+                        notes=notes,
+                    )
+                    code, data = curl_json(
+                        "PATCH",
+                        f"{base}/rest/v1/agent_jobs?id=eq.{existing['id']}",
+                        headers,
+                        payload,
+                    )
+        if is_missing_table(code, data):
+            log("kanban: agent_jobs missing — skip")
+            return None
+        if code not in (200, 201):
+            log(f"kanban write failed code={code} {str(data)[:200]}")
+            return existing
+        row = as_record(data) or existing
+        if not row:
+            return None
+        job_id = str(row.get("id") or "")
+        old_stage = (existing or {}).get("stage")
+        if job_id and stage != old_stage:
+            append_job_event(cfg, job_id, stage)
+        if job_id and notes and str(notes).strip():
+            append_job_event(cfg, job_id, "note", str(notes).strip())
+        for kind, detail in extra_events or []:
+            if job_id and kind:
+                append_job_event(cfg, job_id, kind, detail)
+        return row
+    except Exception as e:
+        log(f"kanban write failed: {e}")
+        return None
+
+
+def session_is_inflight(session_id: int) -> bool:
+    with _state_lock:
+        return int(session_id) in _inflight_sessions
+
+
+def mark_session_inflight(session_id: int, on: bool) -> None:
+    with _state_lock:
+        if on:
+            _inflight_sessions.add(int(session_id))
+        else:
+            _inflight_sessions.discard(int(session_id))
+
+
+def ensure_session_for_job(sessions: dict, agent: dict, job: dict) -> tuple[int, dict]:
+    """Reuse job.session_id. Never alloc a new one (Remind must stay on the card)."""
+    sid = int(job.get("session_id") or 0)
+    if sid <= 0:
+        raise ValueError("remind job missing session_id")
+    rec = sessions.get("by_id", {}).get(str(sid))
+    if rec:
+        rec["status"] = "open"
+        rec["updated_at"] = now_iso()
+        if job.get("email_thread_id") and not rec.get("email_thread_id"):
+            rec["email_thread_id"] = job.get("email_thread_id")
+        save_sessions(sessions)
+        return sid, rec
+    rec = {
+        "id": sid,
+        "agent_local": agent.get("local_part") or job.get("agent_local"),
+        "workspace": agent.get("workspace"),
+        "display_name": agent.get("display_name"),
+        "base_subject": job.get("base_subject") or "(no subject)",
+        "email_thread_id": job.get("email_thread_id"),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "status": "open",
+        "used_k": int(job.get("used_k") or 1),
+        "used_tokens": int(job.get("used_tokens") or 0),
+    }
+    sessions.setdefault("by_id", {})[str(sid)] = rec
+    if int(sessions.get("next_id") or 1) <= sid:
+        sessions["next_id"] = sid + 1
+    save_sessions(sessions)
+    return sid, rec
 
 
 def resolve_recipients(
@@ -837,7 +1139,7 @@ def clean_email_reply(raw: str, first: str = "there", display: str = "Agent") ->
     fenced = re.fullmatch(r"```(?:text|markdown|md)?\s*\n(.*)\n```", text, re.S)
     if fenced:
         text = fenced.group(1).strip()
-    body_only, route_to, route_cc = parse_route_block(text)
+    body_only, route_to, route_cc, card_note = parse_trailers(text)
     text = body_only or text
     text = extract_final_note(text)
     text = unsquash_sentences(text)
@@ -860,6 +1162,8 @@ def clean_email_reply(raw: str, first: str = "there", display: str = "Agent") ->
     out = shape_human_email(out[:12000], first, display)
     if route_to or route_cc:
         out = f"{out.rstrip()}\n\nTO: {', '.join(route_to)}\nCC: {', '.join(route_cc)}"
+    if card_note:
+        out = f"{out.rstrip()}\nNOTE: {card_note}"
     return out[:12000]
 
 
@@ -1155,6 +1459,7 @@ def run_grok(
     store: dict | None = None,
     first_name: str = "there",
     on_slow: Callable[[str], None] | None = None,
+    extra_instruction: str = "",
 ) -> tuple[str, dict]:
     """Run Grok Build for one email. Returns (reply_text, meta).
 
@@ -1211,10 +1516,12 @@ def run_grok(
     allow_block = "\n".join(allow_lines) or "- (none — only the writer if they are allowed)"
     on_thread = ", ".join(people_now) or "(just the writer)"
 
+    extra = (extra_instruction or "").strip()
+    extra_block = f"\n{extra}\n" if extra else ""
     prompt = f"""You are {display}. You write a normal email to a busy coworker. Not an agent log.
 Session {session_id} — {"first email" if is_new else "continuation"}.
 Their first name is {first}.
-
+{extra_block}
 Your stdout IS the email they receive. Print only the finished note, then a routing block.
 
 HARD — one email, nothing else:
@@ -1266,9 +1573,13 @@ Rules for routing:
 - Never invent an address. Never BCC. Never mail anyone not on the allowlist.
 - If they name someone who is not on the list, say they need to be added in Settings → Agents first. Do not email them.
 
-There is a Kanban board in the mail app for this session. You may append one short card note as its own line:
-NOTE: one line for the board
-Do not mention the board otherwise. When this turn is done, say so. If you only have a clarifying question, ask it — the board will mark the card waiting.
+Kanban (board in the mail app for this same session — do not mail about it):
+- John sees this chain as a card: received → working → waiting → done (stuck on timeout).
+- When this turn is done, say so in the email (already required).
+- If you need John to answer before you can finish, ask one short question — the card will show Waiting.
+- You may leave a short card note (one or two sentences). After the TO/CC block, print exactly:
+NOTE: ...
+- The worker strips NOTE from the mailed body and writes it on the card. Do not mention the board, the card, or the NOTE line in the email itself.
 
 Workspace (do not mention unless asked): {workspace}
 Scope: {"ALL projects under ~/Documents" if scope == "all_documents" else "this project only"}
@@ -1377,6 +1688,7 @@ Rules:
     turn_tokens = estimate_turn_tokens(
         prompt, stdout, stderr, duration_s=duration_s, timed_out=timed_out
     )
+    process_error = (not timed_out) and rc != 0 and not (stdout or "").strip()
     log(
         f"grok done session={session_id} timed_out={timed_out} "
         f"dur={duration_s:.0f}s turn_tokens≈{turn_tokens} reply_chars={len(text)}"
@@ -1386,6 +1698,7 @@ Rules:
         "duration_s": duration_s,
         "timed_out": timed_out,
         "returncode": rc,
+        "process_error": process_error,
     }
 
 
@@ -1598,141 +1911,6 @@ def deny_reply(agent: dict, reason: str) -> str:
     return f"This mailbox is restricted. {name} didn't run your message."
 
 
-def _sb_headers(cfg: dict, extra: dict[str, str] | None = None) -> dict[str, str]:
-    key = cfg.get("SUPABASE_SERVICE_KEY") or ""
-    h = {"apikey": key, "Authorization": f"Bearer {key}"}
-    if extra:
-        h.update(extra)
-    return h
-
-
-def upsert_agent_job(cfg: dict, fields: dict, event_kind: str | None = None, event_detail: str | None = None) -> str | None:
-    """Write/merge one Kanban row. Returns job uuid or None. Never raises."""
-    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
-    if not base or not cfg.get("SUPABASE_SERVICE_KEY"):
-        return None
-    sid = fields.get("session_id")
-    local = fields.get("agent_local")
-    if sid is None or not local:
-        return None
-    now = datetime.now(timezone.utc).isoformat()
-    stage = str(fields.get("stage") or "received")
-    row = {
-        "session_id": int(sid),
-        "agent_local": local,
-        "mailbox": fields.get("mailbox"),
-        "base_subject": fields.get("base_subject") or "(no subject)",
-        "stage": stage,
-        "email_thread_id": fields.get("email_thread_id") or None,
-        "last_message_id": fields.get("last_message_id") or None,
-        "used_k": int(fields.get("used_k") or 1),
-        "used_tokens": int(fields.get("used_tokens") or 0),
-        "updated_at": now,
-        "notes": fields.get("notes") if fields.get("notes") is not None else None,
-    }
-    if stage == "received":
-        row["received_at"] = fields.get("received_at") or now
-    if stage == "working":
-        row["started_at"] = now
-    if stage == "done":
-        row["done_at"] = now
-        row["last_reply_at"] = now
-    if stage == "stuck":
-        row["stuck_at"] = now
-        row["last_reply_at"] = now
-    if stage == "waiting":
-        row["last_reply_at"] = now
-    if fields.get("remind_requested_at") is not None:
-        row["remind_requested_at"] = fields.get("remind_requested_at")
-    # drop Nones so we don't blank columns on merge
-    body = {k: v for k, v in row.items() if v is not None}
-    try:
-        code, data = curl_json(
-            "POST",
-            f"{base}/rest/v1/agent_jobs?on_conflict=session_id,agent_local",
-            _sb_headers(
-                cfg,
-                {"Prefer": "resolution=merge-duplicates,return=representation"},
-            ),
-            body,
-        )
-        job_id = None
-        if code in (200, 201):
-            rec = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
-            if isinstance(rec, dict):
-                job_id = rec.get("id")
-        if not job_id:
-            code2, data2 = curl_json(
-                "GET",
-                f"{base}/rest/v1/agent_jobs?session_id=eq.{int(sid)}&agent_local=eq.{local}&select=id&limit=1",
-                _sb_headers(cfg),
-            )
-            if code2 == 200 and isinstance(data2, list) and data2:
-                job_id = data2[0].get("id")
-            log(f"job upsert code={code} sid={sid} stage={stage}")
-        if job_id and event_kind:
-            curl_json(
-                "POST",
-                f"{base}/rest/v1/agent_job_events",
-                _sb_headers(cfg, {"Prefer": "return=minimal"}),
-                {"job_id": job_id, "kind": event_kind, "detail": event_detail},
-            )
-        return str(job_id) if job_id else None
-    except Exception as e:
-        log(f"job upsert failed sid={sid}: {e}")
-        return None
-
-
-def fetch_remind_jobs(cfg: dict) -> list[dict]:
-    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
-    if not base or not cfg.get("SUPABASE_SERVICE_KEY"):
-        return []
-    try:
-        code, data = curl_json(
-            "GET",
-            f"{base}/rest/v1/agent_jobs?remind_requested_at=not.is.null&select=*&order=remind_requested_at.asc&limit=10",
-            _sb_headers(cfg),
-        )
-        if code == 200 and isinstance(data, list):
-            return data
-    except Exception as e:
-        log(f"remind fetch: {e}")
-    return []
-
-
-def clear_remind(cfg: dict, job_id: str) -> None:
-    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
-    if not base or not job_id:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-    try:
-        curl_json(
-            "PATCH",
-            f"{base}/rest/v1/agent_jobs?id=eq.{job_id}",
-            _sb_headers(cfg, {"Prefer": "return=minimal"}),
-            {"remind_requested_at": None, "updated_at": now},
-        )
-    except Exception as e:
-        log(f"remind clear: {e}")
-
-
-def fetch_message_by_id(cfg: dict, mid: str) -> dict | None:
-    base = (cfg.get("SUPABASE_URL") or "").rstrip("/")
-    if not base or not mid:
-        return None
-    try:
-        code, data = curl_json(
-            "GET",
-            f"{base}/rest/v1/email_messages?id=eq.{mid}&select=id,address_id,from_address,from_name,to_addresses,cc_addresses,subject,body_text,body_html,thread_id,resend_email_id,received_at,direction,folder&limit=1",
-            _sb_headers(cfg),
-        )
-        if code == 200 and isinstance(data, list) and data:
-            return data[0]
-    except Exception as e:
-        log(f"fetch message: {e}")
-    return None
-
-
 def _mark_processed(mid: str) -> None:
     mark_processed(mid)
 
@@ -1747,6 +1925,7 @@ def _execute_session_turn(
     cloud_store: dict | None,
     first: str,
     q_only: bool,
+    extra_instruction: str = "",
 ) -> None:
     local = agent["local_part"]
     mid = msg["id"]
@@ -1759,22 +1938,7 @@ def _execute_session_turn(
     default_to, default_cc = resolve_recipients(
         msg, local, cloud_store, [], [], rec_snap.get("thread_people") or []
     )
-    mailbox = agent.get("email") or local
-    upsert_agent_job(
-        cfg,
-        {
-            "session_id": sid,
-            "agent_local": local,
-            "mailbox": mailbox,
-            "base_subject": rec_snap.get("base_subject") or base_subject(msg.get("subject") or ""),
-            "stage": "working",
-            "email_thread_id": rec_snap.get("email_thread_id") or msg.get("thread_id"),
-            "last_message_id": mid,
-            "used_k": rec_snap.get("used_k") or 1,
-            "used_tokens": rec_snap.get("used_tokens") or 0,
-        },
-        event_kind="working",
-    )
+    write_kanban_stage(cfg, "working", agent=agent, session_id=sid, rec=rec_snap, msg=msg)
 
     def send_status(kind: str) -> None:
         with _state_lock:
@@ -1797,6 +1961,7 @@ def _execute_session_turn(
         store=cloud_store,
         first_name=first,
         on_slow=send_status if looks_like_job(msg, q_only) else None,
+        extra_instruction=extra_instruction,
     )
     history = load_history(sid)
     with _state_lock:
@@ -1817,8 +1982,7 @@ def _execute_session_turn(
         rec["updated_at"] = datetime.now(timezone.utc).isoformat()
         if msg.get("thread_id") and not rec.get("email_thread_id"):
             rec["email_thread_id"] = msg.get("thread_id")
-        body, route_to, route_cc = parse_route_block(reply)
-        body, card_note = parse_note_block(body)
+        body, route_to, route_cc, card_note = parse_trailers(reply)
         to_list, cc_list = resolve_recipients(
             msg,
             local,
@@ -1831,27 +1995,30 @@ def _execute_session_turn(
         sessions["by_id"][str(sid)] = rec
         save_sessions(sessions)
         topic = rec.get("base_subject") or base_subject(msg.get("subject") or "")
+        rec_live = dict(rec)
+    mailed = body or reply
     subj = format_reply_subject(topic, sid, used_k)
-    send_body, card_note2 = parse_note_block(body or reply)
-    card_note = card_note or card_note2
-    send_reply(cfg, agent, msg, send_body, subj, to=to_list, cc=cc_list)
-    stage = finish_stage(bool(meta.get("timed_out")), send_body)
-    upsert_agent_job(
+    sent = send_reply(cfg, agent, msg, mailed, subj, to=to_list, cc=cc_list)
+    stage = finish_stage(
+        bool(meta.get("timed_out")),
+        mailed,
+        questions_only=q_only,
+        process_error=bool(meta.get("process_error")) or not sent,
+    )
+    extras: list[tuple[str, str | None]] = []
+    if sent:
+        extras.append(("reply", subj))
+    write_kanban_stage(
         cfg,
-        {
-            "session_id": sid,
-            "agent_local": local,
-            "mailbox": mailbox,
-            "base_subject": topic,
-            "stage": stage,
-            "email_thread_id": rec.get("email_thread_id") or msg.get("thread_id"),
-            "last_message_id": mid,
-            "used_k": used_k,
-            "used_tokens": used_tokens,
-            "notes": card_note or None,
-        },
-        event_kind=stage if stage in ("done", "waiting", "stuck") else "reply",
-        event_detail=(card_note or None),
+        stage,
+        agent=agent,
+        session_id=sid,
+        rec=rec_live,
+        msg=msg,
+        used_k=used_k,
+        used_tokens=used_tokens,
+        notes=card_note or None,
+        extra_events=extras,
     )
 
     tdir = Path(agent["agent_dir"]) / "threads"
@@ -1866,10 +2033,11 @@ def _execute_session_turn(
                 "turn_tokens": turn_tokens,
                 "timed_out": bool(meta.get("timed_out")),
                 "duration_s": meta.get("duration_s"),
+                "stage": stage,
                 "subject": subj,
                 "msg_id": mid,
                 "from": from_addr,
-                "reply_preview": reply[:2000],
+                "reply_preview": mailed[:2000],
                 "at": datetime.now(timezone.utc).isoformat(),
             },
             indent=2,
@@ -1887,65 +2055,186 @@ def _run_claimed_job(
     cloud_store: dict | None,
     first: str,
     q_only: bool,
+    extra_instruction: str = "",
 ) -> None:
     mid = msg["id"]
     try:
+        mark_session_inflight(sid, True)
         with session_lock_for(sid):
             _execute_session_turn(
-                cfg, agent, msg, sid, is_new, grant, cloud_store, first, q_only
+                cfg,
+                agent,
+                msg,
+                sid,
+                is_new,
+                grant,
+                cloud_store,
+                first,
+                q_only,
+                extra_instruction=extra_instruction,
             )
     except Exception as e:
         log(f"process error msg={str(mid)[:8]}: {e}")
         traceback.print_exc()
+        rec = None
+        try:
+            with _state_lock:
+                rec = load_sessions()["by_id"].get(str(sid))
+            write_kanban_stage(cfg, "stuck", agent=agent, session_id=sid, rec=rec, msg=msg)
+        except Exception:
+            pass
         release_claim(cfg, str(mid))
     finally:
+        mark_session_inflight(sid, False)
         _mark_processed(mid)
         touch_lock()
 
 
-def handle_reminds(cfg: dict, agents: dict[str, dict], cloud_store: dict | None) -> None:
-    """Nudge sessions with remind_requested_at set (same session ID), then clear the flag."""
-    rows = fetch_remind_jobs(cfg)
-    if not rows:
+def fetch_message_by_id(cfg: dict, mid: str) -> dict | None:
+    base = sb_base(cfg)
+    if not base or not mid or not UUID_RE.match(str(mid)):
+        return None
+    try:
+        code, data = curl_json(
+            "GET",
+            f"{base}/rest/v1/email_messages?id=eq.{mid}"
+            f"&select=id,from_address,from_name,to_addresses,cc_addresses,subject,"
+            f"body_text,body_html,thread_id,resend_email_id,received_at,direction&limit=1",
+            sb_headers(cfg),
+        )
+        if code == 200:
+            return as_record(data)
+    except Exception as e:
+        log(f"kanban fetch message failed: {e}")
+    return None
+
+
+def fetch_remind_jobs(cfg: dict) -> list[dict]:
+    base = sb_base(cfg)
+    if not base or not (cfg.get("SUPABASE_SERVICE_KEY") or ""):
+        return []
+    try:
+        code, data = curl_json("GET", remind_jobs_url(base), sb_headers(cfg))
+        if is_missing_table(code, data):
+            log("kanban: agent_jobs missing — skip remind")
+            return []
+        if code != 200 or not isinstance(data, list):
+            if code not in (200, 404):
+                log(f"kanban remind fetch failed code={code}")
+            return []
+        return [j for j in data if isinstance(j, dict)]
+    except Exception as e:
+        log(f"kanban remind fetch failed: {e}")
+        return []
+
+
+def claim_remind(cfg: dict, job_id: str) -> bool:
+    """Clear remind_requested_at if still set. Empty PATCH result = lost the race."""
+    base = sb_base(cfg)
+    if not base or not job_id:
+        return False
+    try:
+        now = now_iso()
+        code, data = curl_json(
+            "PATCH",
+            f"{base}/rest/v1/agent_jobs?id=eq.{job_id}&remind_requested_at=not.is.null",
+            sb_headers(cfg, {"Prefer": "return=representation"}),
+            {"remind_requested_at": None, "updated_at": now},
+        )
+        if is_missing_table(code, data):
+            return False
+        if code not in (200, 201):
+            return False
+        return as_record(data) is not None
+    except Exception as e:
+        log(f"kanban claim remind failed: {e}")
+        return False
+
+
+def _run_remind_job(
+    cfg: dict,
+    agent: dict,
+    job: dict,
+    cloud_store: dict | None,
+) -> None:
+    sid = int(job.get("session_id") or 0)
+    job_id = str(job.get("id") or "")
+    try:
+        mark_session_inflight(sid, True)
+        with session_lock_for(sid):
+            with _state_lock:
+                sessions = load_sessions()
+                sid, rec = ensure_session_for_job(sessions, agent, job)
+            src = fetch_message_by_id(cfg, str(job.get("last_message_id") or ""))
+            msg = dict(src or {})
+            msg["body_text"] = REMIND_USER_TEXT
+            msg["body_html"] = ""
+            msg["subject"] = msg.get("subject") or f"Re: {rec.get('base_subject') or job.get('base_subject') or '(no subject)'}"
+            msg["_agent_local"] = agent["local_part"]
+            if not msg.get("id"):
+                msg["id"] = f"remind-{job_id or sid}"
+            if job.get("email_thread_id") and not msg.get("thread_id"):
+                msg["thread_id"] = job.get("email_thread_id")
+            if not msg.get("from_address"):
+                people = rec.get("thread_people") or []
+                if people:
+                    msg["from_address"] = people[0]
+            from_addr = msg.get("from_address") or ""
+            first = sender_first_name(from_addr, cloud_store, msg) if from_addr else "there"
+            grant: dict = {"enabled": True, "mode": "all"}
+            q_only = False
+            if access and from_addr:
+                auth = access.authorize(from_addr, agent["local_part"], cloud_store)
+                if auth.get("ok") and auth.get("grant"):
+                    grant = auth["grant"]
+                    q_only = bool(access.grok_invocation(grant).get("questions_only"))
+            log(f"remind session={sid} agent={agent['local_part']} job={job_id[:8]}")
+            _execute_session_turn(
+                cfg,
+                agent,
+                msg,
+                sid,
+                False,
+                grant,
+                cloud_store,
+                first,
+                q_only,
+                extra_instruction=REMIND_USER_TEXT,
+            )
+    except Exception as e:
+        log(f"remind error session={sid}: {e}")
+        traceback.print_exc()
+        try:
+            write_kanban_stage(cfg, "stuck", agent=agent, session_id=sid, rec=None, msg=None)
+        except Exception:
+            pass
+    finally:
+        mark_session_inflight(sid, False)
+        touch_lock()
+
+
+def process_reminds(cfg: dict, agents: dict[str, dict], cloud_store: dict | None) -> None:
+    jobs = fetch_remind_jobs(cfg)
+    if not jobs:
         return
     pool = get_job_pool()
-    for row in rows:
-        jid = str(row.get("id") or "")
-        try:
-            sid = int(row.get("session_id") or 0)
-        except (TypeError, ValueError):
-            sid = 0
-        local = str(row.get("agent_local") or "")
+    for job in jobs:
+        sid = int(job.get("session_id") or 0)
+        local = str(job.get("agent_local") or "").strip().lower()
         agent = agents.get(local)
-        clear_remind(cfg, jid)
-        if not agent or sid < 1:
-            log(f"remind skip job={jid[:8]} sid={sid} agent={local}")
+        job_id = str(job.get("id") or "")
+        if not agent or sid <= 0 or not job_id:
+            log(f"remind skip bad job session={sid} agent={local}")
             continue
-        mid = row.get("last_message_id")
-        msg = fetch_message_by_id(cfg, str(mid) if mid else "")
-        if not msg:
-            log(f"remind no message job={jid[:8]} session={sid}")
+        if session_is_inflight(sid):
+            log(f"remind skip inflight session={sid}")
             continue
-        msg["_agent_local"] = local
-        msg["body_text"] = (
-            "John tapped Remind on the board. Continue this session (same ID). "
-            "Pick up where you left off."
-        )
-        msg["body_html"] = ""
-        grant = {"enabled": True, "mode": "all"}
-        first = sender_first_name(msg.get("from_address") or "", cloud_store, msg)
-        log(f"remind dispatch session={sid} agent={local}")
-        pool.submit(
-            _run_claimed_job,
-            cfg,
-            agent,
-            msg,
-            sid,
-            False,
-            grant,
-            cloud_store,
-            first,
-            False,
+        if not claim_remind(cfg, job_id):
+            log(f"remind skip unclaimed job={job_id[:8]}")
+            continue
+        fut = pool.submit(_run_remind_job, cfg, agent, job, cloud_store)
+        fut.add_done_callback(
+            lambda f: (log(f"remind thread error: {f.exception()}") if f.exception() else None)
         )
 
 
@@ -1960,7 +2249,7 @@ def process_once(cfg: dict) -> None:
         access.ensure_store()
         cloud_store = fetch_allowlist(cfg)
 
-    handle_reminds(cfg, agents, cloud_store)
+    process_reminds(cfg, agents, cloud_store)
 
     msgs = fetch_new_messages(cfg, list(agents.keys()), processed)
     if not msgs:
@@ -2017,23 +2306,9 @@ def process_once(cfg: dict) -> None:
             if str(mid) in _inflight:
                 continue
             sessions = load_sessions()
-            sid, rec, is_new = resolve_session(sessions, agent, msg)
+            sid, _rec, is_new = resolve_session(sessions, agent, msg)
             _inflight.add(str(mid))
-        upsert_agent_job(
-            cfg,
-            {
-                "session_id": sid,
-                "agent_local": local,
-                "mailbox": agent.get("email") or local,
-                "base_subject": rec.get("base_subject") or base_subject(msg.get("subject") or ""),
-                "stage": "received",
-                "email_thread_id": rec.get("email_thread_id") or msg.get("thread_id"),
-                "last_message_id": mid,
-                "used_k": rec.get("used_k") or 1,
-                "used_tokens": rec.get("used_tokens") or 0,
-            },
-            event_kind="received",
-        )
+        write_kanban_stage(cfg, "received", agent=agent, session_id=sid, rec=_rec, msg=msg)
         grant = auth.get("grant") or {}
         first = sender_first_name(from_addr, cloud_store, msg)
         q_only = False
