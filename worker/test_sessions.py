@@ -643,5 +643,61 @@ class InboundFiles(unittest.TestCase):
         self.assertIn("My%20Shot.png", url)
 
 
+class GrokHeadlessFlags(unittest.TestCase):
+    def test_build_grok_cmd_trusts_and_approves(self):
+        cmd = worker.build_grok_cmd(
+            "/bin/grok",
+            "/tmp/ws",
+            "hello",
+            {
+                "always_approve": True,
+                "permission_mode": "bypassPermissions",
+                "disallowed_tools": [],
+                "deny_rules": [],
+            },
+            12,
+        )
+        self.assertEqual(cmd[0], "/bin/grok")
+        self.assertIn("--trust", cmd)
+        self.assertIn("--always-approve", cmd)
+        self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "bypassPermissions")
+        self.assertEqual(cmd[cmd.index("--cwd") + 1], "/tmp/ws")
+        self.assertEqual(cmd[cmd.index("-p") + 1], "hello")
+
+    def test_run_grok_sets_no_prompt_env(self):
+        captured: dict = {}
+        orig = worker.subprocess.Popen
+
+        def fake(*a, **k):
+            captured["env"] = k.get("env") or {}
+            captured["cwd"] = k.get("cwd")
+            captured["cmd"] = a[0] if a else k.get("args")
+            raise OSError("no grok")
+
+        worker.subprocess.Popen = fake
+        try:
+            worker.run_grok(
+                {"GROK_BIN": "/no/such/grok", "GROK_TIMEOUT": "30", "MAX_TURNS": "8"},
+                _agent(),
+                {
+                    "id": "local-2",
+                    "subject": "Flags",
+                    "from_address": "john@x.com",
+                    "body_text": "hi",
+                },
+                8,
+                True,
+                first_name="John",
+            )
+        finally:
+            worker.subprocess.Popen = orig
+        env = captured["env"]
+        self.assertEqual(env.get("GROK_FOLDER_TRUST"), "0")
+        self.assertEqual(env.get("GROK_ASK_USER_QUESTION"), "0")
+        self.assertIn("--trust", captured["cmd"])
+        self.assertIn("--always-approve", captured["cmd"])
+        self.assertEqual(captured["cwd"], str(worker.ROOT))
+
+
 if __name__ == "__main__":
     unittest.main()

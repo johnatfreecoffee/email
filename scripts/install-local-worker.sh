@@ -27,6 +27,8 @@ cat > "$LIB/run-worker.sh" <<EOF
 #!/bin/bash
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:\$HOME/.grok/bin"
 export AGENTMAIL_HOME="$LIB"
+export GROK_FOLDER_TRUST="0"
+export GROK_ASK_USER_QUESTION="0"
 ROOT="$LIB"
 mkdir -p "\$ROOT/logs" "\$ROOT/state"
 exec >> "\$ROOT/logs/worker.log" 2>&1
@@ -71,10 +73,45 @@ cat > "$PLIST" <<EOF
     <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:${HOME}/.grok/bin</string>
     <key>AGENTMAIL_HOME</key>
     <string>${LIB}</string>
+    <key>GROK_FOLDER_TRUST</key>
+    <string>0</string>
+    <key>GROK_ASK_USER_QUESTION</key>
+    <string>0</string>
   </dict>
 </dict>
 </plist>
 EOF
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  "$REPO/scripts/macos-allow-agent-access.sh" || echo "NOTE: macos-allow-agent-access.sh failed (TCC/Grok wrap)"
+  FDA_BIN="$HOME/Applications/GrokFDA.app/Contents/MacOS/grok"
+  if [[ -x "$FDA_BIN" && -f "$LIB/config.env" ]]; then
+    CUR="$(awk -F= '/^GROK_BIN=/{print substr($0,10); exit}' "$LIB/config.env" || true)"
+    if [[ -z "${CUR}" || "${CUR}" == "${HOME}/.grok/bin/grok" || "${CUR}" == *GrokFDA.app* ]]; then
+      if grep -q '^GROK_BIN=' "$LIB/config.env"; then
+        python3 - "$LIB/config.env" "$FDA_BIN" <<'PY'
+from pathlib import Path
+import sys
+p, val = Path(sys.argv[1]), sys.argv[2]
+text = p.read_text()
+lines = []
+done = False
+for line in text.splitlines(True):
+    if line.startswith("GROK_BIN=") and not done:
+        lines.append(f"GROK_BIN={val}\n")
+        done = True
+    else:
+        lines.append(line)
+if not done:
+    lines.append(f"GROK_BIN={val}\n")
+p.write_text("".join(lines))
+PY
+      else
+        printf '\nGROK_BIN=%s\n' "$FDA_BIN" >> "$LIB/config.env"
+      fi
+    fi
+  fi
+fi
 
 launchctl bootout "gui/${UID_NUM}/${LABEL}" 2>/dev/null || true
 launchctl bootstrap "gui/${UID_NUM}" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true

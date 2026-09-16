@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -40,6 +41,10 @@ CONTEXT_MAX_K = 500  # display denominator
 TOKENS_PER_MIN = 2500  # tool-loop estimate; wall-clock is minutes, not seconds
 MAX_PARALLEL = 4
 DEFAULT_MAX_TURNS = 120
+GROK_FDA_ID = "dev.freecoffee.grok-fda"
+GROK_FDA_APP = Path.home() / "Applications" / "GrokFDA.app"
+GROK_FDA_BIN = GROK_FDA_APP / "Contents" / "MacOS" / "grok"
+LIVE_WORKER_HOME = Path.home() / "Library" / "AgentMail"
 MAX_CONTINUES = 2
 PULSE_AFTER_S = 15 * 60
 ID_RE = re.compile(r"\(ID:\s*(\d+)(?:\s*-\s*[^)]*)?\)", re.I)
@@ -1751,6 +1756,69 @@ def resolve_session(sessions: dict, agent: dict, msg: dict) -> tuple[int, dict, 
     return sid, rec, True
 
 
+def grok_headless_env(base: dict | None = None) -> dict:
+    """No folder-trust GUI, no ask-user popups. Agent Mail is unattended."""
+    env = dict(base if base is not None else os.environ)
+    env["GROK_FOLDER_TRUST"] = "0"
+    env["GROK_ASK_USER_QUESTION"] = "0"
+    return env
+
+
+def build_grok_cmd(
+    grok: str,
+    workspace: str,
+    prompt_text: str,
+    flags: dict,
+    max_turns: str | int,
+) -> list[str]:
+    cmd = [grok, "--cwd", workspace, "--trust"]
+    if flags.get("always_approve", True):
+        cmd += ["--always-approve"]
+    cmd += ["--permission-mode", str(flags.get("permission_mode") or "bypassPermissions")]
+    if flags.get("disallowed_tools"):
+        cmd += ["--disallowed-tools", ",".join(flags["disallowed_tools"])]
+    for rule in flags.get("deny_rules") or []:
+        cmd += ["--deny", rule]
+    cmd += ["--output-format", "json", "--max-turns", str(max_turns), "-p", prompt_text]
+    return cmd
+
+
+def resolve_grok_bin(cfg: dict) -> str:
+    configured = (cfg.get("GROK_BIN") or "").strip()
+    default = str(Path.home() / ".grok" / "bin" / "grok")
+    src = Path(configured or default)
+    if sys.platform != "darwin" or ROOT != LIVE_WORKER_HOME:
+        return str(src)
+    return _sync_grok_fda(src)
+
+
+def _sync_grok_fda(src: Path) -> str:
+    """Keep GrokFDA.app's grok current so macOS TCC stays on one bundle id."""
+    try:
+        real = src.resolve() if src.exists() else src
+    except OSError:
+        real = src
+    if not real.is_file():
+        return str(src)
+    dest = GROK_FDA_BIN
+    if not dest.parent.is_dir():
+        return str(src)
+    try:
+        need = (
+            not dest.exists()
+            or dest.stat().st_size != real.stat().st_size
+            or dest.stat().st_mtime < real.stat().st_mtime
+        )
+        if need and real != dest:
+            shutil.copy2(real, dest)
+            dest.chmod(0o755)
+            log(f"grok fda sync {real} -> {dest}")
+        return str(dest if dest.exists() else src)
+    except Exception as e:
+        log(f"grok fda sync failed: {e}")
+        return str(src)
+
+
 def run_grok(
     cfg: dict,
     agent: dict,
@@ -1768,7 +1836,7 @@ def run_grok(
     meta: {turn_tokens, duration_s, timed_out, returncode}
     on_slow("ack") fires once if the job is still running after ACK_AFTER_S.
     """
-    grok = cfg.get("GROK_BIN") or str(Path.home() / ".grok/bin/grok")
+    grok = resolve_grok_bin(cfg)
     workspace = agent["workspace"]
     max_turns = cfg.get("MAX_TURNS") or str(DEFAULT_MAX_TURNS)
     body = plain_text(msg)
@@ -1919,21 +1987,13 @@ Rules:
 
     append_history(session_id, "user", f"Subject: {subject}\n\n{body}\n\n{files_block}")
 
-    env = os.environ.copy()
+    env = grok_headless_env(os.environ)
     env["PATH"] = f"/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:{Path.home()}/.grok/bin:" + env.get("PATH", "")
-    cwd = workspace if Path(workspace).is_dir() else str(Path.home())
+    # Stay in Library so python itself never trips a Documents TCC dialog.
+    cwd = str(ROOT)
 
     def grok_cmd(prompt_text: str) -> list[str]:
-        cmd = [grok, "--cwd", workspace]
-        if flags.get("always_approve", True):
-            cmd += ["--always-approve"]
-        cmd += ["--permission-mode", str(flags.get("permission_mode") or "bypassPermissions")]
-        if flags.get("disallowed_tools"):
-            cmd += ["--disallowed-tools", ",".join(flags["disallowed_tools"])]
-        for rule in flags.get("deny_rules") or []:
-            cmd += ["--deny", rule]
-        cmd += ["--output-format", "json", "--max-turns", str(max_turns), "-p", prompt_text]
-        return cmd
+        return build_grok_cmd(grok, workspace, prompt_text, flags, max_turns)
 
     sent_ack = False
     last_pulse_at = 0.0

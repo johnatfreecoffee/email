@@ -14,6 +14,7 @@ One repo: webmail + optional coding agents.
 - Revive `~/Documents/AgentMail` — retired. This folder is the project.
 - Point the LaunchAgent at Documents (macOS TCC blocks it).
 - Commit `config.env` / `.env.local` / `.dev.vars`.
+- Per-agent permission popups — worker is `--always-approve --trust` + `GrokFDA.app` (one Mac grant for every agent / future folder).
 
 ## Agents
 
