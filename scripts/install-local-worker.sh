@@ -84,12 +84,12 @@ EOF
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
   "$REPO/scripts/macos-allow-agent-access.sh" || echo "NOTE: macos-allow-agent-access.sh failed (TCC/Grok wrap)"
-  FDA_BIN="$HOME/Applications/GrokFDA.app/Contents/MacOS/grok"
-  if [[ -x "$FDA_BIN" && -f "$LIB/config.env" ]]; then
+  STABLE_BIN="$LIB/bin/grok"
+  if [[ -x "$STABLE_BIN" && -f "$LIB/config.env" ]]; then
     CUR="$(awk -F= '/^GROK_BIN=/{print substr($0,10); exit}' "$LIB/config.env" || true)"
-    if [[ -z "${CUR}" || "${CUR}" == "${HOME}/.grok/bin/grok" || "${CUR}" == *GrokFDA.app* ]]; then
+    if [[ -z "${CUR}" || "${CUR}" == "${HOME}/.grok/bin/grok" || "${CUR}" == *GrokFDA.app* || "${CUR}" == "$STABLE_BIN" ]]; then
       if grep -q '^GROK_BIN=' "$LIB/config.env"; then
-        python3 - "$LIB/config.env" "$FDA_BIN" <<'PY'
+        python3 - "$LIB/config.env" "$STABLE_BIN" <<'PY'
 from pathlib import Path
 import sys
 p, val = Path(sys.argv[1]), sys.argv[2]
@@ -107,7 +107,7 @@ if not done:
 p.write_text("".join(lines))
 PY
       else
-        printf '\nGROK_BIN=%s\n' "$FDA_BIN" >> "$LIB/config.env"
+        printf '\nGROK_BIN=%s\n' "$STABLE_BIN" >> "$LIB/config.env"
       fi
     fi
   fi

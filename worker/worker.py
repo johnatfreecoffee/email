@@ -41,10 +41,8 @@ CONTEXT_MAX_K = 500  # display denominator
 TOKENS_PER_MIN = 2500  # tool-loop estimate; wall-clock is minutes, not seconds
 MAX_PARALLEL = 4
 DEFAULT_MAX_TURNS = 120
-GROK_FDA_ID = "dev.freecoffee.grok-fda"
-GROK_FDA_APP = Path.home() / "Applications" / "GrokFDA.app"
-GROK_FDA_BIN = GROK_FDA_APP / "Contents" / "MacOS" / "grok"
 LIVE_WORKER_HOME = Path.home() / "Library" / "AgentMail"
+GROK_STABLE_BIN = LIVE_WORKER_HOME / "bin" / "grok"
 MAX_CONTINUES = 2
 PULSE_AFTER_S = 15 * 60
 ID_RE = re.compile(r"\(ID:\s*(\d+)(?:\s*-\s*[^)]*)?\)", re.I)
@@ -1785,37 +1783,60 @@ def build_grok_cmd(
 
 def resolve_grok_bin(cfg: dict) -> str:
     configured = (cfg.get("GROK_BIN") or "").strip()
-    default = str(Path.home() / ".grok" / "bin" / "grok")
+    default = Path.home() / ".grok" / "bin" / "grok"
     src = Path(configured or default)
     if sys.platform != "darwin" or ROOT != LIVE_WORKER_HOME:
         return str(src)
-    return _sync_grok_fda(src)
+    live = default if default.exists() else src
+    return _sync_grok_bin(live)
 
 
-def _sync_grok_fda(src: Path) -> str:
-    """Keep GrokFDA.app's grok current so macOS TCC stays on one bundle id."""
+def _copy_exec(src: Path, dest: Path) -> None:
+    """Copy a Mach-O without xattrs (quarantine on a wrap = Gatekeeper 'damaged')."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{dest.name}.new"
+    shutil.copyfile(src, tmp)
+    try:
+        subprocess.run(["xattr", "-c", str(tmp)], check=False, capture_output=True)
+    except OSError:
+        pass
+    tmp.chmod(0o755)
+    tmp.replace(dest)
+
+
+def _needs_copy(src: Path, dest: Path) -> bool:
+    if not dest.exists():
+        return True
+    try:
+        ss, ds = src.stat(), dest.stat()
+        return ss.st_size != ds.st_size or ds.st_mtime < ss.st_mtime
+    except OSError:
+        return True
+
+
+def _sync_grok_bin(src: Path) -> str:
+    """Keep a stable notarized Grok CLI outside any .app.
+
+    Putting xAI's Developer ID binary at GrokFDA.app/Contents/MacOS/grok makes
+    Gatekeeper treat it as an app bundle with no sealed resources → 'GrokFDA
+    is damaged and can't be opened'. TCC stays on this stable path + team csreq.
+    """
     try:
         real = src.resolve() if src.exists() else src
     except OSError:
         real = src
     if not real.is_file():
         return str(src)
-    dest = GROK_FDA_BIN
-    if not dest.parent.is_dir():
-        return str(src)
+    dest = GROK_STABLE_BIN
     try:
-        need = (
-            not dest.exists()
-            or dest.stat().st_size != real.stat().st_size
-            or dest.stat().st_mtime < real.stat().st_mtime
-        )
-        if need and real != dest:
-            shutil.copy2(real, dest)
-            dest.chmod(0o755)
-            log(f"grok fda sync {real} -> {dest}")
-        return str(dest if dest.exists() else src)
+        if real != dest and _needs_copy(real, dest):
+            _copy_exec(real, dest)
+            log(f"grok stable sync {real} -> {dest}")
+        if dest.is_file():
+            return str(dest)
+        return str(src)
     except Exception as e:
-        log(f"grok fda sync failed: {e}")
+        log(f"grok stable sync failed: {e}")
         return str(src)
 
 
@@ -3049,6 +3070,7 @@ def main() -> int:
             log(f"orphan boot: {e}")
         while True:
             try:
+                cfg = load_config()
                 heartbeat(cfg)
                 touch_lock()
                 process_once(cfg)

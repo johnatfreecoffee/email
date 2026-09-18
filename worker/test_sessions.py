@@ -699,5 +699,53 @@ class GrokHeadlessFlags(unittest.TestCase):
         self.assertEqual(captured["cwd"], str(worker.ROOT))
 
 
+class GrokStableWrap(unittest.TestCase):
+    def test_resolve_non_live_home_returns_configured(self):
+        self.assertNotEqual(worker.ROOT, worker.LIVE_WORKER_HOME)
+        self.assertEqual(
+            worker.resolve_grok_bin({"GROK_BIN": "/no/such/grok"}),
+            "/no/such/grok",
+        )
+
+    def test_copy_exec_keeps_bytes_and_replaces(self):
+        src = Path(_TMP) / "src-grok"
+        dest = Path(_TMP) / "wrap" / "grok"
+        src.write_bytes(b"fake-grok-bin")
+        src.chmod(0o755)
+        worker._copy_exec(src, dest)
+        self.assertEqual(dest.read_bytes(), b"fake-grok-bin")
+        self.assertTrue(os.access(dest, os.X_OK))
+        src.write_bytes(b"fake-grok-bin-v2")
+        worker._copy_exec(src, dest)
+        self.assertEqual(dest.read_bytes(), b"fake-grok-bin-v2")
+
+    def test_sync_copies_to_stable_not_app_bundle(self):
+        src = Path(_TMP) / "download-grok"
+        src.write_bytes(b"notarized-grok")
+        src.chmod(0o755)
+        orig_stable = worker.GROK_STABLE_BIN
+        worker.GROK_STABLE_BIN = Path(_TMP) / "agent-bin" / "grok"
+        try:
+            out = worker._sync_grok_bin(src)
+            self.assertEqual(out, str(worker.GROK_STABLE_BIN))
+            self.assertEqual(worker.GROK_STABLE_BIN.read_bytes(), b"notarized-grok")
+            self.assertFalse(
+                (Path(_TMP) / "GrokFDA.app" / "Contents" / "MacOS" / "grok").exists()
+            )
+        finally:
+            worker.GROK_STABLE_BIN = orig_stable
+
+    def test_needs_copy_size_and_mtime(self):
+        src = Path(_TMP) / "need-src"
+        dest = Path(_TMP) / "need-dest"
+        src.write_bytes(b"abc")
+        dest.write_bytes(b"abc")
+        os.utime(dest, (src.stat().st_mtime + 10, src.stat().st_mtime + 10))
+        self.assertFalse(worker._needs_copy(src, dest))
+        dest.write_bytes(b"ab")
+        self.assertTrue(worker._needs_copy(src, dest))
+        self.assertTrue(worker._needs_copy(src, Path(_TMP) / "missing-grok"))
+
+
 if __name__ == "__main__":
     unittest.main()
