@@ -137,6 +137,33 @@ type CountMsg = Pick<EmailMessage, "domain_id" | "folder"> & {
 // EXACT mirror of the bucket priority in functions/api/email/unread-counts.ts:
 // archive → spam → sent → inbox (catch-all split) → catchall. Starred is
 // additive on top, trash is its own world — both handled by the applier.
+function composeDraftToMessage(d: any): EmailMessage {
+  return {
+    id: d.id,
+    domain_id: d.domain_id || "",
+    address_id: null,
+    direction: "outbound",
+    from_address: d.from_address || "",
+    from_name: null,
+    to_addresses: d.to_addresses || [],
+    cc_addresses: d.cc_addresses || [],
+    bcc_addresses: d.bcc_addresses || [],
+    subject: d.subject || "(no subject)",
+    body_text: d.body_text,
+    body_html: d.body_html,
+    preview: d.body_text?.substring(0, 100) || "",
+    folder: "drafts",
+    is_read: true,
+    is_starred: false,
+    is_catch_all: false,
+    is_archived: false,
+    is_trash: false,
+    is_draft: true,
+    received_at: d.updated_at,
+    attachments: [],
+  } as EmailMessage;
+}
+
 function primaryBucket(m: CountMsg): "archive" | "spam" | "sent" | "catchall" | "inbox" | null {
   if (m.folder === AGENT_FOLDER) return null;
   if (m.is_archived) return "archive";
@@ -844,6 +871,22 @@ export function EmailLayout() {
   // Drafts
   const [drafts, setDrafts] = useState<any[]>([]);
 
+  // Compose drafts (email_drafts) plus mailbox drafts (email_messages folder=drafts).
+  // A selected domain only shows compose drafts saved for that domain.
+  const composeDraftsForView = useMemo(() => {
+    if (!selectedDomain) return drafts;
+    return drafts.filter((d: any) => d.domain_id === selectedDomain.id);
+  }, [drafts, selectedDomain]);
+  const composeDraftIds = useMemo(
+    () => new Set(composeDraftsForView.map((d: any) => d.id as string)),
+    [composeDraftsForView]
+  );
+  const listMessages = useMemo(() => {
+    if (activeFolder !== "drafts") return messages;
+    const compose = composeDraftsForView.map(composeDraftToMessage);
+    return [...compose, ...messages.filter((m) => !composeDraftIds.has(m.id))];
+  }, [activeFolder, messages, composeDraftsForView, composeDraftIds]);
+
   const fetchDrafts = useCallback(async () => {
     try {
       const res = await apiFetch(`${API_BASE}/drafts`);
@@ -964,7 +1007,7 @@ export function EmailLayout() {
       autoReadTimer.current = null;
     }
     if (markReadDelay === null) return;
-    if (!selectedMessage || activeFolder === "drafts") return;
+    if (!selectedMessage || composeDraftIds.has(selectedMessage.id)) return;
     const members = membersOfRef.current(selectedMessage.id);
     const unreadIds = (members.length > 0 ? members : [selectedMessage])
       .filter((m) => !m.is_read)
@@ -985,21 +1028,22 @@ export function EmailLayout() {
     };
     // selectedMessage object is read only when its id changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedMessage?.id, markReadDelay, activeFolder]);
+  }, [selectedMessage?.id, markReadDelay, activeFolder, composeDraftIds]);
 
   // Arrow-key focus (window handler) opens the row in the reader — same as click.
   useEffect(() => {
-    if (focusedIndex < 0 || activeFolder === "drafts") return;
+    if (focusedIndex < 0) return;
     const list = navListRef.current.length
       ? navListRef.current
       : (threadCollapseRef.current?.display ?? messagesRef.current);
     const msg = list[focusedIndex];
     if (!msg || selectedIdRef.current === msg.id) return;
+    if (composeDraftIds.has(msg.id)) return;
     if (msg.thread_key && selectedThreadKey && msg.thread_key === selectedThreadKey) return;
     setSelectedMessage(msg);
     setMobileView("reader");
     fetchFullMessage(msg.id);
-  }, [focusedIndex, activeFolder, selectedThreadKey, fetchFullMessage]);
+  }, [focusedIndex, activeFolder, selectedThreadKey, fetchFullMessage, composeDraftIds]);
 
   // Reset focused index when messages change
   useEffect(() => {
@@ -1035,9 +1079,9 @@ export function EmailLayout() {
       }
       if (settingsTarget) return; // settings modal owns its own keys
 
-      const currentMessages = activeFolder === "drafts"
-        ? drafts
-        : (navListRef.current.length ? navListRef.current : (threadCollapseRef.current?.display ?? messages));
+      const currentMessages = navListRef.current.length
+        ? navListRef.current
+        : (threadCollapseRef.current?.display ?? (activeFolder === "drafts" ? listMessages : messages));
 
       switch (e.key) {
         case "ArrowDown":
@@ -1056,9 +1100,11 @@ export function EmailLayout() {
           if (focusedIndex >= 0 && focusedIndex < currentMessages.length) {
             e.preventDefault();
             const msg = currentMessages[focusedIndex];
-            if (activeFolder === "drafts") {
-              openDraft(msg);
+            const compose = composeDraftsForView.find((d: any) => d.id === msg.id);
+            if (compose) {
+              openDraft(compose);
             } else {
+              setSelectedMessage(msg);
               fetchFullMessage(msg.id);
               setMobileView("reader");
             }
@@ -1155,7 +1201,7 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, settingsTarget, activeFolder, drafts, messages, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
+  }, [showCompose, settingsTarget, activeFolder, drafts, messages, listMessages, composeDraftsForView, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
 
   // Push prompt banner — same shared store as the footer bell and Settings,
   // so enabling anywhere updates everywhere instantly.
@@ -1401,46 +1447,23 @@ export function EmailLayout() {
         }}
       >
         <MessageList
-          messages={activeFolder === "drafts" ? drafts.map((d: any) => ({
-            id: d.id,
-            domain_id: d.domain_id || "",
-            address_id: null,
-            direction: "outbound" as const,
-            from_address: d.from_address || "",
-            from_name: null,
-            to_addresses: d.to_addresses || [],
-            cc_addresses: d.cc_addresses || [],
-            bcc_addresses: d.bcc_addresses || [],
-            subject: d.subject || "(no subject)",
-            body_text: d.body_text,
-            body_html: d.body_html,
-            preview: d.body_text?.substring(0, 100) || "",
-            folder: "drafts",
-            is_read: true,
-            is_starred: false,
-            is_catch_all: false,
-            is_archived: false,
-            is_trash: false,
-            is_draft: true,
-            received_at: d.updated_at,
-            attachments: [],
-          }) as EmailMessage) : messages}
+          messages={listMessages}
           selectedId={selectedMessage?.id || null}
           loading={loading}
           searchQuery={searchInput}
           onSearchChange={setSearchInput}
           onSelectMessage={(m) => {
-            if (activeFolder === "drafts") {
-              const draft = drafts.find((d: any) => d.id === m.id);
-              if (draft) openDraft(draft);
-            } else {
-              // Optimistically show the list row's data so the reader header
-              // is populated the instant the pane slides in; fetchFullMessage
-              // then swaps in the full body and handles mark-as-read.
-              setSelectedMessage(m);
-              setMobileView("reader");
-              fetchFullMessage(m.id);
+            const draft = composeDraftsForView.find((d: any) => d.id === m.id);
+            if (draft) {
+              openDraft(draft);
+              return;
             }
+            // Optimistically show the list row's data so the reader header
+            // is populated the instant the pane slides in; fetchFullMessage
+            // then swaps in the full body and handles mark-as-read.
+            setSelectedMessage(m);
+            setMobileView("reader");
+            fetchFullMessage(m.id);
           }}
           onToggleStar={handleToggleStar}
           onToggleRead={handleToggleRead}

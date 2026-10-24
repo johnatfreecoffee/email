@@ -486,7 +486,9 @@ export function FolderList({
       case "folder": {
         const def = aggregateDefs.find((f) => f.id === ref.folder);
         if (!def) return null;
-        const count = ref.folder === "drafts" ? draftsCount : unreadCounts.totals[ref.folder] ?? 0;
+        const count = ref.folder === "drafts"
+          ? draftsCount + (unreadCounts.totals.drafts ?? 0)
+          : unreadCounts.totals[ref.folder] ?? 0;
         return {
           icon: def.icon,
           label: def.label,
@@ -518,7 +520,7 @@ export function FolderList({
         return {
           icon: def.icon,
           label: ref.label?.trim() || `${def.label} — ${d.domain}`,
-          count: ref.folder === "drafts" ? 0 : unreadCounts.folders[d.id]?.[ref.folder] ?? 0,
+          count: unreadCounts.folders[d.id]?.[ref.folder] ?? 0,
           active:
             selectedDomain?.id === d.id &&
             activeFolder === ref.folder &&
@@ -949,12 +951,7 @@ export function FolderList({
           };
           const rows: RowSpec[] = [];
           for (const f of folderDefs) {
-            const count =
-              f.id === "drafts"
-                ? isThisDomain
-                  ? draftsCount
-                  : 0
-                : liveFolderCounts[f.id] ?? 0;
+            const count = liveFolderCounts[f.id] ?? 0;
             rows.push({
               key: f.id,
               icon: f.icon,
@@ -1470,8 +1467,7 @@ export function FolderList({
                       const items: React.ReactNode[] = [];
                       const isActive =
                         isThisDomain && activeFolder === f.id && !selectedAddress && !catchAllOnly;
-                      const count =
-                        f.id === "drafts" ? (isThisDomain ? draftsCount : 0) : liveFolderCounts[f.id] ?? 0;
+                      const count = liveFolderCounts[f.id] ?? 0;
                       const dfRef: FavoriteRef = { kind: "domain-folder", domainId: d.id, folder: f.id };
 
                       items.push(
