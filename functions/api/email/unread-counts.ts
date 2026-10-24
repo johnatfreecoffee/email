@@ -81,7 +81,7 @@ export const onRequest = async (context: CFContext) => {
   const folders: Record<string, Record<string, number>> = {};
   for (const id of domainIds) {
     domains[id] = 0;
-    folders[id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0 };
+    folders[id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0, drafts: 0 };
   }
 
   for (const r of unreadRows) {
@@ -89,7 +89,7 @@ export const onRequest = async (context: CFContext) => {
     // Agent folders are silent — never contribute to inbox/domain badges.
     if (r.folder === "agent") continue;
     if (!folders[r.domain_id]) {
-      folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0 };
+      folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0, drafts: 0 };
       domains[r.domain_id] = 0;
     }
     const f = folders[r.domain_id];
@@ -117,14 +117,29 @@ export const onRequest = async (context: CFContext) => {
   for (const r of trashRows) {
     if (!r.domain_id) continue;
     if (!folders[r.domain_id]) {
-      folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0 };
+      folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0, drafts: 0 };
       domains[r.domain_id] = domains[r.domain_id] || 0;
     }
     folders[r.domain_id].trash += 1;
   }
 
+  // Drafts badge is a total, not an unread count. Imported mailbox drafts
+  // live on email_messages (folder=drafts); compose drafts stay in email_drafts.
+  const draftRows = await fetchRows(
+    env,
+    `/email_messages?select=domain_id&folder=eq.drafts&is_trash=eq.false&limit=${MAX_ROWS}`
+  ) as Array<{ domain_id: string | null }>;
+  for (const r of draftRows) {
+    if (!r.domain_id) continue;
+    if (!folders[r.domain_id]) {
+      folders[r.domain_id] = { inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0, drafts: 0 };
+      domains[r.domain_id] = domains[r.domain_id] || 0;
+    }
+    folders[r.domain_id].drafts = (folders[r.domain_id].drafts || 0) + 1;
+  }
+
   const totals: Record<string, number> = {
-    inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0,
+    inbox: 0, sent: 0, starred: 0, archive: 0, trash: 0, spam: 0, catchall: 0, drafts: 0,
   };
   for (const id of Object.keys(folders)) {
     const f = folders[id];
@@ -135,6 +150,7 @@ export const onRequest = async (context: CFContext) => {
     totals.trash += f.trash;
     totals.spam += f.spam;
     totals.catchall += f.catchall;
+    totals.drafts += f.drafts || 0;
   }
 
   return jsonResponse({ domains, folders, totals }, 200, origin);
