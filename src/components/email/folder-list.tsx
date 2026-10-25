@@ -42,6 +42,7 @@ import { useSettings, type SettingsTab } from "@/lib/settings";
 import { type FavoriteRef, favKey } from "./favorites";
 import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 import { mergeDomainOrder, sortDomainsByOrder } from "@/lib/domain-order";
+import { domainDisplayLabel } from "@/lib/domain-display";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -524,7 +525,7 @@ export function FolderList({
         if (ref.folder === AGENT_FOLDER) {
           return {
             icon: Bot,
-            label: ref.label?.trim() || `Agents — ${d.domain}`,
+            label: ref.label?.trim() || `Agents — ${domainDisplayLabel(d)}`,
             active:
               selectedDomain?.id === d.id &&
               activeFolder === AGENT_FOLDER &&
@@ -537,7 +538,7 @@ export function FolderList({
         if (!def) return null;
         return {
           icon: def.icon,
-          label: ref.label?.trim() || `${def.label} — ${d.domain}`,
+          label: ref.label?.trim() || `${def.label} — ${domainDisplayLabel(d)}`,
           count: unreadCounts.folders[d.id]?.[ref.folder] ?? 0,
           active:
             selectedDomain?.id === d.id &&
@@ -579,7 +580,7 @@ export function FolderList({
         if (!d) return null;
         return {
           icon: Shield,
-          label: ref.label?.trim() || `Catch-All — ${d.domain}`,
+          label: ref.label?.trim() || `Catch-All — ${domainDisplayLabel(d)}`,
           count: unreadCounts.folders[d.id]?.catchall ?? 0,
           active: selectedDomain?.id === d.id && catchAllOnly,
           onClick: () => onCatchAllToggle?.(d),
@@ -616,9 +617,9 @@ export function FolderList({
         return aggregateDefs.find((f) => f.id === ref.folder)?.label ?? ref.folder;
       case "domain-folder": {
         const d = domains.find((x) => x.id === ref.domainId);
-        if (ref.folder === AGENT_FOLDER) return d ? `Agents — ${d.domain}` : "";
+        if (ref.folder === AGENT_FOLDER) return d ? `Agents — ${domainDisplayLabel(d)}` : "";
         const def = folderDefs.find((f) => f.id === ref.folder);
-        return d && def ? `${def.label} — ${d.domain}` : "";
+        return d && def ? `${def.label} — ${domainDisplayLabel(d)}` : "";
       }
       case "address": {
         const d = domains.find((x) => x.id === ref.domainId);
@@ -627,7 +628,7 @@ export function FolderList({
       }
       case "catchall": {
         const d = domains.find((x) => x.id === ref.domainId);
-        return d ? `Catch-All — ${d.domain}` : "";
+        return d ? `Catch-All — ${domainDisplayLabel(d)}` : "";
       }
     }
   };
@@ -1052,7 +1053,7 @@ export function FolderList({
                   className="flex-1 text-left text-[13px] font-semibold uppercase tracking-wide truncate"
                   style={{ color: "var(--mc-text-muted)" }}
                 >
-                  {d.domain}
+                  {domainDisplayLabel(d)}
                 </span>
                 {domainTotalUnread > 0 && (
                   <span
@@ -1522,7 +1523,7 @@ export function FolderList({
                       className="h-1.5 w-1.5 rounded-full flex-shrink-0"
                       style={{ backgroundColor: dotColor }}
                     />
-                    <span className="text-[11px] font-semibold truncate">{d.domain}</span>
+                    <span className="text-[11px] font-semibold truncate">{domainDisplayLabel(d)}</span>
                   </button>
                   <div className="flex items-center gap-0.5 flex-shrink-0">
                     {domainTotalUnread > 0 && (

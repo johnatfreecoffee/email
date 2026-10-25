@@ -89,10 +89,15 @@ export const onRequest = async (context: CFContext) => {
   
   if (fromDomainName && (!resolvedDomainId || !resolvedDomainId.match(/^[0-9a-f]{8}-/))) {
     // Look up domain by name
-    const domainLookup = await supabaseQuery(env, `/email_domains?domain=eq.${fromDomainName}&select=id`, {
-      method: "GET",
-    });
+    const domainLookup = await supabaseQuery(
+      env,
+      `/email_domains?domain=eq.${fromDomainName}&select=id,receive_only`,
+      { method: "GET" }
+    );
     if (domainLookup.ok && Array.isArray(domainLookup.data) && domainLookup.data.length > 0) {
+      if (domainLookup.data[0].receive_only) {
+        return errorResponse("This domain is receive-only and cannot send mail", 400, origin);
+      }
       resolvedDomainId = domainLookup.data[0].id;
     }
   }
