@@ -32,7 +32,7 @@ import {
   Columns3,
   type LucideIcon,
 } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useRef } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import type { EmailDomain } from "./email-layout";
@@ -41,6 +41,7 @@ import { useTheme, type ThemePref } from "@/lib/theme";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { type FavoriteRef, favKey } from "./favorites";
 import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
+import { mergeDomainOrder, sortDomainsByOrder } from "@/lib/domain-order";
 
 interface UnreadCountsShape {
   domains: Record<string, number>;
@@ -380,7 +381,24 @@ export function FolderList({
   const collapsedDomains = settings.sidebar.collapsedDomains;
   const favoritesVisible = settings.sidebar.favoritesVisible;
   const expandedAddresses = settings.sidebar.expandedAddresses;
+  const domainOrder = settings.sidebar.domainOrder;
   const favorites = settings.favorites.items;
+
+  const domainIds = useMemo(() => domains.map((d) => d.id), [domains]);
+
+  useEffect(() => {
+    if (domainIds.length === 0) return;
+    const merged = mergeDomainOrder(domainOrder, domainIds);
+    if (merged.length !== domainOrder.length || merged.some((id, i) => id !== domainOrder[i])) {
+      updateSetting("sidebar", { domainOrder: merged });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domainIds.join("|")]);
+
+  const orderedDomains = useMemo(
+    () => sortDomainsByOrder(domains, mergeDomainOrder(domainOrder, domainIds)),
+    [domains, domainOrder, domainIds]
+  );
 
   const updateFavorites = (next: FavoriteRef[]) => {
     replaceSetting("favorites", { v: 2, items: next });
@@ -577,6 +595,18 @@ export function FolderList({
     next.splice(result.destination.index, 0, moved);
     updateFavorites(next);
   };
+
+  const onDomainDragEnd = useCallback(
+    (result: DropResult) => {
+      if (!result.destination) return;
+      const ids = orderedDomains.map((d) => d.id);
+      const next = [...ids];
+      const [moved] = next.splice(result.source.index, 1);
+      next.splice(result.destination.index, 0, moved);
+      updateSetting("sidebar", { domainOrder: next });
+    },
+    [orderedDomains, updateSetting]
+  );
 
   // Default (computed) name for a favorite — used as the rename placeholder.
   // The standard aggregates keep their fixed names and can't be renamed.
@@ -927,7 +957,11 @@ export function FolderList({
         </div>
 
         {/* —— Domains (domain name, expand → same folders as desktop) —— */}
-        {domains.map((d) => {
+        <DragDropContext onDragEnd={onDomainDragEnd}>
+          <Droppable droppableId="domains-mobile">
+            {(dropProvided) => (
+              <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+        {orderedDomains.map((d, domainIndex) => {
           const isThisDomain = selectedDomain?.id === d.id;
           const liveFolderCounts = unreadCounts.folders[d.id] || {};
           const isCollapsed = collapsedDomains.includes(d.id);
@@ -982,11 +1016,33 @@ export function FolderList({
           }
 
           return (
-            <div key={d.id}>
+            <Draggable key={d.id} draggableId={d.id} index={domainIndex}>
+              {(dragProvided, snapshot) => (
+            <div
+              ref={dragProvided.innerRef}
+              {...dragProvided.draggableProps}
+              style={{
+                ...dragProvided.draggableProps.style,
+                opacity: snapshot.isDragging ? 0.92 : 1,
+              }}
+            >
+              <div
+                className="w-full flex items-center gap-1 px-1 mb-1.5"
+                style={{ minHeight: 28 }}
+              >
+                <button
+                  type="button"
+                  {...dragProvided.dragHandleProps}
+                  className="mc-touch-exempt p-1 rounded flex-shrink-0 active:opacity-70"
+                  style={{ color: "var(--mc-text-faint)" }}
+                  title="Drag to reorder"
+                  aria-label={`Reorder ${d.domain}`}
+                >
+                  <GripVertical className="h-4 w-4" />
+                </button>
               <button
                 onClick={() => toggleDomainCollapse(d.id)}
-                className="w-full flex items-center gap-2 px-1 mb-1.5 active:opacity-70"
-                style={{ minHeight: 28 }}
+                className="flex flex-1 items-center gap-2 min-w-0 active:opacity-70"
               >
                 <div
                   className="h-2 w-2 rounded-full flex-shrink-0"
@@ -1020,6 +1076,7 @@ export function FolderList({
                   />
                 )}
               </button>
+              </div>
 
               {!isCollapsed && (
                 <IosGroup>
@@ -1180,8 +1237,15 @@ export function FolderList({
                 </IosGroup>
               )}
             </div>
+              )}
+            </Draggable>
           );
         })}
+                {dropProvided.placeholder}
+              </div>
+            )}
+          </Droppable>
+        </DragDropContext>
 
         {domains.length === 0 && (
           <IosGroup>
@@ -1410,7 +1474,11 @@ export function FolderList({
 
         {/* Domain accounts */}
         <div className="space-y-1.5">
-          {domains.map((d) => {
+          <DragDropContext onDragEnd={onDomainDragEnd}>
+            <Droppable droppableId="domains-desktop">
+              {(dropProvided) => (
+                <div ref={dropProvided.innerRef} {...dropProvided.droppableProps}>
+          {orderedDomains.map((d, domainIndex) => {
             const isThisDomain = selectedDomain?.id === d.id;
             const dotColor = getDomainHealthDot(d);
             const liveFolderCounts = unreadCounts.folders[d.id] || {};
@@ -1418,9 +1486,28 @@ export function FolderList({
             const domainTotalUnread = unreadCounts.domains[d.id] ?? 0;
 
             return (
-              <div key={d.id}>
+              <Draggable key={d.id} draggableId={d.id} index={domainIndex}>
+                {(dragProvided, snapshot) => (
+              <div
+                ref={dragProvided.innerRef}
+                {...dragProvided.draggableProps}
+                style={{
+                  ...dragProvided.draggableProps.style,
+                  opacity: snapshot.isDragging ? 0.92 : 1,
+                }}
+              >
                 {/* Section header */}
-                <div className="flex items-center justify-between pl-1 pr-0.5 h-6 group/domain">
+                <div className="flex items-center justify-between pl-0.5 pr-0.5 h-6 group/domain">
+                  <button
+                    type="button"
+                    {...dragProvided.dragHandleProps}
+                    className="p-0.5 rounded flex-shrink-0 opacity-40 group-hover/domain:opacity-100 transition-opacity cursor-grab active:cursor-grabbing"
+                    style={{ color: "var(--mc-text-faint)" }}
+                    title="Drag to reorder"
+                    aria-label={`Reorder ${d.domain}`}
+                  >
+                    <GripVertical className="h-3 w-3" />
+                  </button>
                   <button
                     onClick={() => toggleDomainCollapse(d.id)}
                     className="flex items-center gap-1.5 min-w-0 flex-1"
@@ -1638,8 +1725,15 @@ export function FolderList({
                   </div>
                 )}
               </div>
+                )}
+              </Draggable>
             );
           })}
+                  {dropProvided.placeholder}
+                </div>
+              )}
+            </Droppable>
+          </DragDropContext>
 
           {domains.length === 0 && (
             <button
