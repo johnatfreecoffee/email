@@ -69,9 +69,25 @@ export function getAuthToken(): string | null {
   return localStorage.getItem(AUTH_KEY);
 }
 
+function getStoredUserId(): string {
+  if (typeof window === "undefined") return "local";
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as MCUser;
+      if (typeof parsed.id === "string" && parsed.id.trim()) return parsed.id.trim();
+    }
+  } catch {
+    /* ignore */
+  }
+  return "local";
+}
+
 export function authHeaders(): Record<string, string> {
   const token = getAuthToken();
-  return token ? { "X-MC-Auth": token } : {};
+  const headers: Record<string, string> = { "X-MC-User-Id": getStoredUserId() };
+  if (token) headers["X-MC-Auth"] = token;
+  return headers;
 }
 
 export function apiFetch(url: string, init?: RequestInit): Promise<Response> {

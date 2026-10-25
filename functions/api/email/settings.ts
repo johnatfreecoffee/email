@@ -16,6 +16,8 @@ const KNOWN_KEYS = [
   "notifications",
 ] as const;
 
+const USER_SIDEBAR_KEY = "sidebar";
+
 // Signatures HTML is the big one; everything else is tiny.
 const MAX_VALUE_BYTES = 100_000;
 
@@ -32,6 +34,94 @@ function validKey(key: unknown): key is (typeof KNOWN_KEYS)[number] {
 
 function validValue(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function userIdFromRequest(request: Request): string {
+  const raw = request.headers.get("X-MC-User-Id")?.trim() || "local";
+  const safe = raw.replace(/[^a-zA-Z0-9._@-]/g, "").slice(0, 128);
+  return safe || "local";
+}
+
+function domainOrderFromValue(value: unknown): string[] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const order = (value as { domainOrder?: unknown }).domainOrder;
+  if (!Array.isArray(order)) return undefined;
+  return order.filter((x): x is string => typeof x === "string");
+}
+
+function stripDomainOrder(value: Record<string, unknown>): Record<string, unknown> {
+  const { domainOrder: _drop, ...rest } = value;
+  return rest;
+}
+
+async function loadUserSidebarDomainOrder(
+  env: Env,
+  userId: string
+): Promise<{ order: string[] | undefined; tableMissing: boolean }> {
+  const res = await supabaseQuery(
+    env,
+    `/email_user_settings?user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(USER_SIDEBAR_KEY)}&select=value&limit=1`
+  );
+  if (!res.ok) {
+    if (isMissingTable(res)) return { order: undefined, tableMissing: true };
+    return { order: undefined, tableMissing: false };
+  }
+  const rows = Array.isArray(res.data) ? res.data : [];
+  const row = rows[0] as { value?: unknown } | undefined;
+  return { order: domainOrderFromValue(row?.value), tableMissing: false };
+}
+
+async function upsertUserSidebarDomainOrder(
+  env: Env,
+  origin: string | undefined,
+  userId: string,
+  domainOrder: string[]
+): Promise<Response | null> {
+  const value = { domainOrder };
+  if (JSON.stringify(value).length > MAX_VALUE_BYTES) {
+    return errorResponse("domain order too large", 413, origin);
+  }
+  const now = new Date().toISOString();
+  const upd = await supabaseQuery(
+    env,
+    `/email_user_settings?user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(USER_SIDEBAR_KEY)}`,
+    {
+      method: "PATCH",
+      body: { value, updated_at: now },
+    }
+  );
+  if (!upd.ok) {
+    if (isMissingTable(upd)) {
+      return jsonResponse(
+        {
+          error:
+            "email_user_settings table missing — run migrations/email-user-settings.sql in the Supabase SQL editor",
+          needs_migration: true,
+        },
+        503,
+        origin
+      );
+    }
+    return errorResponse("Failed to save user setting", 500, origin);
+  }
+  if (!Array.isArray(upd.data) || upd.data.length === 0) {
+    const ins = await supabaseQuery(env, "/email_user_settings", {
+      method: "POST",
+      body: { user_id: userId, key: USER_SIDEBAR_KEY, value },
+    });
+    if (!ins.ok) {
+      if (ins.status === 409) {
+        const retry = await supabaseQuery(
+          env,
+          `/email_user_settings?user_id=eq.${encodeURIComponent(userId)}&key=eq.${encodeURIComponent(USER_SIDEBAR_KEY)}`,
+          { method: "PATCH", body: { value, updated_at: now } }
+        );
+        if (retry.ok) return null;
+      }
+      return errorResponse("Failed to save user setting", 500, origin);
+    }
+  }
+  return null;
 }
 
 // Upsert one settings row via the house PATCH-then-POST idiom. Returns a
@@ -83,10 +173,30 @@ async function upsertSetting(
   return null;
 }
 
+async function mergeUserSidebarIntoSettings(
+  env: Env,
+  settings: Record<string, unknown>,
+  userId: string
+): Promise<{ settings: Record<string, unknown>; needsMigration: boolean }> {
+  const { order, tableMissing } = await loadUserSidebarDomainOrder(env, userId);
+  if (tableMissing) {
+    return { settings, needsMigration: false };
+  }
+  if (!order) return { settings, needsMigration: false };
+  const sidebar = settings.sidebar;
+  const base =
+    sidebar && typeof sidebar === "object" && !Array.isArray(sidebar)
+      ? { ...(sidebar as Record<string, unknown>) }
+      : {};
+  base.domainOrder = order;
+  return { settings: { ...settings, sidebar: base }, needsMigration: false };
+}
+
 // GET: all settings | PATCH: upsert one key | PUT: bulk upsert (first sync)
 export const onRequest = async (context: CFContext) => {
   const { request, env } = context;
   const origin = request.headers.get("Origin") || undefined;
+  const userId = userIdFromRequest(request);
 
   if (request.method === "OPTIONS") return optionsResponse(origin);
 
@@ -107,7 +217,8 @@ export const onRequest = async (context: CFContext) => {
     for (const row of rows as Array<{ key: string; value: unknown }>) {
       if (validKey(row.key)) settings[row.key] = row.value;
     }
-    return jsonResponse({ settings, needs_migration: false }, 200, origin);
+    const merged = await mergeUserSidebarIntoSettings(env, settings, userId);
+    return jsonResponse({ settings: merged.settings, needs_migration: false }, 200, origin);
   }
 
   if (request.method === "PATCH") {
@@ -115,7 +226,17 @@ export const onRequest = async (context: CFContext) => {
     if (!validKey(body.key)) return errorResponse("Unknown settings key", 400, origin);
     if (!validValue(body.value)) return errorResponse("value must be an object", 400, origin);
 
-    const failure = await upsertSetting(env, origin, body.key, body.value);
+    let valueToStore = body.value;
+    if (body.key === "sidebar") {
+      const domainOrder = domainOrderFromValue(body.value);
+      if (domainOrder) {
+        const userFailure = await upsertUserSidebarDomainOrder(env, origin, userId, domainOrder);
+        if (userFailure) return userFailure;
+      }
+      valueToStore = stripDomainOrder(body.value);
+    }
+
+    const failure = await upsertSetting(env, origin, body.key, valueToStore);
     if (failure) return failure;
     return jsonResponse({ key: body.key, value: body.value }, 200, origin);
   }
@@ -127,7 +248,16 @@ export const onRequest = async (context: CFContext) => {
     const written: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(body.settings)) {
       if (!validKey(key) || !validValue(value)) continue;
-      const failure = await upsertSetting(env, origin, key, value);
+      let valueToStore = value;
+      if (key === "sidebar") {
+        const domainOrder = domainOrderFromValue(value);
+        if (domainOrder) {
+          const userFailure = await upsertUserSidebarDomainOrder(env, origin, userId, domainOrder);
+          if (userFailure) return userFailure;
+        }
+        valueToStore = stripDomainOrder(value);
+      }
+      const failure = await upsertSetting(env, origin, key, valueToStore);
       if (failure) return failure;
       written[key] = value;
     }
