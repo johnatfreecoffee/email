@@ -21,11 +21,13 @@ const API_BASE = "/api/email";
 export interface EmailDomain {
   id: string;
   domain: string;
-  resend_domain_id: string;
+  resend_domain_id: string | null;
   status: string;
   catch_all_enabled: boolean;
   catch_all_subject_prefix: string;
   catchall_destination_address_id?: string | null;
+  receive_only?: boolean;
+  display_label?: string | null;
   addresses: EmailAddress[];
   created_at: string;
 }

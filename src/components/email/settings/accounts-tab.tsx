@@ -64,7 +64,7 @@ export function AccountsTab({
               >
                 <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: healthDot(d) }} />
                 <span className="min-w-0">
-                  <span className="block text-[13px] truncate" style={{ color: "var(--mc-text)" }}>{d.domain}</span>
+                  <span className="block text-[13px] truncate" style={{ color: "var(--mc-text)" }}>{(d.display_label || "").trim() || d.domain}</span>
                   <span className="block text-[10px] truncate" style={{ color: "var(--mc-text-faint)" }}>
                     {d.status || "unknown"}
                   </span>

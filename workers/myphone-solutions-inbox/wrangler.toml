@@ -1,0 +1,12 @@
+name = "myphone-solutions-inbox"
+main = "src/worker.js"
+compatibility_date = "2024-09-01"
+account_id = "32983a04f7acebf0f38cd91792837fec"
+
+[[kv_namespaces]]
+binding = "INBOX"
+id = "d3a7f5c6e3bf4b4eb44fd28a3b711e63"
+
+[vars]
+INGEST_URL = "https://email-app-7rp.pages.dev/api/email/ingest"
+DOMAIN = "myphone.solutions"

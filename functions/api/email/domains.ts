@@ -180,10 +180,46 @@ export const onRequest = async (context: CFContext) => {
       domain: string;
       force_replace_mx?: boolean;
       check_only?: boolean;
+      receive_only?: boolean;
+      display_label?: string;
+      catch_all_enabled?: boolean;
+      cloudflare_zone_id?: string;
     };
     if (!body.domain) return errorResponse("domain is required", 400, origin);
 
     const domain = body.domain.toLowerCase().trim();
+
+    // Receive-only: Supabase row only (Cloudflare Email Routing → /api/email/ingest).
+    if (body.receive_only) {
+      const existingDb = await supabaseQuery(env, `/email_domains?domain=eq.${domain}&limit=1`);
+      const payload = {
+        domain,
+        resend_domain_id: null,
+        status: "active",
+        capabilities: { sending: false, receiving: true },
+        catch_all_enabled: body.catch_all_enabled ?? true,
+        receive_only: true,
+        display_label: (body.display_label || "").trim() || null,
+        cloudflare_zone_id: body.cloudflare_zone_id || null,
+        updated_at: new Date().toISOString(),
+      };
+      let dbResult: any;
+      if (existingDb.ok && Array.isArray(existingDb.data) && existingDb.data.length > 0) {
+        const updateRes = await supabaseQuery(env, `/email_domains?domain=eq.${domain}`, {
+          method: "PATCH",
+          body: payload,
+        });
+        dbResult = updateRes.data;
+      } else {
+        const insertRes = await supabaseQuery(env, "/email_domains", {
+          method: "POST",
+          body: payload,
+        });
+        dbResult = insertRes.data;
+      }
+      const row = Array.isArray(dbResult) ? dbResult[0] : dbResult;
+      return jsonResponse({ domain: row, receive_only: true }, 201, origin);
+    }
 
     // Find Cloudflare zone (handle subdomains)
     const parts = domain.split(".");

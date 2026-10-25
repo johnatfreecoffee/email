@@ -12,6 +12,8 @@ export interface Env {
   MC_API_SECRET?: string;
   /** xAI HTTP API for questions-only when the local worker is offline. */
   XAI_API_KEY?: string;
+  /** Shared secret for POST /api/email/ingest (Cloudflare Email Routing workers). */
+  EMAIL_INGEST_SECRET?: string;
 }
 
 // Validate X-MC-Auth: shared secret → optional mc_sessions.
