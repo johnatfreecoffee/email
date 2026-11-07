@@ -199,6 +199,10 @@ export async function replayInbox(env) {
         summary.skipped += 1;
         continue;
       }
+      if (!record.received_at) {
+        const stamp = String(entry.name).split("_")[0];
+        if (!Number.isNaN(Date.parse(stamp))) record.received_at = stamp;
+      }
       if (!record.ingest_message_id) {
         record.ingest_message_id =
           stableIngestMessageId(record.headers, record.raw) || (await hashRawIngestId(record.raw));
