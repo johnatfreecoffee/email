@@ -21,33 +21,73 @@ export function headersToRecord(raw: string): Record<string, string> {
   return out;
 }
 
-function decodeQuotedPrintable(input: string): string {
-  return input
-    .replace(/=\r?\n/g, "")
-    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+function headerValue(headers: Record<string, string>, name: string): string {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value || "";
+  }
+  return "";
 }
 
-function extractBody(part: string): { text: string | null; html: string | null } {
-  const split = part.match(/\r?\n\r?\n/);
-  if (!split) return { text: null, html: null };
-  const idx = part.search(/\r?\n\r?\n/);
-  const head = part.slice(0, idx);
-  let body = part.slice(idx).replace(/^\r?\n\r?\n/, "");
-  const ct = (head.match(/content-type:\s*([^;\r\n]+)/i) || [])[1]?.toLowerCase() || "text/plain";
-  const enc = (head.match(/content-transfer-encoding:\s*([^\r\n]+)/i) || [])[1]?.toLowerCase() || "";
-  if (enc.includes("quoted-printable")) body = decodeQuotedPrintable(body);
+function decodeQuotedPrintable(input: string): string {
+  const bytes: number[] = [];
+  const collapsed = input.replace(/=\r?\n/g, "");
+  for (let i = 0; i < collapsed.length; i++) {
+    if (collapsed[i] === "=" && /^[0-9A-Fa-f]{2}$/.test(collapsed.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(collapsed.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      bytes.push(collapsed.charCodeAt(i) & 0xff);
+    }
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(Uint8Array.from(bytes));
+}
+
+function decodeTransfer(body: string, encoding: string): string {
+  const enc = encoding.toLowerCase();
+  if (enc.includes("quoted-printable")) return decodeQuotedPrintable(body);
   if (enc.includes("base64")) {
     try {
       const bin = atob(body.replace(/\s+/g, ""));
-      body = new TextDecoder("utf-8", { fatal: false }).decode(
+      return new TextDecoder("utf-8", { fatal: false }).decode(
         Uint8Array.from(bin, (c) => c.charCodeAt(0))
       );
     } catch {
-      /* keep raw */
+      return body;
     }
   }
+  return body;
+}
+
+function extractBodies(entity: string): { text: string | null; html: string | null } {
+  const trimmed = entity.replace(/^\r?\n/, "");
+  const headers = headersToRecord(trimmed);
+  const ctRaw = headerValue(headers, "content-type");
+  const ct = ctRaw.toLowerCase();
+  const idx = trimmed.search(/\r?\n\r?\n/);
+  if (idx === -1) return { text: null, html: null };
+  let body = trimmed.slice(idx).replace(/^\r?\n\r?\n/, "");
+
+  if (ct.includes("multipart/")) {
+    const boundary = (ctRaw.match(/boundary="?([^";\s]+)"?/i) || [])[1];
+    if (!boundary) return { text: null, html: null };
+    const marker = new RegExp(`--${boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+    const pieces = trimmed.split(marker);
+    if (pieces.length < 2) return { text: null, html: null };
+    let text: string | null = null;
+    let html: string | null = null;
+    for (const part of pieces.slice(1)) {
+      if (!part.trim() || part.trim() === "--") continue;
+      const inner = extractBodies(part);
+      if (inner.html && !html) html = inner.html;
+      if (inner.text && !text) text = inner.text;
+    }
+    return { text, html };
+  }
+
+  body = decodeTransfer(body, headerValue(headers, "content-transfer-encoding"));
   if (ct.includes("text/html")) return { text: null, html: body.trim() || null };
-  if (ct.includes("text/plain")) return { text: body.trim() || null, html: null };
+  if (ct.includes("text/plain") || !ct) return { text: body.trim() || null, html: null };
   return { text: null, html: null };
 }
 
@@ -57,26 +97,8 @@ export function parseRawMime(raw: string): {
   html: string | null;
 } {
   const headers = headersToRecord(raw);
-  const topCt = (headers["Content-Type"] || headers["content-type"] || "").toLowerCase();
-
-  if (topCt.includes("multipart/")) {
-    const boundaryMatch = topCt.match(/boundary="?([^";\s]+)"?/);
-    const boundary = boundaryMatch?.[1];
-    if (!boundary) return { headers, text: null, html: null };
-    const parts = raw.split(new RegExp(`--${boundary.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-    let text: string | null = null;
-    let html: string | null = null;
-    for (const part of parts) {
-      if (!part.trim() || part.trim() === "--") continue;
-      const b = extractBody(part);
-      if (b.html && !html) html = b.html;
-      if (b.text && !text) text = b.text;
-    }
-    return { headers, text, html };
-  }
-
-  const body = extractBody(raw);
-  return { headers, text: body.text, html: body.html };
+  const bodies = extractBodies(raw);
+  return { headers, text: bodies.text, html: bodies.html };
 }
 
 export function messageIdFromHeaders(headers: Record<string, string> | null): string | null {
