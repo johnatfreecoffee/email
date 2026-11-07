@@ -32,6 +32,14 @@ function normalizeAddressList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+export function explicitIngestMessageId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const id = value.trim().replace(/^<|>$/g, "");
+  if (id.length < 6 || id.length > 512) return null;
+  if (/[\u0000-\u001f\u007f]/.test(id)) return null;
+  return id;
+}
+
 function decodeBase64Attachments(
   raw: unknown
 ): BinaryAttachment[] {
@@ -69,6 +77,7 @@ export const onRequest = async (context: CFContext) => {
 
   const contentType = (request.headers.get("content-type") || "").toLowerCase();
   let domainHint: string | null = null;
+  let explicitIngestId: string | null = null;
   let fromRaw = "";
   let envelopeTo: string[] = [];
   let ccAddresses: string[] = [];
@@ -118,6 +127,7 @@ export const onRequest = async (context: CFContext) => {
     if (body.received_at) createdAt = String(body.received_at);
     if (typeof body.raw === "string") rawMime = body.raw;
     binaryAttachments = decodeBase64Attachments(body.attachments);
+    explicitIngestId = explicitIngestMessageId(body.ingest_message_id);
 
     if (rawMime && (!bodyText && !bodyHtml)) {
       const parsed = parseRawMime(rawMime);
@@ -143,7 +153,7 @@ export const onRequest = async (context: CFContext) => {
     headers = headersToRecord(rawMime.split(/\r?\n\r?\n/)[0] + "\n\n");
   }
 
-  let ingestMessageId = messageIdFromHeaders(headers);
+  let ingestMessageId = explicitIngestId || messageIdFromHeaders(headers);
   if (!ingestMessageId && rawMime) {
     const digest = await crypto.subtle.digest(
       "SHA-256",
