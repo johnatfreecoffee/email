@@ -56,6 +56,14 @@ export interface DeliverInboundParams {
   skipLlmSpam?: boolean;
 }
 
+function isIngestDuplicate(status: number, data: unknown): boolean {
+  if (status === 409) return true;
+  if (!data || typeof data !== "object") return false;
+  const row = data as { code?: string; message?: string };
+  if (String(row.code || "") === "23505") return true;
+  return /duplicate key/i.test(String(row.message || ""));
+}
+
 function attachmentsFromResend(raw: unknown): AttachmentWithUrl[] {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw as AttachmentWithUrl[];
@@ -397,7 +405,21 @@ export async function deliverInboundMessage(
   });
 
   if (!msgRes.ok) {
-    console.error("Failed to store email:", msgRes.data);
+    if (ingestMessageId && isIngestDuplicate(msgRes.status, msgRes.data)) {
+      const existing = await supabaseQuery(
+        env,
+        `/email_messages?ingest_message_id=eq.${encodeURIComponent(ingestMessageId)}&select=id&limit=1`
+      );
+      const existingId =
+        existing.ok && Array.isArray(existing.data) && existing.data[0]
+          ? existing.data[0].id
+          : null;
+      return jsonResponse(
+        { received: true, duplicate: true, message_id: existingId },
+        200
+      );
+    }
+    console.error("Failed to store email", msgRes.status);
     return errorResponse("Failed to store email", 500);
   }
 
