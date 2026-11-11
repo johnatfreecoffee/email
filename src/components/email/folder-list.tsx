@@ -81,6 +81,16 @@ const folderDefs = [
   { id: "trash", label: "Trash", icon: Trash2 },
 ];
 
+// Import-only domains (cold-stored mail archives) show a single folder.
+const importDefs = [{ id: "import", label: "Import", icon: Archive }];
+const allFolderDefs = [...folderDefs, ...importDefs];
+function isImportDomain(d: EmailDomain): boolean {
+  return d.capabilities?.import_only === true;
+}
+function folderDefsFor(d: EmailDomain) {
+  return isImportDomain(d) ? importDefs : folderDefs;
+}
+
 // Aggregate (cross-domain) favorite definitions
 const aggregateDefs = [
   { id: "inbox", label: "All Inboxes", icon: Inbox },
@@ -534,7 +544,7 @@ export function FolderList({
             onClick: () => onAgentOpen?.(d, null),
           };
         }
-        const def = folderDefs.find((f) => f.id === ref.folder);
+        const def = allFolderDefs.find((f) => f.id === ref.folder);
         if (!def) return null;
         return {
           icon: def.icon,
@@ -618,7 +628,7 @@ export function FolderList({
       case "domain-folder": {
         const d = domains.find((x) => x.id === ref.domainId);
         if (ref.folder === AGENT_FOLDER) return d ? `Agents — ${domainDisplayLabel(d)}` : "";
-        const def = folderDefs.find((f) => f.id === ref.folder);
+        const def = allFolderDefs.find((f) => f.id === ref.folder);
         return d && def ? `${def.label} — ${domainDisplayLabel(d)}` : "";
       }
       case "address": {
@@ -985,7 +995,7 @@ export function FolderList({
             pinRef?: FavoriteRef;
           };
           const rows: RowSpec[] = [];
-          for (const f of folderDefs) {
+          for (const f of folderDefsFor(d)) {
             const count = liveFolderCounts[f.id] ?? 0;
             rows.push({
               key: f.id,
@@ -1102,7 +1112,7 @@ export function FolderList({
                     );
                   })}
 
-                  {hasAgents && (
+                  {hasAgents && !isImportDomain(d) && (
                     <>
                       <button
                         onClick={() => toggleAgents(d.id)}
@@ -1182,7 +1192,7 @@ export function FolderList({
                     </>
                   )}
 
-                  {hasAddresses && (
+                  {hasAddresses && !isImportDomain(d) && (
                     <>
                       <button
                         onClick={() => toggleAddresses(d.id)}
@@ -1551,7 +1561,7 @@ export function FolderList({
                 {/* Folders */}
                 {!isCollapsed && (
                   <div className="space-y-px">
-                    {folderDefs.flatMap((f) => {
+                    {folderDefsFor(d).flatMap((f) => {
                       const items: React.ReactNode[] = [];
                       const isActive =
                         isThisDomain && activeFolder === f.id && !selectedAddress && !catchAllOnly;
@@ -1594,8 +1604,8 @@ export function FolderList({
                       return items;
                     })}
 
-                    {/* Agent mailboxes — hidden from inbox / catch-all */}
-                    {(() => {
+                    {/* Agent mailboxes — hidden on import-only archives */}
+                    {!isImportDomain(d) && (() => {
                       const agentAddrs = (d.addresses || []).filter((a) => a.is_active && isAgentAddress(a));
                       const peopleAddrs = (d.addresses || []).filter((a) => a.is_active && !isAgentAddress(a));
                       const agentsExpanded = expandedAgents.includes(d.id);

@@ -28,6 +28,7 @@ export interface EmailDomain {
   catchall_destination_address_id?: string | null;
   receive_only?: boolean;
   display_label?: string | null;
+  capabilities?: { sending?: boolean; receiving?: boolean; import_only?: boolean } | null;
   addresses: EmailAddress[];
   created_at: string;
 }
@@ -108,6 +109,7 @@ const FOLDER_LABELS: Record<string, string> = {
   all: "All Mail",
   agent: "Agents",
   kanban: "Kanban",
+  import: "Import",
 };
 
 // Unread counts shape returned by /api/email/unread-counts
@@ -1333,6 +1335,7 @@ export function EmailLayout() {
           selectedDomain={selectedDomain}
           onDomainChange={(d) => {
             setSelectedDomain(d);
+            if (d?.capabilities?.import_only) setActiveFolder("import");
             // Restore the recipient filter that was last used on this
             // domain (if any) — so cycling between domains keeps each
             // one's chosen address sticky.

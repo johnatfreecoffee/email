@@ -45,6 +45,7 @@ export function ComposeModal({
   // Build "from" options from all domains + addresses
   const fromOptions: { label: string; value: string; domainId: string; addressId?: string }[] = [];
   for (const domain of domains) {
+    if (domain.capabilities?.import_only) continue;
     for (const addr of domain.addresses || []) {
       // Agent mailboxes stay off the From picker for new mail (replies
       // that landed on an agent identity are added back below).
@@ -62,6 +63,7 @@ export function ComposeModal({
 
   if ((composeMode === "reply" || composeMode === "reply-all" || composeMode === "forward") && replyTo) {
     for (const domain of domains) {
+      if (domain.capabilities?.import_only) continue;
       for (const addr of domain.addresses || []) {
         if (!/^[ae]\./i.test(addr.address || "")) continue;
         const email = `${addr.address}@${domain.domain}`;
@@ -83,6 +85,7 @@ export function ComposeModal({
   // Fallback: if no addresses configured, create options from domain catch-all
   if (fromOptions.length === 0) {
     for (const domain of domains) {
+      if (domain.capabilities?.import_only) continue;
       fromOptions.push({
         label: `john@${domain.domain}`,
         value: `John Romano <john@${domain.domain}>`,
