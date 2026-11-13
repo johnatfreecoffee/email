@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { HelpCircle, X, Bell } from "lucide-react";
 import { FolderList } from "./folder-list";
-import { usePush } from "@/lib/push-notifications";
+import { usePush, isPushBannerDismissed, dismissPushBanner } from "@/lib/push-notifications";
+import { shouldShowPushBanner } from "@/lib/push-policy";
 import { Toaster } from "@/lib/toast";
 import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
@@ -15,6 +16,9 @@ import { playNotificationSound } from "@/lib/notification-sound";
 import { collapseThreads, threadKey } from "@/lib/email-threads";
 import { AGENT_FOLDER, KANBAN_FOLDER, isAgentAddress } from "@/lib/agent-mail";
 import { AgentKanban } from "./agent-kanban";
+import { applyTransitions, type CountMsg, type UnreadCounts } from "@/lib/unread-buckets";
+import { MutationTracker } from "@/lib/mutation-tracker";
+import { LatestRequest, reanchorIndex } from "@/lib/list-nav";
 
 const API_BASE = "/api/email";
 
@@ -112,12 +116,6 @@ const FOLDER_LABELS: Record<string, string> = {
   import: "Import",
 };
 
-// Unread counts shape returned by /api/email/unread-counts
-interface UnreadCounts {
-  domains: Record<string, number>;
-  folders: Record<string, Record<string, number>>;
-  totals: Record<string, number>;
-}
 
 // Envelope shape from /api/email/messages when cursor/with_total is sent
 interface ListResponse {
@@ -129,18 +127,7 @@ interface ListResponse {
 
 const PAGE_SIZE = 50;
 
-// Flags that decide which unread-count buckets a message contributes to.
-type CountMsg = Pick<EmailMessage, "domain_id" | "folder"> & {
-  is_starred?: boolean;
-  is_archived?: boolean;
-  is_trash?: boolean;
-  is_catch_all?: boolean;
-  is_spam?: boolean;
-};
 
-// EXACT mirror of the bucket priority in functions/api/email/unread-counts.ts:
-// archive → spam → sent → inbox (catch-all split) → catchall. Starred is
-// additive on top, trash is its own world — both handled by the applier.
 function composeDraftToMessage(d: any): EmailMessage {
   return {
     id: d.id,
@@ -166,16 +153,6 @@ function composeDraftToMessage(d: any): EmailMessage {
     received_at: d.updated_at,
     attachments: [],
   } as EmailMessage;
-}
-
-function primaryBucket(m: CountMsg): "archive" | "spam" | "sent" | "catchall" | "inbox" | null {
-  if (m.folder === AGENT_FOLDER) return null;
-  if (m.is_archived) return "archive";
-  if (m.folder === "spam" || m.is_spam) return "spam";
-  if (m.folder === "sent") return "sent";
-  if (m.folder === "inbox") return m.is_catch_all ? "catchall" : "inbox";
-  if (m.is_catch_all) return "catchall";
-  return null;
 }
 
 export function EmailLayout() {
@@ -210,8 +187,10 @@ export function EmailLayout() {
   const threadCollapseRef = useRef(threadCollapse);
   useEffect(() => { threadCollapseRef.current = threadCollapse; }, [threadCollapse]);
   const navListRef = useRef<EmailMessage[]>([]);
+  const displayListListener = useRef<((list: EmailMessage[]) => void) | null>(null);
   const handleDisplayListChange = useCallback((list: EmailMessage[]) => {
     navListRef.current = list;
+    displayListListener.current?.(list);
   }, []);
 
   const selectedThreadKey = selectedMessage
@@ -238,6 +217,11 @@ export function EmailLayout() {
   const [mobileView, setMobileView] = useState<"folders" | "list" | "reader">("folders");
   const folderBackLabel = FOLDER_LABELS[activeFolder] || "Mailboxes";
   const [unreadCounts, setUnreadCounts] = useState<UnreadCounts>({ domains: {}, folders: {}, totals: {} });
+  // In-flight optimistic writes — server reads that overlap one are ignored
+  // (counts) or skip the touched rows (list poll).
+  const mutationsRef = useRef(new MutationTracker());
+  // Latest-wins guard for "open this message" detail fetches.
+  const openRequest = useRef(new LatestRequest());
 
   // Resizable column widths — start with defaults, hydrate from localStorage post-mount to avoid SSR mismatch
   const [folderColWidth, setFolderColWidth] = useState<number>(FOLDER_W_DEFAULT);
@@ -422,6 +406,7 @@ export function EmailLayout() {
         params.set("with_total", "true");
       }
 
+      const writeSnap = mutationsRef.current.snapshot();
       const res = await apiFetch(`${API_BASE}/messages?${params}`, {
         signal: kind === "reset" ? listAbort.current?.signal : undefined,
       });
@@ -472,6 +457,9 @@ export function EmailLayout() {
             const next = prev.map((m) => {
               const inc = byId.get(m.id);
               if (!inc) return m;
+              // A local write to this row overlapped the poll → the server
+              // copy is older than what the user just did. Keep ours.
+              if (!mutationsRef.current.rowIsCleanSince(m.id, writeSnap)) return m;
               if (
                 inc.is_read !== m.is_read ||
                 inc.is_starred !== m.is_starred ||
@@ -546,12 +534,19 @@ export function EmailLayout() {
   // response can't overwrite a fresher post-mutation reconcile.
   const countsSeq = useRef(0);
   const fetchUnreadCounts = useCallback(async () => {
+    const tracker = mutationsRef.current;
+    // A write is still committing — its idle hook reconciles afterwards.
+    if (tracker.busy) return;
     const seq = ++countsSeq.current;
+    const snap = tracker.snapshot();
     try {
       const res = await apiFetch(`${API_BASE}/unread-counts`);
       if (res.ok) {
         const data: UnreadCounts = await res.json();
         if (seq !== countsSeq.current) return;
+        // A mutation overlapped this read → its numbers predate it. Keep the
+        // optimistic counts; the post-mutation reconcile will land.
+        if (!tracker.isCleanSince(snap)) return;
         setUnreadCounts({
           domains: data.domains || {},
           folders: data.folders || {},
@@ -564,57 +559,27 @@ export function EmailLayout() {
   }, []);
 
   // Trailing-edge debounce: reconcile optimistic counts against the server
-  // shortly after a burst of mutations settles (PATCHes commit in ~100-300ms).
+  // once a burst of mutations has settled AND every PATCH has committed.
   const countsReconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleCountsReconcile = useCallback(() => {
     if (countsReconcileTimer.current) clearTimeout(countsReconcileTimer.current);
-    countsReconcileTimer.current = setTimeout(() => fetchUnreadCounts(), 600);
+    countsReconcileTimer.current = setTimeout(() => {
+      countsReconcileTimer.current = null;
+      fetchUnreadCounts();
+    }, 600);
   }, [fetchUnreadCounts]);
+  useEffect(
+    () => mutationsRef.current.onIdle(() => scheduleCountsReconcile()),
+    [scheduleCountsReconcile]
+  );
 
-  // Optimistic count engine. Every mutation reports each affected message as
-  // a (before, after) pair of its flags *while counting as unread* — null on
-  // a side where it doesn't count (e.g. read → after: null). The applier
-  // subtracts before's contribution and adds after's, batching a whole bulk
-  // operation into one state update, then schedules the reconcile.
+  // Optimistic count engine (src/lib/unread-buckets.ts — an exact mirror of
+  // the server tally, unit tested). Every mutation reports each affected
+  // message as a (before, after) pair while counting as unread.
   const applyUnreadTransitions = useCallback((pairs: Array<[CountMsg | null, CountMsg | null]>) => {
     const real = pairs.filter(([b, a]) => b || a);
     if (real.length === 0) return;
-    setUnreadCounts((prev) => {
-      const next: UnreadCounts = {
-        domains: { ...prev.domains },
-        folders: Object.fromEntries(Object.entries(prev.folders).map(([k, v]) => [k, { ...v }])),
-        totals: { ...prev.totals },
-      };
-      const bump = (obj: Record<string, number>, key: string, delta: number) => {
-        obj[key] = Math.max(0, (obj[key] || 0) + delta);
-      };
-      const apply = (m: CountMsg, delta: 1 | -1) => {
-        if (!m.domain_id) return;
-        if (!next.folders[m.domain_id]) next.folders[m.domain_id] = {};
-        const f = next.folders[m.domain_id];
-        if (m.is_trash) {
-          // Unread trash counts only toward the trash badge (server parity)
-          bump(f, "trash", delta);
-          bump(next.totals, "trash", delta);
-          return;
-        }
-        bump(next.domains, m.domain_id, delta);
-        const bucket = primaryBucket(m);
-        if (bucket) {
-          bump(f, bucket, delta);
-          bump(next.totals, bucket, delta);
-        }
-        if (m.is_starred) {
-          bump(f, "starred", delta);
-          bump(next.totals, "starred", delta);
-        }
-      };
-      for (const [before, after] of real) {
-        if (before) apply(before, -1);
-        if (after) apply(after, 1);
-      }
-      return next;
-    });
+    setUnreadCounts((prev) => applyTransitions(prev, real));
     scheduleCountsReconcile();
   }, [scheduleCountsReconcile]);
 
@@ -639,26 +604,59 @@ export function EmailLayout() {
     );
   }, []);
 
-  const fetchFullMessage = useCallback(async (id: string, opts?: { select?: boolean }) => {
+  const fetchFullMessage = useCallback(async (id: string, opts?: { select?: boolean; force?: boolean }) => {
     const select = opts?.select !== false;
+    // Latest-wins: arrowing fires a fetch per row; a slow response for a row
+    // the user already left must not re-select it (the old "jump back").
+    if (select) openRequest.current.begin(id);
     try {
       const res = await apiFetch(`${API_BASE}/messages?id=${id}`);
       if (res.ok) {
         const data = await res.json();
         mergeFullMessage(id, data);
-        if (select) {
-          setSelectedMessage((prev) => ({
-            ...data,
-            thread_key: prev?.id === id ? prev.thread_key : data.thread_key,
-            thread_count: prev?.id === id ? prev.thread_count : data.thread_count,
-            is_read: prev?.id === id ? prev.is_read : data.is_read,
-          }));
+        if (select && openRequest.current.isLatest(id)) {
+          setSelectedMessage((prev) => {
+            if (prev?.id === id) {
+              return {
+                ...data,
+                thread_key: prev.thread_key,
+                thread_count: prev.thread_count,
+                is_read: prev.is_read,
+              };
+            }
+            // Selection moved/cleared since — only a forced open (push
+            // notification click) may replace it.
+            return opts?.force ? data : prev;
+          });
         }
       }
     } catch (e) {
       console.error("Failed to fetch message:", e);
     }
   }, [mergeFullMessage]);
+
+  // Every flag PATCH goes through here so the tracker knows it's in flight.
+  // On failure, re-pull rows + counts so optimistic state can't stick.
+  const patchMessages = useCallback(async (payload: Record<string, unknown>, ids: string[]) => {
+    const done = mutationsRef.current.begin(ids);
+    let failed = false;
+    try {
+      const res = await apiFetch(`${API_BASE}/messages`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      failed = !res.ok;
+      return res;
+    } catch (e) {
+      failed = true;
+      console.error("Message update failed:", e);
+      return null;
+    } finally {
+      done();
+      if (failed) loadPageRef.current("poll");
+    }
+  }, []);
 
   const handleToggleStar = useCallback(async (id: string, starred: boolean) => {
     const msg = messages.find((m) => m.id === id) || (selectedMessage?.id === id ? selectedMessage : null);
@@ -673,12 +671,8 @@ export function EmailLayout() {
     if (selectedMessage?.id === id) {
       setSelectedMessage((prev) => prev ? { ...prev, is_starred: !starred } : null);
     }
-    await apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_starred: !starred }),
-    });
-  }, [selectedMessage, messages, applyUnreadTransitions]);
+    await patchMessages({ id, is_starred: !starred }, [id]);
+  }, [selectedMessage, messages, applyUnreadTransitions, patchMessages]);
 
   const handleTrash = useCallback(async (id: string) => {
     // Optimistic: an unread trashed message leaves its buckets, joins trash
@@ -689,12 +683,8 @@ export function EmailLayout() {
     setMessages((prev) => prev.filter((m) => m.id !== id));
     setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
-    await apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_trash: true }),
-    });
-  }, [selectedMessage, messages, applyUnreadTransitions]);
+    await patchMessages({ id, is_trash: true }, [id]);
+  }, [selectedMessage, messages, applyUnreadTransitions, patchMessages]);
 
   const handleToggleSpam = useCallback(async (id: string, isSpamNow: boolean) => {
     const next = !isSpamNow;
@@ -706,12 +696,8 @@ export function EmailLayout() {
     setMessages((prev) => prev.filter((m) => m.id !== id));
     setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
-    await apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_spam: next }),
-    });
-  }, [selectedMessage, messages, applyUnreadTransitions]);
+    await patchMessages({ id, is_spam: next }, [id]);
+  }, [selectedMessage, messages, applyUnreadTransitions, patchMessages]);
 
   const handleArchive = useCallback(async (id: string) => {
     // Archive moves the unread contribution inbox→archive; domain total nets 0
@@ -722,20 +708,63 @@ export function EmailLayout() {
     setMessages((prev) => prev.filter((m) => m.id !== id));
     setTotalCount((c) => (c === null ? c : Math.max(0, c - 1)));
     if (selectedMessage?.id === id) setSelectedMessage(null);
-    await apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_archived: true }),
-    });
-  }, [selectedMessage, messages, applyUnreadTransitions]);
+    await patchMessages({ id, is_archived: true }, [id]);
+  }, [selectedMessage, messages, applyUnreadTransitions, patchMessages]);
 
   // Bulk actions — one ids[] PATCH per operation, one batched count update
-  const bulkPatch = useCallback((ids: string[], updates: Record<string, unknown>) =>
-    apiFetch(`${API_BASE}/messages`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, ...updates }),
-    }), []);
+  const bulkPatch = useCallback(
+    (ids: string[], updates: Record<string, unknown>) => patchMessages({ ids, ...updates }, ids),
+    [patchMessages]
+  );
+
+  // Mark-read coalescing: arrowing quickly marks a row read on every step.
+  // Queue the desired state per id and flush one PATCH per state after a
+  // short quiet period. Rows are registered with the tracker at enqueue time
+  // so polls/count reads can't undo them while they wait.
+  const readQueue = useRef(new Map<string, boolean>());
+  const readQueueDone = useRef<Array<() => void>>([]);
+  const readQueueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushReadQueue = useCallback(() => {
+    readQueueTimer.current = null;
+    const queued = readQueue.current;
+    const dones = readQueueDone.current;
+    readQueue.current = new Map();
+    readQueueDone.current = [];
+    const byState: Record<"true" | "false", string[]> = { true: [], false: [] };
+    queued.forEach((v, id) => byState[v ? "true" : "false"].push(id));
+    const sends: Promise<unknown>[] = [];
+    for (const key of ["true", "false"] as const) {
+      const ids = byState[key];
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        sends.push(patchMessages({ ids: chunk, is_read: key === "true" }, chunk));
+      }
+    }
+    void Promise.allSettled(sends).then(() => dones.forEach((d) => d()));
+  }, [patchMessages]);
+  const queueReadPatch = useCallback((ids: string[], nextRead: boolean) => {
+    if (ids.length === 0) return;
+    for (const id of ids) readQueue.current.set(id, nextRead);
+    readQueueDone.current.push(mutationsRef.current.begin(ids));
+    if (readQueueTimer.current) clearTimeout(readQueueTimer.current);
+    readQueueTimer.current = setTimeout(flushReadQueue, 250);
+  }, [flushReadQueue]);
+  // Don't lose queued read state when the tab is hidden/closed.
+  useEffect(() => {
+    const flushNow = () => {
+      if (readQueueTimer.current) {
+        clearTimeout(readQueueTimer.current);
+        flushReadQueue();
+      }
+    };
+    const onVis = () => { if (document.hidden) flushNow(); };
+    window.addEventListener("pagehide", flushNow);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [flushReadQueue]);
 
   const membersOf = useCallback((id: string): EmailMessage[] => {
     const collapse = threadCollapseRef.current;
@@ -772,8 +801,8 @@ export function EmailLayout() {
     setSelectedMessage((prev) =>
       prev && changeIds.has(prev.id) ? { ...prev, is_read: nextRead } : prev
     );
-    void bulkPatch([...changeIds], { is_read: nextRead });
-  }, [applyUnreadTransitions, bulkPatch]);
+    queueReadPatch([...changeIds], nextRead);
+  }, [applyUnreadTransitions, queueReadPatch]);
 
   const handleBulkMarkRead = useCallback(async (ids: string[]) => {
     applyReadState(expandToThreadIds(ids), true);
@@ -918,7 +947,7 @@ export function EmailLayout() {
         if (event.data?.type === "notification-click" && event.data?.data?.type === "email") {
           loadPageRef.current("poll");
           if (event.data.data.messageId) {
-            fetchFullMessage(event.data.data.messageId);
+            fetchFullMessage(event.data.data.messageId, { force: true });
           }
         }
       });
@@ -1048,6 +1077,31 @@ export function EmailLayout() {
     setMobileView("reader");
     fetchFullMessage(msg.id);
   }, [focusedIndex, activeFolder, selectedThreadKey, fetchFullMessage, composeDraftIds]);
+
+  // Focus is tracked by message id: remember which row the index points at,
+  // and when the visible list shifts under it (new mail prepended, "N new"
+  // revealed, a row removed) move the index so the cursor stays on the same
+  // message instead of silently landing on a neighbor.
+  const focusedIndexRef = useRef(focusedIndex);
+  const focusAnchorRef = useRef<{ id: string; threadKey: string | null } | null>(null);
+  useEffect(() => {
+    focusedIndexRef.current = focusedIndex;
+    const row = focusedIndex >= 0 ? navListRef.current[focusedIndex] : undefined;
+    focusAnchorRef.current = row ? { id: row.id, threadKey: row.thread_key || null } : null;
+  }, [focusedIndex]);
+  useEffect(() => {
+    displayListListener.current = (list) => {
+      const curr = focusedIndexRef.current;
+      const next = reanchorIndex(list, curr, focusAnchorRef.current);
+      const row = next >= 0 ? list[next] : undefined;
+      focusAnchorRef.current = row ? { id: row.id, threadKey: row.thread_key || null } : null;
+      if (next !== curr) {
+        focusedIndexRef.current = next;
+        setFocusedIndex(next);
+      }
+    };
+    return () => { displayListListener.current = null; };
+  }, []);
 
   // Reset focused index when messages change
   useEffect(() => {
@@ -1210,22 +1264,28 @@ export function EmailLayout() {
   // Push prompt banner — same shared store as the footer bell and Settings,
   // so enabling anywhere updates everywhere instantly.
   const push = usePush();
+  // Starts "dismissed" so nothing flashes before localStorage is read.
   const [bannerDismissed, setBannerDismissed] = useState(true);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const dismissed = localStorage.getItem("mc-push-banner-dismissed");
-      if (dismissed && Date.now() - parseInt(dismissed, 10) < 7 * 24 * 60 * 60 * 1000) return;
-    } catch {}
-    setBannerDismissed(false);
+    setBannerDismissed(isPushBannerDismissed());
   }, []);
 
-  const showPushBanner = push.supported && !push.enabled && !bannerDismissed;
+  // Ask only when the browser would actually prompt (permission "default"),
+  // after the async subscription check, and never again once dismissed.
+  // Granted-but-unsubscribed devices re-subscribe silently in usePush.
+  const showPushBanner = shouldShowPushBanner({
+    supported: push.supported,
+    ready: push.ready,
+    permission: push.permission,
+    subscribed: push.enabled,
+    dismissed: bannerDismissed,
+  });
 
   const handleDismissPushBanner = () => {
     setBannerDismissed(true);
-    localStorage.setItem("mc-push-banner-dismissed", String(Date.now()));
+    dismissPushBanner();
   };
 
   return (

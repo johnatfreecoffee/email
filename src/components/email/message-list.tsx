@@ -693,7 +693,7 @@ export function MessageList({
     if (focusedIndex >= 0) {
       const el = rowRefs.current.get(focusedIndex);
       if (el) {
-        el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        el.scrollIntoView({ block: "center", behavior: "auto" });
       }
     }
   }, [focusedIndex]);

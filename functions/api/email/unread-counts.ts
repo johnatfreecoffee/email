@@ -9,7 +9,7 @@ interface CFContext {
 // request at MAX_ROWS to stay under per-worker subrequest + memory limits.
 const MAX_ROWS = 5000;
 
-async function fetchRows(env: Env, path: string): Promise<any[]> {
+async function fetchPage(env: Env, path: string): Promise<any[]> {
   const res = await fetch(`${env.SUPABASE_URL}/rest/v1${path}`, {
     headers: {
       apikey: env.SUPABASE_SERVICE_KEY,
@@ -25,7 +25,25 @@ async function fetchRows(env: Env, path: string): Promise<any[]> {
   }
 }
 
-interface UnreadRow {
+// Supabase caps responses at its max-rows setting (1000 by default), so a
+// single `limit=5000` silently truncated big unread sets → low badges.
+// Page with limit/offset until a short page, bounded by MAX_ROWS.
+const PAGE_ROWS = 1000;
+async function fetchRows(env: Env, path: string): Promise<any[]> {
+  const stripped = path.replace(/[&?]limit=\d+/, "");
+  // Stable order so offset pages never skip/duplicate rows.
+  const base = stripped.includes("order=") ? stripped : `${stripped}${stripped.includes("?") ? "&" : "?"}order=id`;
+  const sep = base.includes("?") ? "&" : "?";
+  const out: any[] = [];
+  for (let offset = 0; offset < MAX_ROWS; offset += PAGE_ROWS) {
+    const page = await fetchPage(env, `${base}${sep}limit=${PAGE_ROWS}&offset=${offset}`);
+    out.push(...page);
+    if (page.length < PAGE_ROWS) break;
+  }
+  return out;
+}
+
+export interface UnreadRow {
   domain_id: string | null;
   folder: string | null;
   is_starred: boolean | null;
@@ -35,48 +53,12 @@ interface UnreadRow {
   is_trash: boolean | null;
 }
 
-// GET: Returns per-domain + per-folder unread counts.
-//
-// Implementation note: we used to issue ~7 count-only queries per domain in
-// parallel (Promise.all). With 9 domains that's 63 subrequests, which crashes
-// Cloudflare Workers (50-subrequest limit on free, slow even on paid). This
-// version fetches every unread row in a single bounded query and tallies
-// in memory — 1 subrequest regardless of domain count.
-//
-// Response shape (unchanged for the frontend):
-//   {
-//     domains: { [domain_id]: total_unread_excluding_trash },
-//     folders: { [domain_id]: { inbox, sent, starred, archive, trash, spam, catchall } },
-//     totals:  { inbox, sent, starred, archive, trash, spam, catchall }
-//   }
-export const onRequest = async (context: CFContext) => {
-  const { request, env } = context;
-  const origin = request.headers.get("Origin") || undefined;
-
-  if (request.method === "OPTIONS") return optionsResponse(origin);
-  if (request.method !== "GET") return errorResponse("Method not allowed", 405, origin);
-
-  const authError = await checkAuth(context.request, env);
-  if (authError) return authError;
-
-  // Domain id list — used to seed empty entries so the frontend can render
-  // zero-state badges for new domains.
-  const domainsData = await fetchRows(env, "/email_domains?select=id");
-  const domainIds: string[] = domainsData.map((d: any) => d.id).filter(Boolean);
-
-  // Pull every unread row (excluding trash) in one shot. Trash unread is
-  // handled by a separate small query because it's rare and shouldn't roll
-  // into domain totals.
-  const unreadRows = await fetchRows(
-    env,
-    `/email_messages?select=domain_id,folder,is_starred,is_archived,is_catch_all,is_spam,is_trash&is_read=eq.false&is_trash=eq.false&limit=${MAX_ROWS}`
-  ) as UnreadRow[];
-
-  const trashRows = await fetchRows(
-    env,
-    `/email_messages?select=domain_id&is_read=eq.false&is_trash=eq.true&limit=${MAX_ROWS}`
-  ) as Array<{ domain_id: string | null }>;
-
+export function tallyUnreadCounts(
+  domainIds: string[],
+  unreadRows: UnreadRow[],
+  trashRows: Array<{ domain_id: string | null }>,
+  draftRows: Array<{ domain_id: string | null }>
+) {
   const domains: Record<string, number> = {};
   const folders: Record<string, Record<string, number>> = {};
   for (const id of domainIds) {
@@ -123,12 +105,6 @@ export const onRequest = async (context: CFContext) => {
     folders[r.domain_id].trash += 1;
   }
 
-  // Drafts badge is a total, not an unread count. Imported mailbox drafts
-  // live on email_messages (folder=drafts); compose drafts stay in email_drafts.
-  const draftRows = await fetchRows(
-    env,
-    `/email_messages?select=domain_id&folder=eq.drafts&is_trash=eq.false&limit=${MAX_ROWS}`
-  ) as Array<{ domain_id: string | null }>;
   for (const r of draftRows) {
     if (!r.domain_id) continue;
     if (!folders[r.domain_id]) {
@@ -153,5 +129,58 @@ export const onRequest = async (context: CFContext) => {
     totals.drafts += f.drafts || 0;
   }
 
-  return jsonResponse({ domains, folders, totals }, 200, origin);
+  return { domains, folders, totals };
+}
+
+// GET: Returns per-domain + per-folder unread counts.
+//
+// Implementation note: we used to issue ~7 count-only queries per domain in
+// parallel (Promise.all). With 9 domains that's 63 subrequests, which crashes
+// Cloudflare Workers (50-subrequest limit on free, slow even on paid). This
+// version fetches every unread row in a single bounded query and tallies
+// in memory — 1 subrequest regardless of domain count.
+//
+// Response shape (unchanged for the frontend):
+//   {
+//     domains: { [domain_id]: total_unread_excluding_trash },
+//     folders: { [domain_id]: { inbox, sent, starred, archive, trash, spam, catchall } },
+//     totals:  { inbox, sent, starred, archive, trash, spam, catchall }
+//   }
+export const onRequest = async (context: CFContext) => {
+  const { request, env } = context;
+  const origin = request.headers.get("Origin") || undefined;
+
+  if (request.method === "OPTIONS") return optionsResponse(origin);
+  if (request.method !== "GET") return errorResponse("Method not allowed", 405, origin);
+
+  const authError = await checkAuth(context.request, env);
+  if (authError) return authError;
+
+  // Domain id list — used to seed empty entries so the frontend can render
+  // zero-state badges for new domains.
+  const domainsData = await fetchRows(env, "/email_domains?select=id");
+  const domainIds: string[] = domainsData.map((d: any) => d.id).filter(Boolean);
+
+  // Pull every unread row (excluding trash) in one shot. Trash unread is
+  // handled by a separate small query because it's rare and shouldn't roll
+  // into domain totals.
+  const unreadRows = await fetchRows(
+    env,
+    `/email_messages?select=domain_id,folder,is_starred,is_archived,is_catch_all,is_spam,is_trash&is_read=eq.false&is_trash=eq.false&limit=${MAX_ROWS}`
+  ) as UnreadRow[];
+
+  const trashRows = await fetchRows(
+    env,
+    `/email_messages?select=domain_id&is_read=eq.false&is_trash=eq.true&limit=${MAX_ROWS}`
+  ) as Array<{ domain_id: string | null }>;
+
+  // Drafts badge is a total, not an unread count. Imported mailbox drafts
+  // live on email_messages (folder=drafts); compose drafts stay in email_drafts.
+  const draftRows = await fetchRows(
+    env,
+    `/email_messages?select=domain_id&folder=eq.drafts&is_trash=eq.false&limit=${MAX_ROWS}`
+  ) as Array<{ domain_id: string | null }>;
+  const res = jsonResponse(tallyUnreadCounts(domainIds, unreadRows, trashRows, draftRows), 200, origin);
+  res.headers.set("Cache-Control", "no-store");
+  return res;
 };

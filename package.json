@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test functions/api/email/ingest-receive.test.ts functions/api/email/mime.test.ts workers/myphone-solutions-inbox/src/worker.test.mjs"
+    "test": "tsx --test src/lib/inbox-behavior.test.ts functions/api/email/ingest-receive.test.ts functions/api/email/mime.test.ts && node --test workers/myphone-solutions-inbox/src/worker.test.mjs"
   },
   "optionalDependencies": {
     "@tailwindcss/oxide-linux-x64-gnu": "4.2.1",

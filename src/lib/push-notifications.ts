@@ -12,6 +12,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "./auth";
 import { toast } from "./toast";
+import { pushInitAction, type Permission } from "./push-policy";
 
 // Build-time fallback only (used if the server key fetch fails)
 const VAPID_PUBLIC_KEY_FALLBACK = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "";
@@ -70,12 +71,50 @@ function keysEqual(a: ArrayBuffer | null | undefined, b: Uint8Array): boolean {
   return true;
 }
 
-export async function subscribeToPush(): Promise<PushSubscription | null> {
+const OPT_OUT_KEY = "mc-push-opted-out";
+export const BANNER_DISMISSED_KEY = "mc-push-banner-dismissed";
+
+function readLocal(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writeLocal(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {}
+}
+
+function deviceLabel(): string {
+  const ua = navigator.userAgent;
+  return `${ua.includes("Mobile") ? "Mobile" : "Desktop"} ${
+    ua.includes("Chrome") ? "Chrome" :
+    ua.includes("Safari") ? "Safari" :
+    ua.includes("Firefox") ? "Firefox" : "Browser"
+  }`;
+}
+
+/** Upsert (by endpoint) on the server — safe to call on every open. */
+async function saveSubscription(subscription: PushSubscription): Promise<void> {
+  await apiFetch("/api/email/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription: subscription.toJSON(), label: deviceLabel() }),
+  });
+}
+
+/**
+ * Create (or recreate) the push subscription. `prompt=false` never shows a
+ * permission dialog — used for the silent re-subscribe when permission is
+ * already granted.
+ */
+export async function subscribeToPush(opts: { prompt?: boolean } = {}): Promise<PushSubscription | null> {
+  const prompt = opts.prompt !== false;
   try {
     const reg = await registerServiceWorker();
     if (!reg) return null;
 
-    const permission = await Notification.requestPermission();
+    let permission = Notification.permission;
+    if (permission === "default" && prompt) permission = await Notification.requestPermission();
     if (permission !== "granted") return null;
 
     const serverKey = await fetchServerVapidKey();
@@ -85,7 +124,11 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
     // A subscription bound to an OLD key can't be reused — sends 403 forever
     // and re-subscribing with a new key throws. Drop it and start clean.
     const existing = await reg.pushManager.getSubscription();
-    if (existing && !keysEqual(existing.options?.applicationServerKey, appServerKey)) {
+    if (existing && keysEqual(existing.options?.applicationServerKey, appServerKey)) {
+      await saveSubscription(existing);
+      return existing;
+    }
+    if (existing) {
       try {
         await apiFetch("/api/email/push", {
           method: "DELETE",
@@ -100,22 +143,7 @@ export async function subscribeToPush(): Promise<PushSubscription | null> {
       userVisibleOnly: true,
       applicationServerKey: appServerKey as BufferSource,
     });
-
-    const label = `${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"} ${
-      navigator.userAgent.includes("Chrome") ? "Chrome" :
-      navigator.userAgent.includes("Safari") ? "Safari" :
-      navigator.userAgent.includes("Firefox") ? "Firefox" : "Browser"
-    }`;
-
-    await apiFetch("/api/email/push", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subscription: subscription.toJSON(),
-        label,
-      }),
-    });
-
+    await saveSubscription(subscription);
     return subscription;
   } catch (e) {
     console.error("Push subscription failed:", e);
@@ -158,9 +186,12 @@ interface PushState {
   supported: boolean;
   enabled: boolean;
   loading: boolean;
+  /** Permission + subscription check finished (no banner flash before). */
+  ready: boolean;
+  permission: Permission;
 }
 
-let pushState: PushState = { supported: false, enabled: false, loading: false };
+let pushState: PushState = { supported: false, enabled: false, loading: false, ready: false, permission: "default" };
 const pushListeners = new Set<(s: PushState) => void>();
 let pushInitStarted = false;
 
@@ -169,15 +200,53 @@ function setPushState(patch: Partial<PushState>) {
   for (const l of pushListeners) l(pushState);
 }
 
+function currentPermission(): Permission {
+  try { return Notification.permission as Permission; } catch { return "default"; }
+}
+
 async function initPushState() {
   if (pushInitStarted || typeof window === "undefined") return;
   pushInitStarted = true;
   const supported = isPushSupported();
-  setPushState({ supported });
-  if (!supported) return;
-  await registerServiceWorker();
-  const sub = await getCurrentSubscription();
-  setPushState({ enabled: !!sub });
+  if (!supported) {
+    setPushState({ supported, ready: true, permission: "denied" });
+    return;
+  }
+  const permission = currentPermission();
+  setPushState({ supported, permission });
+  try {
+    const reg = await registerServiceWorker();
+    const existing = reg ? await reg.pushManager.getSubscription() : null;
+    let keyMatches = true;
+    if (existing && permission === "granted") {
+      const serverKey = await fetchServerVapidKey();
+      if (serverKey) keyMatches = keysEqual(existing.options?.applicationServerKey, urlBase64ToUint8Array(serverKey));
+    }
+    const action = pushInitAction({
+      supported,
+      permission,
+      hasSubscription: !!existing,
+      keyMatches,
+      optedOut: readLocal(OPT_OUT_KEY) === "1",
+    });
+    if (action === "sync" && existing) {
+      // Already on: make sure the server still has this device (it prunes
+      // dead endpoints) — no prompt, no toast.
+      void saveSubscription(existing).catch(() => {});
+      setPushState({ enabled: true, ready: true });
+      return;
+    }
+    if (action === "resubscribe") {
+      // Granted but the browser dropped / rotated the subscription (iOS PWA
+      // does this). Recreate it silently instead of nagging.
+      const sub = await subscribeToPush({ prompt: false });
+      setPushState({ enabled: !!sub, ready: true, permission: currentPermission() });
+      return;
+    }
+    setPushState({ enabled: !!existing && permission === "granted", ready: true });
+  } catch {
+    setPushState({ ready: true });
+  }
 }
 
 /** Toggle push on/off with user feedback. All consumers stay in sync. */
@@ -187,6 +256,7 @@ export async function togglePush(): Promise<void> {
   if (pushState.enabled) {
     const ok = await unsubscribeFromPush();
     if (ok) {
+      writeLocal(OPT_OUT_KEY, "1");
       setPushState({ enabled: false, loading: false });
       toast("Notifications disabled");
     } else {
@@ -195,7 +265,8 @@ export async function togglePush(): Promise<void> {
     }
   } else {
     const sub = await subscribeToPush();
-    setPushState({ enabled: !!sub, loading: false });
+    if (sub) writeLocal(OPT_OUT_KEY, null);
+    setPushState({ enabled: !!sub, loading: false, permission: currentPermission() });
     toast(sub ? "Notifications enabled" : "Could not enable notifications — check browser permission");
   }
 }
@@ -216,5 +287,20 @@ export function usePush() {
 
   const toggle = useCallback(() => togglePush(), []);
 
-  return { supported: state.supported, enabled: state.enabled, loading: state.loading, toggle };
+  return {
+    supported: state.supported,
+    enabled: state.enabled,
+    loading: state.loading,
+    ready: state.ready,
+    permission: state.permission,
+    toggle,
+  };
+}
+
+/** Permanent "don't ask again" for the enable-notifications banner. */
+export function isPushBannerDismissed(): boolean {
+  return !!readLocal(BANNER_DISMISSED_KEY);
+}
+export function dismissPushBanner(): void {
+  writeLocal(BANNER_DISMISSED_KEY, String(Date.now()));
 }

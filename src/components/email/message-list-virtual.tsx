@@ -18,6 +18,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Star, Paperclip, Loader2, ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 import { formatDate, getDateGroup } from "./format";
+import { stepIndex } from "@/lib/list-nav";
 
 const ROW_HEIGHT_2_LINES = 84;
 const ROW_HEIGHT_1_LINE = 68;
@@ -98,16 +99,20 @@ export function MessageListVirtual({
     overscan: 8,
   });
 
-  // Focused row into view
+  // Keyboard focus → keep the selected row centered (Apple Mail feel). Runs
+  // only when the focused index changes — NOT when more rows load — so a
+  // page arriving mid-arrowing never yanks the scroll. Mouse clicks don't
+  // recenter (the row is already under the cursor).
+  const clickedIndex = useRef<number>(-1);
   useEffect(() => {
-    if (focusedIndex >= 0 && focusedIndex < messages.length) {
-      const itemIdx = msgItemIndex[focusedIndex];
-      if (itemIdx !== undefined) {
-        rowVirtualizer.scrollToIndex(itemIdx, { align: "auto" });
-      }
-    }
+    if (focusedIndex < 0 || focusedIndex >= messages.length) return;
+    const itemIdx = msgItemIndex[focusedIndex];
+    if (itemIdx === undefined) return;
+    const fromClick = clickedIndex.current === focusedIndex;
+    clickedIndex.current = -1;
+    rowVirtualizer.scrollToIndex(itemIdx, { align: fromClick ? "auto" : "center" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedIndex, messages.length]);
+  }, [focusedIndex]);
 
   // Re-measure cached row sizes when the preview-lines setting changes
   useEffect(() => {
@@ -160,6 +165,7 @@ export function MessageListVirtual({
       const msg = messages[idx];
       if (!msg) return;
       if (containerRef.current) containerRef.current.focus();
+      clickedIndex.current = idx;
 
       if (e.metaKey || e.ctrlKey) {
         const next = new Set(selectedIds);
@@ -187,6 +193,10 @@ export function MessageListVirtual({
 
   // --- Keyboard nav on the grid container ---
   const containerRef = useRef<HTMLDivElement>(null);
+  // Latest focus, updated synchronously on keydown so key auto-repeat can't
+  // step from a stale render's index.
+  const focusRef = useRef(focusedIndex);
+  useEffect(() => { focusRef.current = focusedIndex; }, [focusedIndex]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -197,7 +207,7 @@ export function MessageListVirtual({
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
       if (messages.length === 0) return;
 
-      const curr = focusedIndex >= 0 ? focusedIndex : 0;
+      const curr = focusRef.current >= 0 ? Math.min(focusRef.current, messages.length - 1) : -1;
       const consume = () => {
         e.preventDefault();
         e.stopPropagation();
@@ -207,9 +217,10 @@ export function MessageListVirtual({
         case "ArrowDown":
         case "j": {
           consume();
-          const next = Math.min(curr + 1, messages.length - 1);
+          const next = stepIndex(curr, 1, messages.length);
+          focusRef.current = next;
           if (e.shiftKey) {
-            applyRangeSelection(anchorIndex.current >= 0 ? anchorIndex.current : curr, next, false);
+            applyRangeSelection(anchorIndex.current >= 0 ? anchorIndex.current : Math.max(curr, 0), next, false);
           } else {
             onSelectionChange(new Set());
             anchorIndex.current = next;
@@ -222,9 +233,10 @@ export function MessageListVirtual({
         case "ArrowUp":
         case "k": {
           consume();
-          const next = Math.max(curr - 1, 0);
+          const next = stepIndex(curr, -1, messages.length);
+          focusRef.current = next;
           if (e.shiftKey) {
-            applyRangeSelection(anchorIndex.current >= 0 ? anchorIndex.current : curr, next, false);
+            applyRangeSelection(anchorIndex.current >= 0 ? anchorIndex.current : Math.max(curr, 0), next, false);
           } else {
             onSelectionChange(new Set());
             anchorIndex.current = next;
