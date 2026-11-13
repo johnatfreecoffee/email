@@ -352,14 +352,21 @@ export function MessageTable({
     overscan: 10,
   });
 
-  // --- Ensure focused row is in view ---
+  // --- Keep the focused row centered on keyboard moves ---
+  // Only on focus change (not on every list update, which used to yank the
+  // scroll back after a poll / mark-read). Clicks don't recenter.
+  const clickedParentIndex = useRef<number>(-1);
+  const displayIndexByParentRef = useRef(displayIndexByParent);
+  displayIndexByParentRef.current = displayIndexByParent;
   useEffect(() => {
-    const displayIdx = displayIndexByParent.get(focusedIndex);
+    const displayIdx = displayIndexByParentRef.current.get(focusedIndex);
+    const fromClick = clickedParentIndex.current === focusedIndex;
+    clickedParentIndex.current = -1;
     if (displayIdx !== undefined && displayIdx >= 0 && displayIdx < sortedMessages.length) {
-      rowVirtualizer.scrollToIndex(displayIdx, { align: "auto" });
+      rowVirtualizer.scrollToIndex(displayIdx, { align: fromClick ? "auto" : "center" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedIndex, sortedMessages.length, displayIndexByParent]);
+  }, [focusedIndex]);
 
   // --- Scroll to top on page change (scrollResetSignal increments) ---
   useEffect(() => {
@@ -429,6 +436,7 @@ export function MessageTable({
 
       // Keep focus on the grid container so keyboard nav keeps working
       if (containerRef.current) containerRef.current.focus();
+      clickedParentIndex.current = sortedIndices[idx] ?? -1;
 
       const cmdCtrl = e.metaKey || e.ctrlKey;
       const shift = e.shiftKey;
