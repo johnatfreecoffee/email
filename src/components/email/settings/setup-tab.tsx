@@ -25,6 +25,9 @@ import {
   Trash2,
   Zap,
   AlertCircle,
+  Bot,
+  CreditCard,
+  KeyRound,
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
@@ -32,6 +35,12 @@ import { usePush } from "@/lib/push-notifications";
 import type { SettingsTab } from "@/lib/settings";
 import type { EmailDomain } from "../email-layout";
 import { DomainSetupCard, type CloudflareZoneOption } from "../domain-setup";
+import {
+  StackFlowDiagram,
+  type AgentRuntimeInfo,
+  describeActiveAgentEngine,
+  formatRelativeSeen,
+} from "./stack-flow-diagram";
 
 type Path = "mail" | "machine" | "box" | "chat";
 type Panel =
@@ -111,9 +120,9 @@ const TILE_META: Record<
   auth: { label: "Sign-in", required: () => true, panel: "signin", icon: ShieldCheck, tint: "#64748B" },
   push: { label: "Web push", required: () => false, optional: true, panel: "extras", icon: Bell, tint: "#007AFF" },
   junk: { label: "Junk LLM", required: () => false, optional: true, panel: "extras", icon: Sparkles, tint: "#FF9500" },
-  machine: { label: "This computer", required: (p) => p === "machine", panel: "hands", icon: Laptop, tint: "#34C759" },
-  box: { label: "Cloud box", required: (p) => p === "box", panel: "hands", icon: Server, tint: "#0EA5E9" },
-  chat: { label: "Cloud Q&A", required: (p) => p === "chat", panel: "hands", icon: MessageSquare, tint: "#007AFF" },
+  machine: { label: "Sub · This Mac", required: (p) => p === "machine", optional: true, panel: "hands", icon: Laptop, tint: "#34C759" },
+  box: { label: "Sub · Cloud Box", required: (p) => p === "box", optional: true, panel: "hands", icon: Server, tint: "#0EA5E9" },
+  chat: { label: "API Key · xAI", required: (p) => p === "chat", optional: true, panel: "hands", icon: MessageSquare, tint: "#007AFF" },
 };
 
 const SETUP_KEY = "email.stack-setup";
@@ -157,6 +166,9 @@ export function SetupTab({
   const [panel, setPanel] = useState<Panel>("hub");
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [config, setConfig] = useState<SetupConfigResponse | null>(null);
+  const [runtime, setRuntime] = useState<AgentRuntimeInfo | null>(null);
+  const [handsBusy, setHandsBusy] = useState(false);
+  const [handsMsg, setHandsMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [cfZones, setCfZones] = useState<CloudflareZoneOption[]>([]);
   const [checking, setChecking] = useState(false);
 
@@ -184,13 +196,18 @@ export function SetupTab({
   const refresh = useCallback(async () => {
     setChecking(true);
     try {
-      const [setupRes, cfgRes] = await Promise.all([
+      const [setupRes, cfgRes, rtRes] = await Promise.all([
         apiFetch("/api/email/agent-setup"),
         apiFetch("/api/email/setup-config"),
+        apiFetch("/api/email/agent-runtime"),
       ]);
       if (setupRes.ok) {
         const data = await setupRes.json();
         setTiles(data.tiles || []);
+      }
+      if (rtRes.ok) {
+        const rt = (await rtRes.json()) as AgentRuntimeInfo;
+        setRuntime(rt);
       }
       if (cfgRes.ok) {
         const cfgData = (await cfgRes.json()) as SetupConfigResponse;
@@ -214,6 +231,33 @@ export function SetupTab({
     }
   }, []);
 
+  async function handleSaveHands(nextHands: "auto" | "local" | "box" | "api") {
+    setHandsBusy(true);
+    setHandsMsg(null);
+    try {
+      const res = await apiFetch("/api/email/agent-runtime", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hands: nextHands }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        setRuntime((prev) =>
+          prev
+            ? { ...prev, hands: nextHands }
+            : { hands: nextHands, worker_seen_at: null, box_seen_at: null, online: false, box_online: false }
+        );
+        setHandsMsg({ ok: true, text: `Agent routing updated to "${nextHands}".` });
+      } else {
+        setHandsMsg({ ok: false, text: data.error || "Could not update routing mode" });
+      }
+    } catch (err) {
+      setHandsMsg({ ok: false, text: err instanceof Error ? err.message : "Network error" });
+    } finally {
+      setHandsBusy(false);
+    }
+  }
+
   useEffect(() => {
     void refresh();
     const t = setInterval(() => void refresh(), 20000);
@@ -232,7 +276,7 @@ export function SetupTab({
     () =>
       tiles.filter((t) => {
         const meta = TILE_META[t.id];
-        return meta && !meta.optional && meta.required(path);
+        return meta && meta.required(path);
       }),
     [tiles, path]
   );
@@ -247,15 +291,7 @@ export function SetupTab({
   const readinessPct =
     requiredTiles.length > 0 ? Math.round((connectedRequiredCount / requiredTiles.length) * 100) : 0;
 
-  const visibleTiles = useMemo(
-    () =>
-      tiles.filter((t) => {
-        const meta = TILE_META[t.id];
-        if (!meta) return true;
-        return meta.required(path) || meta.optional || t.ok || t.configured;
-      }),
-    [tiles, path]
-  );
+  const visibleTiles = useMemo(() => tiles, [tiles]);
 
   function openTile(id: string) {
     const meta = TILE_META[id];
@@ -493,6 +529,15 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password
               </div>
             )}
           </div>
+
+          {/* Interactive Live Stack Diagram (Cloudflare -> Resend -> App <-> Supabase -> Subscription vs API Key) */}
+          <StackFlowDiagram
+            tiles={tiles}
+            runtime={runtime}
+            domainCount={domains.length}
+            xaiSource={config?.providers?.xai?.source}
+            onSelectPanel={(target) => setPanel(target)}
+          />
 
           {/* Interactive macOS Service Tiles */}
           <div className="grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
@@ -827,42 +872,171 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password`}</Code>
         </Block>
       )}
 
-      {/* ==================== PANEL: AGENTS ==================== */}
-      {panel === "hands" && (
-        <div className="space-y-4">
-          <Block title="Cloud Q&A Agent (Zero Server Needed)">
-            <p>
-              Connect an xAI key right here so any allowed sender emailing <code>a.youragent@yourdomain</code> gets instant cloud replies from Cloudflare Pages Functions even when your computer is off.
-            </p>
-            <KeyConnectCard
-              provider="xai"
-              label="xAI API Key (Grok)"
-              placeholder="xai-xxxxxxxxxxxxxxxxxxxxxxxxx"
-              status={config?.providers.xai}
-              helperLink={{ label: "Get xAI key →", href: "https://console.x.ai" }}
-              onUpdated={refresh}
-            />
-            <Status tiles={tiles} ids={["chat"]} />
-          </Block>
+      {/* ==================== PANEL: AGENTS (SUBSCRIPTION vs API KEY) ==================== */}
+      {panel === "hands" && (() => {
+        const xaiConfigured = !!(config?.providers?.xai?.configured || tileById(tiles, "chat")?.ok);
+        const engine = describeActiveAgentEngine({ runtime, xaiConfigured });
+        const currentHands = runtime?.hands || "auto";
+        const ROUTING_OPTIONS: Array<{
+          id: "auto" | "local" | "box" | "api";
+          label: string;
+          hint: string;
+        }> = [
+          { id: "auto", label: "Auto (Sub + API fallback)", hint: "Uses Subscription worker when online; falls back to xAI API Key when asleep." },
+          { id: "local", label: "Subscription · This Mac", hint: "Only use your Mac Grok CLI worker (no cloud API replies)." },
+          { id: "box", label: "Subscription · Cloud Box", hint: "Only use your always-on Docker Grok CLI worker." },
+          { id: "api", label: "API Key · xAI Cloud", hint: "Always answer Q&A directly via Cloudflare + XAI_API_KEY." },
+        ];
 
-          <Block title="Local Mac or Always-On Cloud Box Worker">
-            <p>
-              Want agents that can edit repos and run tools? Run the lightweight worker on your Mac or inside Docker on a cloud box.
-            </p>
-            <Code>{`# Option A — This Mac (stays awake on power)
+        return (
+          <div className="space-y-4">
+            {/* Active Engine + Routing Mode Banner */}
+            <Block title="Active AI Agent Connection">
+              <div
+                className="rounded-[12px] p-3.5 space-y-3"
+                style={{
+                  backgroundColor: "var(--mc-bg-tertiary)",
+                  border: `1px solid ${engine.subActive ? "rgba(52, 199, 89, 0.4)" : engine.apiActive ? "var(--mc-accent)" : "var(--mc-border-subtle)"}`,
+                }}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Bot className="h-4 w-4 flex-shrink-0" style={{ color: engine.subActive ? "var(--mc-success)" : "var(--mc-accent)" }} />
+                    <span className="text-[13.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                      {engine.label}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold"
+                      style={{
+                        backgroundColor: engine.subActive ? "var(--mc-success-bg)" : "var(--mc-bg-elevated)",
+                        color: engine.subActive ? "var(--mc-success)" : "var(--mc-text-muted)",
+                      }}
+                    >
+                      <CreditCard className="h-3 w-3" /> Subscription: {runtime?.online ? "Mac online" : runtime?.box_online ? "Box online" : "Offline"}
+                    </span>
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold"
+                      style={{
+                        backgroundColor: engine.apiActive ? "var(--mc-accent-bg)" : "var(--mc-bg-elevated)",
+                        color: engine.apiActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
+                      }}
+                    >
+                      <KeyRound className="h-3 w-3" /> API Key: {xaiConfigured ? "Connected" : "Not set"}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>
+                  {engine.summary}
+                </div>
+
+                {/* Live Routing Switcher */}
+                <div className="pt-2 space-y-1.5" style={{ borderTop: "1px solid var(--mc-border-subtle)" }}>
+                  <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--mc-text-faint)" }}>
+                    Active Routing Mode
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {ROUTING_OPTIONS.map((opt) => {
+                      const active = currentHands === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          disabled={handsBusy}
+                          onClick={() => void handleSaveHands(opt.id)}
+                          className="px-2.5 py-1 rounded-lg text-[12px] font-medium transition-all disabled:opacity-50"
+                          style={{
+                            backgroundColor: active ? "var(--mc-accent)" : "var(--mc-bg-elevated)",
+                            color: active ? "#FFFFFF" : "var(--mc-text-secondary)",
+                            border: `1px solid ${active ? "var(--mc-accent)" : "var(--mc-border-subtle)"}`,
+                          }}
+                          title={opt.hint}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>
+                    {ROUTING_OPTIONS.find((o) => o.id === currentHands)?.hint}
+                  </div>
+                  {handsMsg && <InlineFeedback ok={handsMsg.ok} text={handsMsg.text} />}
+                </div>
+              </div>
+            </Block>
+
+            {/* Option 1: Subscription (Grok CLI Worker) */}
+            <Block title="Option 1 — Connect via Subscription (Grok CLI Worker)">
+              <p>
+                Runs on your <strong>Grok subscription</strong> via the local <code>grok</code> CLI (no per-token API charges). Polls Supabase every 30s for mail sent to <code>a.&lt;repo&gt;@yourdomain</code>, runs full coding tools, updates your Agent Kanban, and replies via Resend.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[12px]">
+                <div
+                  className="rounded-[10px] p-3"
+                  style={{
+                    backgroundColor: "var(--mc-bg-tertiary)",
+                    border: `1px solid ${runtime?.online ? "rgba(52, 199, 89, 0.35)" : "var(--mc-border-subtle)"}`,
+                  }}
+                >
+                  <div className="flex items-center justify-between font-semibold" style={{ color: "var(--mc-text)" }}>
+                    <span className="inline-flex items-center gap-1.5"><Laptop className="h-3.5 w-3.5 text-emerald-500" /> This Mac</span>
+                    <span style={{ color: runtime?.online ? "var(--mc-success)" : "var(--mc-text-muted)" }}>
+                      {runtime?.online ? "Online" : "Offline"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-muted)" }}>
+                    Heartbeat: {formatRelativeSeen(runtime?.worker_seen_at)}
+                  </div>
+                </div>
+                <div
+                  className="rounded-[10px] p-3"
+                  style={{
+                    backgroundColor: "var(--mc-bg-tertiary)",
+                    border: `1px solid ${runtime?.box_online ? "rgba(52, 199, 89, 0.35)" : "var(--mc-border-subtle)"}`,
+                  }}
+                >
+                  <div className="flex items-center justify-between font-semibold" style={{ color: "var(--mc-text)" }}>
+                    <span className="inline-flex items-center gap-1.5"><Server className="h-3.5 w-3.5 text-sky-500" /> Cloud Box (Docker)</span>
+                    <span style={{ color: runtime?.box_online ? "var(--mc-success)" : "var(--mc-text-muted)" }}>
+                      {runtime?.box_online ? "Online" : "Offline"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: "var(--mc-text-muted)" }}>
+                    Heartbeat: {formatRelativeSeen(runtime?.box_seen_at)}
+                  </div>
+                </div>
+              </div>
+              <Code>{`# Option A — This Mac (uses your signed-in Grok subscription CLI)
 ./scripts/install-local-worker.sh
 
 # Option B — Always-on Docker Cloud Box (see worker/BOX.md)
 cd worker && docker build -t agentmail-box .`}</Code>
-            <Status tiles={tiles} ids={["machine", "box"]} />
-            <div className="pt-1">
-              <button type="button" className="am-btn" onClick={() => onOpenTab("agents")}>
-                Open Agent Mailboxes &amp; Allowlist →
-              </button>
-            </div>
-          </Block>
-        </div>
-      )}
+              <div className="pt-1">
+                <button type="button" className="am-btn" onClick={() => onOpenTab("agents")}>
+                  Open Agent Mailboxes &amp; Allowlist →
+                </button>
+              </div>
+            </Block>
+
+            {/* Option 2: API Key (xAI Cloud Q&A) */}
+            <Block title="Option 2 — Connect via API Key (xAI Cloud Q&A)">
+              <p>
+                Pay-per-use API key inside Cloudflare Pages Functions. Answers questions from allowed senders immediately when your subscription worker is offline (locked to Q&amp;A only — never edits files).
+              </p>
+              <KeyConnectCard
+                provider="xai"
+                label="xAI API Key (Grok)"
+                placeholder="xai-xxxxxxxxxxxxxxxxxxxxxxxxx"
+                status={config?.providers.xai}
+                helperLink={{ label: "Get xAI key →", href: "https://console.x.ai" }}
+                onUpdated={refresh}
+              />
+              <Status tiles={tiles} ids={["chat"]} />
+            </Block>
+          </div>
+        );
+      })()}
 
       {/* ==================== PANEL: EXTRAS (PUSH + JUNK LLM) ==================== */}
       {panel === "extras" && (

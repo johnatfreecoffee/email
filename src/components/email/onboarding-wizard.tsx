@@ -19,11 +19,23 @@ import {
   ExternalLink,
   ShieldCheck,
   Check,
+  Bot,
+  CreditCard,
+  KeyRound,
+  Copy,
+  Laptop,
+  Server,
 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import { usePush } from "@/lib/push-notifications";
 import type { EmailDomain } from "./email-layout";
 import { DomainSetupCard, type CloudflareZoneOption } from "./domain-setup";
+import {
+  StackFlowDiagram,
+  type AgentRuntimeInfo,
+  describeActiveAgentEngine,
+  formatRelativeSeen,
+} from "./settings/stack-flow-diagram";
 
 export const ONBOARDING_DISMISSED_KEY = "mc.email.onboardingDismissed";
 
@@ -44,12 +56,13 @@ export function dismissOnboarding(): void {
   }
 }
 
-type StepId = "welcome" | "resend" | "domain" | "ready";
+type StepId = "welcome" | "resend" | "domain" | "agent" | "ready";
 
 const STEPS: Array<{ id: StepId; label: string }> = [
   { id: "welcome", label: "Welcome" },
   { id: "resend", label: "Mail Engine" },
-  { id: "domain", label: "Your Domain" },
+  { id: "domain", label: "Domain" },
+  { id: "agent", label: "AI Agent" },
   { id: "ready", label: "Finish" },
 ];
 
@@ -64,6 +77,7 @@ interface SetupConfigResponse {
   providers: {
     resend: ProviderStatus;
     cloudflare: ProviderStatus;
+    xai?: ProviderStatus;
   };
 }
 
@@ -94,6 +108,7 @@ export function OnboardingWizard({
   const [stepIndex, setStepIndex] = useState(0);
   const [config, setConfig] = useState<SetupConfigResponse | null>(null);
   const [tiles, setTiles] = useState<Tile[]>([]);
+  const [runtime, setRuntime] = useState<AgentRuntimeInfo | null>(null);
   const [cfZones, setCfZones] = useState<CloudflareZoneOption[]>([]);
   const [loadingStatus, setLoadingStatus] = useState(false);
 
@@ -117,18 +132,29 @@ export function OnboardingWizard({
   const [cfBusy, setCfBusy] = useState(false);
   const [cfFeedback, setCfFeedback] = useState<{ ok: boolean; text: string } | null>(null);
 
+  // AI Agent (xAI API Key + Subscription worker copy)
+  const [xaiKey, setXaiKey] = useState("");
+  const [xaiBusy, setXaiBusy] = useState(false);
+  const [xaiFeedback, setXaiFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+  const [copiedWorkerCmd, setCopiedWorkerCmd] = useState(false);
+
   const push = usePush();
 
   const refreshStatus = useCallback(async () => {
     setLoadingStatus(true);
     try {
-      const [cfgRes, setupRes] = await Promise.all([
+      const [cfgRes, setupRes, rtRes] = await Promise.all([
         apiFetch("/api/email/setup-config"),
         apiFetch("/api/email/agent-setup"),
+        apiFetch("/api/email/agent-runtime"),
       ]);
       if (setupRes.ok) {
         const d = await setupRes.json();
         setTiles(d.tiles || []);
+      }
+      if (rtRes.ok) {
+        const rt = (await rtRes.json()) as AgentRuntimeInfo;
+        setRuntime(rt);
       }
       if (cfgRes.ok) {
         const cfg = (await cfgRes.json()) as SetupConfigResponse;
@@ -158,6 +184,7 @@ export function OnboardingWizard({
     setResendFeedback(null);
     setWebhookFeedback(null);
     setCfFeedback(null);
+    setXaiFeedback(null);
     void refreshStatus();
   }, [open, refreshStatus]);
 
@@ -269,6 +296,39 @@ export function OnboardingWizard({
     }
   }
 
+  async function saveXaiKey() {
+    if (!xaiKey.trim()) return;
+    setXaiBusy(true);
+    setXaiFeedback(null);
+    try {
+      const res = await apiFetch("/api/email/setup-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save_key",
+          provider: "xai",
+          value: xaiKey.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setXaiKey("");
+        setXaiFeedback({ ok: true, text: data.detail || "xAI API Key verified & connected!" });
+        await refreshStatus();
+      } else {
+        setXaiFeedback({ ok: false, text: data.detail || data.error || "Could not verify xAI key" });
+      }
+    } catch (err) {
+      setXaiFeedback({ ok: false, text: err instanceof Error ? err.message : "Network error" });
+    } finally {
+      setXaiBusy(false);
+    }
+  }
+
+  const chatTile = tiles.find((t) => t.id === "chat");
+  const xaiConnected = !!(config?.providers?.xai?.configured || chatTile?.ok);
+  const agentEngine = describeActiveAgentEngine({ runtime, xaiConfigured: xaiConnected });
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-[3px]"
@@ -276,7 +336,7 @@ export function OnboardingWizard({
       onClick={handleClose}
     >
       <div
-        className="mc-window-sheet w-full max-w-[600px] max-h-[90vh] flex flex-col overflow-hidden"
+        className="mc-window-sheet w-full max-w-[700px] max-h-[90vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top bar with step progress dots */}
@@ -370,58 +430,21 @@ export function OnboardingWizard({
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {[
-                  {
-                    icon: Mail,
-                    tint: "#007AFF",
-                    title: "1. Resend",
-                    desc: "Handles sending & receiving with legit SPF/DKIM signing.",
-                    done: resendConnected && inboundConnected,
-                  },
-                  {
-                    icon: Cloud,
-                    tint: "#FF9500",
-                    title: "2. DNS (Auto or Manual)",
-                    desc: "1-click Cloudflare auto-DNS, or copy 3 records anywhere.",
-                    done: cfConnected,
-                  },
-                  {
-                    icon: Globe,
-                    tint: "#34C759",
-                    title: "3. Your Domain",
-                    desc: "Add unlimited addresses like you@yourdomain.com.",
-                    done: domains.length > 0,
-                  },
-                ].map((item) => (
-                  <div
-                    key={item.title}
-                    className="rounded-[12px] p-3.5 flex flex-col gap-2"
-                    style={{
-                      backgroundColor: "var(--mc-bg-tertiary)",
-                      border: "1px solid var(--mc-border-subtle)",
-                    }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span
-                        className="h-7 w-7 rounded-[8px] flex items-center justify-center"
-                        style={{ backgroundColor: `${item.tint}1F`, color: item.tint }}
-                      >
-                        <item.icon className="h-4 w-4" strokeWidth={2} />
-                      </span>
-                      {item.done && (
-                        <CheckCircle2 className="h-4 w-4" style={{ color: "var(--mc-success)" }} />
-                      )}
-                    </div>
-                    <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>
-                      {item.title}
-                    </div>
-                    <div className="text-[12px] leading-snug" style={{ color: "var(--mc-text-muted)" }}>
-                      {item.desc}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <StackFlowDiagram
+                tiles={tiles}
+                runtime={runtime}
+                domainCount={domains.length}
+                xaiSource={config?.providers?.xai?.source}
+                onSelectPanel={(target) => {
+                  if (target === "mail") setStepIndex(1);
+                  else if (target === "cloudflare" || target === "domain") setStepIndex(2);
+                  else if (target === "hands") setStepIndex(3);
+                  else {
+                    handleClose();
+                    onOpenSetupHub();
+                  }
+                }}
+              />
 
               <div
                 className="rounded-[10px] px-3.5 py-2.5 flex items-center gap-2.5 text-[12px]"
@@ -804,7 +827,226 @@ export function OnboardingWizard({
             </div>
           )}
 
-          {/* ==================== STEP 4: YOU'RE READY ==================== */}
+          {/* ==================== STEP 4: AI AGENT (SUBSCRIPTION vs API KEY) ==================== */}
+          {step.id === "agent" && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h2
+                    className="text-[17px] font-semibold tracking-[-0.015em]"
+                    style={{ color: "var(--mc-text)" }}
+                  >
+                    Connect Your AI Agent{" "}
+                    <span className="text-[13px] font-normal" style={{ color: "var(--mc-text-muted)" }}>
+                      (Optional)
+                    </span>
+                  </h2>
+                  <p className="text-[12.5px] mt-1 leading-relaxed" style={{ color: "var(--mc-text-muted)" }}>
+                    Email <code className="font-mono text-[11.5px]">a.yourrepo@yourdomain</code> to run coding tasks or ask questions. Choose your <strong>Grok subscription</strong> (recommended) or an <strong>xAI API key</strong> — or both.
+                  </p>
+                </div>
+                <span
+                  className="text-[11.5px] font-semibold px-2.5 py-1 rounded-full flex-shrink-0"
+                  style={{
+                    backgroundColor:
+                      agentEngine.mode === "none"
+                        ? "var(--mc-bg-tertiary)"
+                        : agentEngine.subActive
+                          ? "var(--mc-success-bg)"
+                          : "var(--mc-accent-bg)",
+                    color:
+                      agentEngine.mode === "none"
+                        ? "var(--mc-text-muted)"
+                        : agentEngine.subActive
+                          ? "var(--mc-success)"
+                          : "var(--mc-accent)",
+                  }}
+                >
+                  {agentEngine.label}
+                </span>
+              </div>
+
+              {/* Option 1: Subscription (Grok CLI Worker) */}
+              <div
+                className="rounded-[12px] p-4 space-y-3"
+                style={{
+                  backgroundColor: "var(--mc-bg-tertiary)",
+                  border: agentEngine.subActive
+                    ? "1.5px solid var(--mc-success)"
+                    : "1px solid var(--mc-border-subtle)",
+                }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-7 w-7 rounded-[8px] flex items-center justify-center"
+                      style={{ backgroundColor: "#34C7591F", color: "#34C759" }}
+                    >
+                      <CreditCard className="h-4 w-4" />
+                    </span>
+                    <div>
+                      <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                        Option 1: Subscription (Grok CLI Worker)
+                      </div>
+                      <div className="text-[11.5px]" style={{ color: "var(--mc-text-muted)" }}>
+                        Uses your signed-in Grok subscription — full repo edits, tools &amp; Kanban, zero API key charges.
+                      </div>
+                    </div>
+                  </div>
+                  <span
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex-shrink-0"
+                    style={{
+                      backgroundColor:
+                        runtime?.online || runtime?.box_online
+                          ? "var(--mc-success-bg)"
+                          : "var(--mc-bg-elevated)",
+                      color:
+                        runtime?.online || runtime?.box_online
+                          ? "var(--mc-success)"
+                          : "var(--mc-text-muted)",
+                    }}
+                  >
+                    {runtime?.online ? (
+                      <>
+                        <Laptop className="h-3 w-3" /> Mac Online
+                      </>
+                    ) : runtime?.box_online ? (
+                      <>
+                        <Server className="h-3 w-3" /> Box Online
+                      </>
+                    ) : (
+                      "Offline"
+                    )}
+                  </span>
+                </div>
+
+                <div
+                  className="rounded-lg px-3 py-2 flex items-center justify-between gap-2 text-[11.5px]"
+                  style={{
+                    backgroundColor: "var(--mc-bg-elevated)",
+                    border: "1px solid var(--mc-border)",
+                  }}
+                >
+                  <code className="font-mono truncate" style={{ color: "var(--mc-text)" }}>
+                    ./scripts/install-local-worker.sh
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void navigator.clipboard.writeText("./scripts/install-local-worker.sh");
+                      setCopiedWorkerCmd(true);
+                      setTimeout(() => setCopiedWorkerCmd(false), 1800);
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium flex-shrink-0"
+                    style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text)" }}
+                  >
+                    {copiedWorkerCmd ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                    {copiedWorkerCmd ? "Copied" : "Copy"}
+                  </button>
+                </div>
+
+                <div className="text-[11px]" style={{ color: "var(--mc-text-muted)" }}>
+                  Mac heartbeat: <strong>{formatRelativeSeen(runtime?.worker_seen_at)}</strong> · Cloud Box:{" "}
+                  <strong>{formatRelativeSeen(runtime?.box_seen_at)}</strong>
+                </div>
+              </div>
+
+              {/* Option 2: API Key (xAI Cloud Q&A) */}
+              <div
+                className="rounded-[12px] p-4 space-y-3"
+                style={{
+                  backgroundColor: "var(--mc-bg-tertiary)",
+                  border: agentEngine.apiActive
+                    ? "1.5px solid var(--mc-accent)"
+                    : "1px solid var(--mc-border-subtle)",
+                }}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-7 w-7 rounded-[8px] flex items-center justify-center"
+                      style={{ backgroundColor: "#007AFF1F", color: "#007AFF" }}
+                    >
+                      <KeyRound className="h-4 w-4" />
+                    </span>
+                    <div>
+                      <div className="text-[13px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                        Option 2: API Key (xAI Cloud Q&amp;A)
+                      </div>
+                      <div className="text-[11.5px]" style={{ color: "var(--mc-text-muted)" }}>
+                        Pay-per-use fallback in Cloudflare — answers questions instantly even when your Mac is asleep.
+                      </div>
+                    </div>
+                  </div>
+                  {xaiConnected ? (
+                    <span
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: "var(--mc-accent-bg)", color: "var(--mc-accent)" }}
+                    >
+                      <Bot className="h-3 w-3" /> Connected
+                    </span>
+                  ) : (
+                    <a
+                      href="https://console.x.ai"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11.5px] font-medium hover:underline flex-shrink-0"
+                      style={{ color: "var(--mc-accent)" }}
+                    >
+                      Get key <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={xaiKey}
+                    onChange={(e) => setXaiKey(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveXaiKey();
+                    }}
+                    placeholder={xaiConnected ? "Paste a new xAI key to replace…" : "xai-xxxxxxxxxxxxxxxxxxxxxxxxx"}
+                    className="flex-1 min-w-0 px-3 py-2 text-[12.5px] font-mono rounded-lg focus:outline-none"
+                    style={{
+                      backgroundColor: "var(--mc-bg-elevated)",
+                      border: "1px solid var(--mc-border)",
+                      color: "var(--mc-text)",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveXaiKey()}
+                    disabled={!xaiKey.trim() || xaiBusy}
+                    className="px-3.5 py-2 rounded-lg text-[12.5px] font-semibold transition-all hover:brightness-110 disabled:opacity-45 flex items-center gap-1.5 flex-shrink-0"
+                    style={{ backgroundColor: "var(--mc-accent)", color: "#FFFFFF" }}
+                  >
+                    {xaiBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Verify &amp; Save
+                  </button>
+                </div>
+
+                {xaiFeedback && (
+                  <div
+                    className="flex items-center gap-2 text-[12px] px-3 py-2 rounded-lg"
+                    style={{
+                      backgroundColor: xaiFeedback.ok ? "var(--mc-success-bg)" : "var(--mc-danger-bg)",
+                      color: xaiFeedback.ok ? "var(--mc-success)" : "var(--mc-danger)",
+                    }}
+                  >
+                    {xaiFeedback.ok ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                    )}
+                    <span>{xaiFeedback.text}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ==================== STEP 5: YOU'RE READY ==================== */}
           {step.id === "ready" && (
             <div className="space-y-4">
               <div className="flex flex-col items-center text-center pt-1">
