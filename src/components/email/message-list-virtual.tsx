@@ -15,14 +15,26 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Star, Paperclip, Loader2, ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
+import {
+  Star,
+  Paperclip,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  MessagesSquare,
+  Archive,
+  Trash2,
+  Mail,
+  MailOpen,
+} from "lucide-react";
 import type { EmailMessage } from "./email-layout";
 import { formatDate, getDateGroup } from "./format";
 import { stepIndex } from "@/lib/list-nav";
+import { SenderAvatar } from "./avatar";
 
-const ROW_HEIGHT_2_LINES = 84;
-const ROW_HEIGHT_1_LINE = 68;
-const HEADER_HEIGHT = 28;
+const ROW_HEIGHT_2_LINES = 88;
+const ROW_HEIGHT_1_LINE = 70;
+const HEADER_HEIGHT = 30;
 
 type Item =
   | { t: "header"; label: string }
@@ -38,6 +50,7 @@ export interface MessageListVirtualProps {
   onToggleStar: (id: string, starred: boolean) => void;
   onToggleRead?: (id: string, isRead: boolean) => void;
   onTrash?: (id: string) => void;
+  onArchive?: (id: string) => void;
   selectedIds: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
   onBulkTrash?: (ids: string[]) => void;
@@ -61,6 +74,7 @@ export function MessageListVirtual({
   onToggleStar,
   onToggleRead,
   onTrash,
+  onArchive,
   selectedIds,
   onSelectionChange,
   onBulkTrash,
@@ -329,7 +343,7 @@ export function MessageListVirtual({
               return (
                 <div
                   key={`h-${item.label}-${vItem.index}`}
-                  className="flex items-end px-4 pb-1 text-[11px] font-semibold"
+                  className="flex items-end px-4 pb-1.5 text-[11px] font-semibold tracking-tight"
                   style={{
                     position: "absolute",
                     top: 0,
@@ -337,7 +351,7 @@ export function MessageListVirtual({
                     width: "100%",
                     height: `${HEADER_HEIGHT}px`,
                     transform: `translateY(${vItem.start}px)`,
-                    color: "var(--mc-text-muted)",
+                    color: "var(--mc-text-faint)",
                     backgroundColor: "var(--mc-bg-secondary)",
                   }}
                 >
@@ -353,17 +367,17 @@ export function MessageListVirtual({
             const isUnread = !msg.is_read;
             const hasAttachments = !!(msg.attachments && msg.attachments.length > 0);
 
-            const rowBg = isActive
+            const cardBg = isActive
               ? "var(--mc-selected-bg)"
               : isInSelection
-              ? "var(--mc-accent-bg)"
-              : isFocused
-              ? "var(--mc-bg-hover)"
-              : "transparent";
+                ? "var(--mc-accent-bg)"
+                : isFocused
+                  ? "var(--mc-bg-hover)"
+                  : "transparent";
 
             const primary = isActive ? "var(--mc-selected-fg)" : "var(--mc-text)";
-            const secondary = isActive ? "rgba(255,255,255,0.85)" : "var(--mc-text-secondary)";
-            const muted = isActive ? "rgba(255,255,255,0.75)" : "var(--mc-text-muted)";
+            const secondary = isActive ? "rgba(255,255,255,0.9)" : "var(--mc-text-secondary)";
+            const muted = isActive ? "rgba(255,255,255,0.74)" : "var(--mc-text-muted)";
 
             return (
               <div
@@ -372,7 +386,7 @@ export function MessageListVirtual({
                 aria-rowindex={index + 1}
                 aria-selected={isActive || isInSelection}
                 onClick={(e) => handleRowClick(index, e)}
-                className="cursor-default select-none"
+                className="cursor-default select-none px-2 py-[2px] group/mrow"
                 style={{
                   position: "absolute",
                   top: 0,
@@ -380,34 +394,62 @@ export function MessageListVirtual({
                   width: "100%",
                   height: `${rowHeight}px`,
                   transform: `translateY(${vItem.start}px)`,
-                  backgroundColor: rowBg,
                 }}
               >
                 <div
-                  className="flex h-full pl-1"
+                  className={`relative flex h-full rounded-[10px] transition-colors ${
+                    !isActive && !isInSelection ? "group-hover/mrow:bg-[var(--mc-bg-hover)]" : ""
+                  }`}
                   style={{
-                    paddingLeft: msg.is_thread_child ? 20 : undefined,
+                    backgroundColor: cardBg,
+                    paddingLeft: msg.is_thread_child ? 18 : 4,
                     borderLeft: msg.is_thread_child
                       ? isActive
-                        ? "2px solid rgba(255,255,255,0.45)"
+                        ? "2px solid rgba(255,255,255,0.5)"
                         : "2px solid var(--mc-accent)"
                       : undefined,
                   }}
                 >
-                  <div className="w-[24px] flex-shrink-0 flex items-start justify-center pt-[11px]">
-                    {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child ? (
+                  {/* Unread indicator + thread disclosure column */}
+                  <div className="w-[20px] flex-shrink-0 flex flex-col items-center pt-[14px] gap-1.5">
+                    <button
+                      type="button"
+                      className="flex items-center justify-center h-3.5 w-3.5 cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleRead?.(msg.id, msg.is_read);
+                      }}
+                      title={isUnread ? "Mark as read" : "Mark as unread"}
+                      aria-label={isUnread ? "Mark as read" : "Mark as unread"}
+                    >
+                      <span
+                        className="h-[8px] w-[8px] rounded-full transition-opacity"
+                        style={
+                          isUnread
+                            ? { backgroundColor: isActive ? "#FFFFFF" : "var(--mc-accent)" }
+                            : {
+                                backgroundColor: "transparent",
+                                border: isActive
+                                  ? "1.5px solid rgba(255,255,255,0.45)"
+                                  : "1.5px solid var(--mc-border)",
+                                opacity: isActive ? 0.8 : 0.45,
+                              }
+                        }
+                      />
+                    </button>
+                    {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child && (
                       <button
                         type="button"
                         className="thread-disclosure flex items-center justify-center rounded-full transition-colors"
                         style={{
-                          width: 18,
-                          height: 18,
+                          width: 16,
+                          height: 16,
                           color: isActive ? "#fff" : "var(--mc-text-muted)",
                           border: isActive
-                            ? "1.5px solid rgba(255,255,255,0.65)"
-                            : "1.5px solid var(--mc-border)",
+                            ? "1px solid rgba(255,255,255,0.55)"
+                            : "1px solid var(--mc-border)",
                           backgroundColor: isActive
-                            ? "rgba(255,255,255,0.14)"
+                            ? "rgba(255,255,255,0.16)"
                             : "var(--mc-bg-elevated)",
                         }}
                         title={msg.thread_expanded ? "Collapse conversation" : "Expand conversation"}
@@ -418,67 +460,60 @@ export function MessageListVirtual({
                         }}
                       >
                         {msg.thread_expanded ? (
-                          <ChevronDown className="h-3 w-3" strokeWidth={2.5} />
+                          <ChevronDown className="h-2.5 w-2.5" strokeWidth={2.5} />
                         ) : (
-                          <ChevronRight className="h-3 w-3" strokeWidth={2.5} />
+                          <ChevronRight className="h-2.5 w-2.5" strokeWidth={2.5} />
                         )}
                       </button>
-                    ) : null}
+                    )}
                   </div>
-                  {/* Unread: solid blue · Read: hollow outline */}
-                  <div
-                    className="w-[28px] flex-shrink-0 flex items-start justify-center pt-[15px] cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleRead?.(msg.id, msg.is_read);
-                    }}
-                    title={isUnread ? "Mark as read" : "Mark as unread"}
-                  >
-                    <span
-                      className="h-[9px] w-[9px] rounded-full"
-                      style={
-                        isUnread
-                          ? { backgroundColor: isActive ? "#fff" : "var(--mc-accent)" }
-                          : {
-                              backgroundColor: "transparent",
-                              border: isActive
-                                ? "1.5px solid rgba(255,255,255,0.55)"
-                                : "1.5px solid var(--mc-border)",
-                            }
-                      }
+
+                  {/* Sender monogram avatar */}
+                  <div className="pt-[10px] pr-2.5 flex-shrink-0">
+                    <SenderAvatar
+                      name={msg.from_name}
+                      email={msg.from_address}
+                      size="sm"
+                      inverted={isActive}
                     />
                   </div>
 
                   {/* Content */}
                   <div
-                    className="flex-1 min-w-0 pr-3 pt-[7px] pb-[6px] flex flex-col"
+                    className="flex-1 min-w-0 pr-2.5 pt-[8px] pb-[6px] flex flex-col"
                     style={{
-                      borderBottom: isActive ? "1px solid transparent" : "1px solid var(--mc-border-subtle)",
+                      borderBottom:
+                        isActive || isInSelection
+                          ? "1px solid transparent"
+                          : "1px solid var(--mc-border-subtle)",
                     }}
                   >
                     {/* Line 1: sender · flag/clip/date */}
                     <div className="flex items-center gap-1.5">
                       <span
-                        className="flex-1 min-w-0 truncate text-[13px]"
-                        style={{ color: primary, fontWeight: isUnread ? 600 : 500 }}
+                        className="flex-1 min-w-0 truncate text-[13px] tracking-[-0.005em]"
+                        style={{ color: primary, fontWeight: isUnread ? 650 : 500 }}
                       >
                         {msg.from_name || msg.from_address}
                       </span>
-                      {msg.is_starred && (
-                        <Star
-                          className="h-3 w-3 flex-shrink-0"
-                          style={{
-                            color: isActive ? "#fff" : "var(--mc-star)",
-                            fill: isActive ? "#fff" : "var(--mc-star)",
-                          }}
-                        />
-                      )}
-                      {hasAttachments && (
-                        <Paperclip className="h-3 w-3 flex-shrink-0" style={{ color: muted }} />
-                      )}
-                      <span className="text-[11px] flex-shrink-0 tabular-nums" style={{ color: muted }}>
-                        {formatDate(msg.received_at)}
-                      </span>
+                      {/* Meta items hide smoothly on hover to give room for quick actions */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0 group-hover/mrow:opacity-0 transition-opacity">
+                        {msg.is_starred && (
+                          <Star
+                            className="h-3 w-3 flex-shrink-0"
+                            style={{
+                              color: isActive ? "#fff" : "var(--mc-star)",
+                              fill: isActive ? "#fff" : "var(--mc-star)",
+                            }}
+                          />
+                        )}
+                        {hasAttachments && (
+                          <Paperclip className="h-3 w-3 flex-shrink-0" style={{ color: muted }} />
+                        )}
+                        <span className="text-[11px] flex-shrink-0 tabular-nums" style={{ color: muted }}>
+                          {formatDate(msg.received_at)}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Line 2: badges + subject */}
@@ -487,7 +522,7 @@ export function MessageListVirtual({
                         <span
                           className="text-[9px] font-bold px-1 py-px rounded flex-shrink-0"
                           style={{
-                            backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "rgba(255, 149, 0, 0.15)",
+                            backgroundColor: isActive ? "rgba(255,255,255,0.22)" : "var(--mc-warning-bg)",
                             color: isActive ? "#fff" : "var(--mc-warning)",
                           }}
                         >
@@ -498,7 +533,7 @@ export function MessageListVirtual({
                         <span
                           className="text-[9px] font-bold px-1 py-px rounded flex-shrink-0"
                           style={{
-                            backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "var(--mc-accent-bg)",
+                            backgroundColor: isActive ? "rgba(255,255,255,0.22)" : "var(--mc-accent-bg)",
                             color: isActive ? "#fff" : "var(--mc-accent)",
                           }}
                         >
@@ -507,21 +542,20 @@ export function MessageListVirtual({
                       )}
                       {(msg.thread_count ?? 0) > 1 && !msg.is_thread_child && (
                         <span
-                          className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 py-px rounded flex-shrink-0 tabular-nums"
+                          className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-px rounded-full flex-shrink-0 tabular-nums"
                           style={{
-                            backgroundColor: isActive ? "rgba(255,255,255,0.25)" : "var(--mc-bg-elevated)",
+                            backgroundColor: isActive ? "rgba(255,255,255,0.22)" : "var(--mc-bg-tertiary)",
                             color: isActive ? "#fff" : "var(--mc-text-muted)",
-                            border: isActive ? "none" : "1px solid var(--mc-border-subtle)",
                           }}
                           title={`${msg.thread_count} messages in conversation`}
                         >
-                          <MessagesSquare className="h-3 w-3" />
+                          <MessagesSquare className="h-2.5 w-2.5" />
                           {msg.thread_count}
                         </span>
                       )}
                       <span
-                        className="flex-1 min-w-0 truncate text-[13px]"
-                        style={{ color: secondary, fontWeight: isUnread ? 500 : 400 }}
+                        className="flex-1 min-w-0 truncate text-[12.5px]"
+                        style={{ color: secondary, fontWeight: isUnread ? 550 : 400 }}
                       >
                         {msg.subject || "(no subject)"}
                       </span>
@@ -529,7 +563,7 @@ export function MessageListVirtual({
 
                     {/* Preview (1 or 2 lines per the Viewing setting) */}
                     <span
-                      className="text-[12px] leading-4 mt-[2px] overflow-hidden"
+                      className="text-[12px] leading-[1.35] mt-[2px] overflow-hidden"
                       style={{
                         color: muted,
                         display: "-webkit-box",
@@ -537,8 +571,70 @@ export function MessageListVirtual({
                         WebkitBoxOrient: "vertical",
                       }}
                     >
-                      {msg.preview || " "}
+                      {msg.preview || "\u00a0"}
                     </span>
+                  </div>
+
+                  {/* Floating hover quick actions pill */}
+                  <div
+                    className="opacity-0 group-hover/mrow:opacity-100 transition-opacity absolute right-2 top-[7px] flex items-center gap-0.5 px-1 py-0.5 rounded-lg"
+                    style={{
+                      backgroundColor: isActive ? "rgba(0, 0, 0, 0.22)" : "var(--mc-bg-elevated)",
+                      border: isActive ? "1px solid rgba(255,255,255,0.2)" : "1px solid var(--mc-border)",
+                      boxShadow: isActive ? "none" : "0 2px 8px rgba(0,0,0,0.08)",
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {onToggleRead && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleRead(msg.id, msg.is_read)}
+                        className="p-1 rounded-md transition-colors hover:opacity-80"
+                        style={{ color: isActive ? "#fff" : "var(--mc-text-muted)" }}
+                        title={isUnread ? "Mark as read (u)" : "Mark as unread (u)"}
+                      >
+                        {isUnread ? <MailOpen className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onToggleStar(msg.id, msg.is_starred)}
+                      className="p-1 rounded-md transition-colors hover:opacity-80"
+                      style={{
+                        color: msg.is_starred
+                          ? isActive
+                            ? "#fff"
+                            : "var(--mc-star)"
+                          : isActive
+                            ? "#fff"
+                            : "var(--mc-text-muted)",
+                      }}
+                      title={msg.is_starred ? "Unflag (s)" : "Flag (s)"}
+                    >
+                      <Star className={`h-3.5 w-3.5 ${msg.is_starred ? "fill-current" : ""}`} />
+                    </button>
+                    {onArchive && (
+                      <button
+                        type="button"
+                        onClick={() => onArchive(msg.id)}
+                        className="p-1 rounded-md transition-colors hover:opacity-80"
+                        style={{ color: isActive ? "#fff" : "var(--mc-text-muted)" }}
+                        title="Archive (a)"
+                      >
+                        <Archive className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {onTrash && (
+                      <button
+                        type="button"
+                        onClick={() => onTrash(msg.id)}
+                        className="p-1 rounded-md transition-colors hover:opacity-80"
+                        style={{ color: isActive ? "#fff" : "var(--mc-danger)" }}
+                        title="Trash (Delete)"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

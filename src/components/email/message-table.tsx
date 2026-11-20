@@ -667,12 +667,11 @@ export function MessageTable({
     >
       {/* Column header row */}
       <div
-        className="flex items-center text-[10px] font-semibold uppercase tracking-wider select-none"
+        className="mc-glass-bar flex items-center text-[10.5px] font-semibold uppercase tracking-wider select-none"
         style={{
           borderBottom: "1px solid var(--mc-border)",
-          backgroundColor: "var(--mc-bg-secondary)",
-          color: "var(--mc-text-faint)",
-          height: "28px",
+          color: "var(--mc-text-muted)",
+          height: "30px",
           flexShrink: 0,
         }}
         role="row"

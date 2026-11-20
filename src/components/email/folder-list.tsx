@@ -30,6 +30,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   Columns3,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
@@ -69,6 +70,24 @@ interface FolderListProps {
   /** Mobile: dismiss the hamburger-opened sidebar without picking anything. */
   onClose?: () => void;
   unreadCounts?: UnreadCountsShape;
+}
+
+function folderIconColor(id: string): string {
+  switch (id) {
+    case "starred":
+      return "var(--mc-star)";
+    case "spam":
+      return "var(--mc-warning)";
+    case "trash":
+      return "var(--mc-danger)";
+    case "sent":
+      return "var(--mc-info)";
+    case "archive":
+    case "import":
+      return "var(--mc-text-muted)";
+    default:
+      return "var(--mc-accent)";
+  }
 }
 
 const folderDefs = [
@@ -157,11 +176,12 @@ function SidebarRow({
     <button
       onClick={onClick}
       title={title}
-      className="w-full flex items-center gap-2 h-7 rounded-md text-[13px] transition-colors group/row"
+      className="w-full flex items-center gap-2 h-[30px] rounded-[7px] text-[13px] transition-colors group/row"
       style={{
-        paddingLeft: depth === 1 ? "26px" : "8px",
-        paddingRight: "8px",
-        color: active ? "var(--mc-text)" : "var(--mc-text-secondary)",
+        paddingLeft: depth === 1 ? "26px" : "9px",
+        paddingRight: "9px",
+        fontWeight: active ? 600 : 450,
+        color: active ? "var(--mc-sidebar-selected-text)" : "var(--mc-text-secondary)",
         backgroundColor: active ? "var(--mc-sidebar-selected)" : "transparent",
       }}
       onMouseEnter={(e) => {
@@ -174,6 +194,7 @@ function SidebarRow({
       {leading}
       <Icon
         className="h-[15px] w-[15px] flex-shrink-0"
+        strokeWidth={active ? 2.1 : 1.85}
         style={{ color: iconColor || "var(--mc-accent)" }}
       />
       <span className="flex-1 text-left truncate">{label}</span>
@@ -182,7 +203,7 @@ function SidebarRow({
         : typeof count === "number" && count > 0 && (
             <span
               className="text-[11px] font-semibold tabular-nums flex-shrink-0"
-              style={{ color: "var(--mc-text-muted)" }}
+              style={{ color: active ? "var(--mc-sidebar-selected-text)" : "var(--mc-text-muted)" }}
             >
               {count}
             </span>
@@ -733,6 +754,16 @@ export function FolderList({
         title="Refresh domains and counts"
       >
         <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+      </button>
+      <button
+        onClick={() => onOpenSettings({ tab: "setup" })}
+        className="p-1.5 rounded-md transition-colors"
+        style={{ color: "var(--mc-text-muted)" }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+        title="Setup & connections"
+      >
+        <Wrench className="h-4 w-4" />
       </button>
       <button
         onClick={() => onOpenSettings()}
@@ -1297,30 +1328,29 @@ export function FolderList({
     </div>
   );
 
-  // ---------- Desktop: denser sidebar (unchanged behavior) ----------
+  // ---------- Desktop: macOS Sequoia sidebar ----------
   const desktopView = (
-    <div className="hidden md:flex flex-col h-full p-2.5">
-      {/* Compose */}
-      <button
-        onClick={onCompose}
-        className="w-full flex items-center justify-center gap-2 h-8 rounded-md font-medium text-[13px] transition-all mb-3 hover:brightness-110"
-        style={{ backgroundColor: "var(--mc-accent)", color: "#fff" }}
-      >
-        <Pencil className="h-3.5 w-3.5" />
-        Compose
-      </button>
-
+    <div className="hidden md:flex flex-col h-full px-2.5 pt-2.5 pb-2">
       {/* Mailboxes header — collapse/expand everything at once */}
-      <div className="flex items-center px-1 mb-0.5">
-        <span className="flex-1 text-[11px] font-semibold" style={{ color: "var(--mc-text-faint)" }}>
+      <div className="flex items-center px-1.5 mb-1">
+        <span
+          className="flex-1 text-[11px] font-semibold uppercase tracking-[0.04em]"
+          style={{ color: "var(--mc-text-faint)" }}
+        >
           Mailboxes
         </span>
         <button
           onClick={anythingExpanded ? collapseAll : expandAll}
-          className="p-1 rounded transition-colors"
+          className="p-1 rounded-md transition-colors"
           style={{ color: "var(--mc-text-faint)" }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--mc-accent)"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--mc-text-faint)"; }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = "var(--mc-accent)";
+            e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = "var(--mc-text-faint)";
+            e.currentTarget.style.backgroundColor = "transparent";
+          }}
           title={anythingExpanded ? "Collapse all" : "Expand all"}
         >
           {anythingExpanded ? (
@@ -1572,6 +1602,7 @@ export function FolderList({
                         <SidebarRow
                           key={f.id}
                           icon={f.icon}
+                          iconColor={folderIconColor(f.id)}
                           label={f.label}
                           count={count}
                           active={isActive}
@@ -1767,11 +1798,14 @@ export function FolderList({
         </div>
       </div>
 
-      {/* Footer icon row */}
+      {/* Footer status + utility row */}
       <div
-        className="mt-1.5 pt-1.5 flex items-center justify-center gap-1"
+        className="mt-1.5 pt-2 flex flex-col items-center gap-1"
         style={{ borderTop: "1px solid var(--mc-border)" }}
       >
+        <div className="text-[10.5px] tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
+          {formatUpdated(lastUpdated)}
+        </div>
         <FooterIcons />
       </div>
     </div>

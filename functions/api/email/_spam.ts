@@ -12,7 +12,7 @@
 //
 // SPAM_THRESHOLD = 0.7 — score at/above marks is_spam=true and folder='spam'.
 
-import { Env, supabaseQuery } from "./_shared";
+import { Env, supabaseQuery, resolveEnv } from "./_shared";
 
 const SPAM_THRESHOLD = 0.7;
 
@@ -100,11 +100,12 @@ function heuristicScore(input: SpamInput): { score: number; reasons: string[] } 
 }
 
 async function callOpenRouter(
-  env: Env,
+  rawEnv: Env,
   model: string,
   input: SpamInput,
   threshold: number
 ): Promise<SpamVerdict | null> {
+  const env = await resolveEnv(rawEnv);
   if (!env.OPENROUTER_KEY) return null;
 
   const bodyPreview = (input.body_text || "").slice(0, 500).replace(/\s+/g, " ").trim();

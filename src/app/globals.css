@@ -85,16 +85,16 @@
   --input: rgba(0, 0, 0, 0.12);
   --ring: #007AFF;
   --chart-1: #007AFF;
-  --chart-2: #34C759;
+  --chart-2: #28CD41;
   --chart-3: #FF9500;
-  --chart-4: #AF52DE;
+  --chart-4: #32ADE6;
   --chart-5: #FF3B30;
   --radius: 0.5rem;
-  --sidebar: #F3F3F7;
-  --sidebar-foreground: rgba(60, 60, 67, 0.6);
+  --sidebar: #F2F2F7;
+  --sidebar-foreground: rgba(60, 60, 67, 0.62);
   --sidebar-primary: #007AFF;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: rgba(0, 122, 255, 0.1);
+  --sidebar-accent: rgba(0, 122, 255, 0.11);
   --sidebar-accent-foreground: #007AFF;
   --sidebar-border: rgba(0, 0, 0, 0.06);
   --sidebar-ring: #007AFF;
@@ -102,34 +102,34 @@
 
 .dark {
   color-scheme: dark;
-  --background: #1E1E1E;
-  --foreground: rgba(255, 255, 255, 0.85);
-  --card: #2D2D2F;
-  --card-foreground: rgba(255, 255, 255, 0.85);
-  --popover: #2D2D2F;
-  --popover-foreground: rgba(255, 255, 255, 0.85);
+  --background: #1C1C1E;
+  --foreground: rgba(255, 255, 255, 0.9);
+  --card: #28282B;
+  --card-foreground: rgba(255, 255, 255, 0.9);
+  --popover: #28282B;
+  --popover-foreground: rgba(255, 255, 255, 0.9);
   --primary: #0A84FF;
   --primary-foreground: #FFFFFF;
-  --secondary: #2A2A2C;
-  --secondary-foreground: rgba(255, 255, 255, 0.7);
-  --muted: #2A2A2C;
+  --secondary: #2A2A2D;
+  --secondary-foreground: rgba(255, 255, 255, 0.74);
+  --muted: #2A2A2D;
   --muted-foreground: rgba(235, 235, 245, 0.6);
-  --accent: rgba(10, 132, 255, 0.14);
+  --accent: rgba(10, 132, 255, 0.16);
   --accent-foreground: #0A84FF;
   --destructive: #FF453A;
-  --border: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.095);
   --input: rgba(255, 255, 255, 0.12);
   --ring: #0A84FF;
   --chart-1: #0A84FF;
   --chart-2: #30D158;
   --chart-3: #FF9F0A;
-  --chart-4: #BF5AF2;
+  --chart-4: #64D2FF;
   --chart-5: #FF453A;
   --sidebar: #232326;
   --sidebar-foreground: rgba(235, 235, 245, 0.6);
   --sidebar-primary: #0A84FF;
   --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: rgba(10, 132, 255, 0.14);
+  --sidebar-accent: rgba(10, 132, 255, 0.16);
   --sidebar-accent-foreground: #0A84FF;
   --sidebar-border: rgba(255, 255, 255, 0.06);
   --sidebar-ring: #0A84FF;
@@ -146,10 +146,42 @@
   body {
     @apply bg-background text-foreground;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", ui-sans-serif, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   html {
     @apply font-sans;
   }
+}
+
+/* macOS Sequoia vibrancy & window chrome utilities */
+.mc-glass-bar {
+  background-color: var(--mc-toolbar-bg);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+}
+
+.mc-window-sheet {
+  background-color: var(--mc-bg-elevated);
+  border: 1px solid var(--mc-border);
+  box-shadow: var(--mc-window-shadow);
+}
+
+.mc-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  background-color: var(--mc-bg-tertiary);
+  border: 1px solid var(--mc-border);
+  color: var(--mc-text-muted);
+  box-shadow: 0 1px 0 var(--mc-border-subtle);
 }
 
 /* Touch ergonomics — coarse pointers only, so desktop keeps native density.
@@ -177,8 +209,8 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
   background-clip: padding-box;
   border: 2px solid transparent;
 }
@@ -190,7 +222,7 @@
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
   background-clip: padding-box;
   border: 2px solid transparent;
 }

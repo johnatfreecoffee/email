@@ -23,7 +23,10 @@ export function SettingsSection({
       )}
       <div
         className="rounded-[10px] overflow-hidden"
-        style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
+        style={{
+          backgroundColor: "var(--mc-bg-tertiary)",
+          border: "1px solid var(--mc-border-subtle)",
+        }}
       >
         {children}
       </div>

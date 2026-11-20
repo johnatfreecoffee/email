@@ -1,7 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { HelpCircle, X, Bell } from "lucide-react";
+import {
+  HelpCircle,
+  X,
+  Bell,
+  PanelLeft,
+  SquarePen,
+  RefreshCw,
+  Search,
+  Settings,
+  Wrench,
+  Command,
+  Download,
+} from "lucide-react";
 import { FolderList } from "./folder-list";
 import { usePush, isPushBannerDismissed, dismissPushBanner } from "@/lib/push-notifications";
 import { shouldShowPushBanner } from "@/lib/push-policy";
@@ -10,6 +22,9 @@ import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
 import { SettingsModal } from "./settings/settings-modal";
+import { CommandPalette } from "./command-palette";
+import { usePwaInstall, PwaInstallModal } from "./pwa-install";
+import { OnboardingWizard, isOnboardingDismissed } from "./onboarding-wizard";
 import { apiFetch } from "@/lib/auth";
 import { useSettings, type SettingsTab } from "@/lib/settings";
 import { playNotificationSound } from "@/lib/notification-sound";
@@ -19,6 +34,7 @@ import { AgentKanban } from "./agent-kanban";
 import { applyTransitions, type CountMsg, type UnreadCounts } from "@/lib/unread-buckets";
 import { MutationTracker } from "@/lib/mutation-tracker";
 import { LatestRequest, reanchorIndex } from "@/lib/list-nav";
+import { domainDisplayLabel } from "@/lib/domain-display";
 
 const API_BASE = "/api/email";
 
@@ -326,12 +342,17 @@ export function EmailLayout() {
   const messagesRef = useRef<EmailMessage[]>([]);
   const pendingNewRef = useRef<EmailMessage[]>([]);
 
+  const [domainsLoaded, setDomainsLoaded] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const onboardingCheckedRef = useRef(false);
+
   const fetchDomains = useCallback(async () => {
     try {
       const res = await apiFetch(`${API_BASE}/domains`);
       if (res.ok) {
         const data = await res.json();
         setDomains(data);
+        setDomainsLoaded(true);
         if (data.length === 1 && !selectedDomain) {
           setSelectedDomain(data[0]);
         }
@@ -340,6 +361,16 @@ export function EmailLayout() {
       console.error("Failed to fetch domains:", e);
     }
   }, [selectedDomain]);
+
+  // First-time onboarding: if this workspace has zero domains after initial
+  // load and the user hasn't dismissed the wizard, open it automatically once.
+  useEffect(() => {
+    if (!domainsLoaded || onboardingCheckedRef.current) return;
+    onboardingCheckedRef.current = true;
+    if (domains.length === 0 && !isOnboardingDismissed()) {
+      setShowOnboarding(true);
+    }
+  }, [domainsLoaded, domains.length]);
 
   // Active quick filter — drives server-side filtering
   const [activeFilter, setActiveFilter] = useState<string>("all");
@@ -1135,7 +1166,7 @@ export function EmailLayout() {
         if (e.key === "Escape") closeCompose();
         return;
       }
-      if (settingsTarget) return; // settings modal owns its own keys
+      if (settingsTarget || showOnboarding) return; // modal owns its own keys
 
       const currentMessages = navListRef.current.length
         ? navListRef.current
@@ -1249,6 +1280,11 @@ export function EmailLayout() {
           }
           break;
         }
+        case "/": {
+          e.preventDefault();
+          toolbarSearchRef.current?.focus();
+          break;
+        }
         case "?": {
           e.preventDefault();
           setShowShortcuts((prev) => !prev);
@@ -1259,11 +1295,81 @@ export function EmailLayout() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [showCompose, settingsTarget, activeFolder, drafts, messages, listMessages, composeDraftsForView, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
+  }, [showCompose, settingsTarget, showOnboarding, activeFolder, drafts, messages, listMessages, composeDraftsForView, focusedIndex, selectedMessage, openCompose, openDraft, fetchFullMessage, handleArchive, handleTrash, handleToggleStar, handleToggleRead, stepFocus]);
+
+  // Desktop macOS window chrome state: collapsible sidebar + Spotlight palette
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showPalette, setShowPalette] = useState(false);
+  const [toolbarRefreshing, setToolbarRefreshing] = useState(false);
+  const toolbarSearchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = localStorage.getItem("mc.email.sidebarOpen");
+      if (saved === "0") setSidebarOpen(false);
+    } catch {}
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("mc.email.sidebarOpen", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Global macOS chords: ⌘K Spotlight switcher, ⌘\ Toggle Sidebar
+  useEffect(() => {
+    const onChord = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setShowPalette((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener("keydown", onChord);
+    return () => window.removeEventListener("keydown", onChord);
+  }, [toggleSidebar]);
+
+  const handleToolbarRefresh = useCallback(() => {
+    setToolbarRefreshing(true);
+    loadPage("reset");
+    fetchDomains();
+    fetchUnreadCounts();
+    if (activeFolder === "drafts") fetchDrafts();
+    setTimeout(() => setToolbarRefreshing(false), 700);
+  }, [loadPage, fetchDomains, fetchUnreadCounts, activeFolder, fetchDrafts]);
+
+  const activeMailboxTitle = useMemo(() => {
+    if (catchAllOnly) return "Catch-All";
+    if (activeFolder === "inbox" && !selectedDomain) return "All Inboxes";
+    return FOLDER_LABELS[activeFolder] || "Mail";
+  }, [catchAllOnly, activeFolder, selectedDomain]);
+
+  const activeMailboxSubtitle = useMemo(() => {
+    const parts: string[] = [];
+    if (selectedDomain) parts.push(domainDisplayLabel(selectedDomain));
+    if (activeFolder !== KANBAN_FOLDER) {
+      if (searchQuery) {
+        parts.push(`${listMessages.length}${hasMore ? "+" : ""} results`);
+      } else if (totalCount !== null) {
+        parts.push(`${totalCount} message${totalCount === 1 ? "" : "s"}`);
+      }
+      if (unreadCount > 0 && activeFilter !== "unread") {
+        parts.push(`${unreadCount} unread`);
+      }
+    }
+    return parts.join(" · ");
+  }, [selectedDomain, activeFolder, searchQuery, listMessages.length, hasMore, totalCount, unreadCount, activeFilter]);
 
   // Push prompt banner — same shared store as the footer bell and Settings,
   // so enabling anywhere updates everywhere instantly.
   const push = usePush();
+  const pwa = usePwaInstall();
+  const [showInstallModal, setShowInstallModal] = useState(false);
   // Starts "dismissed" so nothing flashes before localStorage is read.
   const [bannerDismissed, setBannerDismissed] = useState(true);
 
@@ -1314,19 +1420,190 @@ export function EmailLayout() {
           .mc-mobile-pane { position: static; transform: none !important; }
         }
       `}</style>
+
+      {/* Unified macOS Sequoia Desktop Window Toolbar */}
+      <header
+        className="hidden md:flex items-center h-[50px] px-3 gap-3 flex-shrink-0 mc-glass-bar z-30 select-none"
+        style={{ borderBottom: "1px solid var(--mc-border)" }}
+      >
+        {/* Left: sidebar toggle + get mail + compose */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{
+              color: sidebarOpen ? "var(--mc-text-secondary)" : "var(--mc-accent)",
+              backgroundColor: sidebarOpen ? "transparent" : "var(--mc-accent-bg)",
+            }}
+            onMouseEnter={(e) => {
+              if (sidebarOpen) e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)";
+            }}
+            onMouseLeave={(e) => {
+              if (sidebarOpen) e.currentTarget.style.backgroundColor = "transparent";
+            }}
+            title={sidebarOpen ? "Hide sidebar (⌘\\)" : "Show sidebar (⌘\\)"}
+            aria-label="Toggle sidebar"
+          >
+            <PanelLeft className="h-[17px] w-[17px]" strokeWidth={1.8} />
+          </button>
+
+          <button
+            type="button"
+            onClick={handleToolbarRefresh}
+            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{ color: toolbarRefreshing ? "var(--mc-accent)" : "var(--mc-text-secondary)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Get new mail"
+            aria-label="Get new mail"
+          >
+            <RefreshCw className={`h-[16px] w-[16px] ${toolbarRefreshing ? "animate-spin" : ""}`} strokeWidth={1.8} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => openCompose("new")}
+            className="h-8 px-2.5 ml-1 rounded-lg flex items-center gap-1.5 text-[12.5px] font-medium transition-all hover:brightness-110 active:scale-[0.98]"
+            style={{ backgroundColor: "var(--mc-accent)", color: "#FFFFFF" }}
+            title="Compose new message (c)"
+          >
+            <SquarePen className="h-[14px] w-[14px]" strokeWidth={2} />
+            <span>New</span>
+          </button>
+        </div>
+
+        <div className="w-px h-5 flex-shrink-0" style={{ backgroundColor: "var(--mc-border)" }} />
+
+        {/* Center-left: Active Mailbox title & live count */}
+        <div className="flex items-baseline gap-2.5 min-w-0 flex-1">
+          <h1
+            className="text-[14.5px] font-semibold tracking-[-0.015em] truncate"
+            style={{ color: "var(--mc-text)" }}
+          >
+            {activeMailboxTitle}
+          </h1>
+          {activeMailboxSubtitle && (
+            <span
+              className="text-[12px] truncate tabular-nums hidden lg:inline"
+              style={{ color: "var(--mc-text-muted)" }}
+            >
+              {activeMailboxSubtitle}
+            </span>
+          )}
+        </div>
+
+        {/* Right: Quick Switcher (⌘K) + Live Search + Setup + Settings */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowPalette(true)}
+            className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-[12px] transition-colors"
+            style={{
+              backgroundColor: "var(--mc-bg-tertiary)",
+              border: "1px solid var(--mc-border-subtle)",
+              color: "var(--mc-text-muted)",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--mc-border)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--mc-border-subtle)"; }}
+            title="Quick Switcher (⌘K)"
+          >
+            <Command className="h-3.5 w-3.5" />
+            <span className="hidden xl:inline">Jump</span>
+            <kbd className="text-[10.5px] font-mono opacity-80">⌘K</kbd>
+          </button>
+
+          <div
+            className="flex items-center gap-1.5 h-8 rounded-lg px-2.5 w-[200px] lg:w-[250px] transition-colors"
+            style={{
+              backgroundColor: "var(--mc-bg-tertiary)",
+              border: "1px solid var(--mc-border-subtle)",
+            }}
+          >
+            <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-muted)" }} />
+            <input
+              ref={toolbarSearchRef}
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search mail"
+              className="flex-1 min-w-0 bg-transparent text-[12.5px] focus:outline-none"
+              style={{ color: "var(--mc-text)" }}
+            />
+            {searchInput ? (
+              <button
+                type="button"
+                onClick={() => setSearchInput("")}
+                className="p-0.5 rounded-full hover:opacity-80"
+                style={{ color: "var(--mc-text-faint)" }}
+                title="Clear search"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            ) : (
+              <kbd className="text-[10.5px] font-mono opacity-55" style={{ color: "var(--mc-text-faint)" }}>
+                /
+              </kbd>
+            )}
+          </div>
+
+          {pwa.showToolbarButton && (
+            <button
+              type="button"
+              onClick={() => setShowInstallModal(true)}
+              className="h-8 px-2.5 rounded-lg hidden lg:flex items-center gap-1.5 text-[12px] font-medium transition-colors"
+              style={{
+                backgroundColor: "var(--mc-accent-bg)",
+                color: "var(--mc-accent)",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-accent-bg-hover)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-accent-bg)"; }}
+              title="Install Mail as a Desktop App (PWA)"
+            >
+              <Download className="h-3.5 w-3.5" strokeWidth={2} />
+              <span>Install App</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setSettingsTarget({ tab: "setup", domainId: null })}
+            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{ color: "var(--mc-text-secondary)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Setup & connections"
+          >
+            <Wrench className="h-[16px] w-[16px]" strokeWidth={1.8} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSettingsTarget({ tab: "general", domainId: null })}
+            className="h-8 w-8 rounded-lg flex items-center justify-center transition-colors"
+            style={{ color: "var(--mc-text-secondary)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Settings"
+          >
+            <Settings className="h-[16px] w-[16px]" strokeWidth={1.8} />
+          </button>
+        </div>
+      </header>
+
       {/* Push notification prompt banner */}
       {showPushBanner && (
         <div
-          className="flex items-center gap-3 px-4 py-2.5 text-sm"
+          className="flex items-center gap-3 px-4 py-2 text-[13px]"
           style={{
             backgroundColor: "var(--mc-accent-bg)",
-            borderBottom: "1px solid var(--mc-accent-bg)",
+            borderBottom: "1px solid var(--mc-border-subtle)",
             color: "var(--mc-text)",
           }}
         >
           <Bell className="h-4 w-4 flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
           <span className="flex-1">
-            <strong>Get email notifications</strong> — receive push alerts when new emails arrive, even when MC is closed.
+            <strong>Get email notifications</strong> — receive push alerts when new emails arrive, even when the app is closed.
           </span>
           <button
             onClick={() => push.toggle()}
@@ -1352,10 +1629,10 @@ export function EmailLayout() {
 
       <div className="relative flex flex-1 overflow-hidden">
       {/* Left: Folders + Domains — the mobile root screen (always mounted;
-          the list + reader slide in over it). */}
+          the list + reader slide in over it). Collapsible on desktop via ⌘\. */}
       <div
         id="mc-email-folder-col"
-        className="block flex-shrink-0 overflow-hidden md:block md:border-r"
+        className={`flex-shrink-0 overflow-hidden md:border-r ${sidebarOpen ? "block md:block" : "block md:hidden"}`}
         style={{
           width: `${folderColWidth}px`,
           borderColor: "var(--mc-border)",
@@ -1457,6 +1734,7 @@ export function EmailLayout() {
       </div>
 
       {/* Folder ↔ List resizer (desktop only) */}
+      {sidebarOpen && (
       <div
         onMouseDown={startFolderDrag}
         className="hidden md:block flex-shrink-0 group"
@@ -1483,6 +1761,7 @@ export function EmailLayout() {
           className="group-hover:bg-mc-teal group-hover:w-[2px]"
         />
       </div>
+      )}
 
       {activeFolder === KANBAN_FOLDER ? (
         <div
@@ -1695,17 +1974,92 @@ export function EmailLayout() {
             fetchDomains();
             fetchUnreadCounts();
           }}
+          onLaunchWizard={() => setShowOnboarding(true)}
         />
       )}
+
+      {/* First-Time Onboarding Wizard */}
+      <OnboardingWizard
+        open={showOnboarding}
+        domains={domains}
+        onClose={() => setShowOnboarding(false)}
+        onRefreshDomains={() => {
+          fetchDomains();
+          fetchUnreadCounts();
+        }}
+        onOpenSetupHub={() => setSettingsTarget({ tab: "setup", domainId: null })}
+        onInstallApp={!pwa.isStandalone ? () => setShowInstallModal(true) : undefined}
+        isStandalone={pwa.isStandalone}
+      />
+
+      {/* Spotlight Quick Switcher (⌘K) */}
+      <CommandPalette
+        open={showPalette}
+        onClose={() => setShowPalette(false)}
+        domains={domains}
+        onCompose={() => openCompose("new")}
+        onSelectFolder={(f) => {
+          setSelectedDomain(null);
+          setSelectedAddress(null);
+          setCatchAllOnly(false);
+          setActiveFolder(f);
+          setActiveFilter("all");
+          setSelectedMessage(null);
+          setMobileView("list");
+          isFirstFetch.current = true;
+          setScrollResetSignal((n) => n + 1);
+          if (f === "drafts") fetchDrafts();
+        }}
+        onSelectDomainFolder={(domain, folder) => {
+          setSelectedDomain(domain);
+          setSelectedAddress(null);
+          setCatchAllOnly(false);
+          setActiveFolder(folder);
+          setActiveFilter("all");
+          setSelectedMessage(null);
+          setMobileView("list");
+          isFirstFetch.current = true;
+          setScrollResetSignal((n) => n + 1);
+        }}
+        onOpenAgent={(domain, addressId) => {
+          setSelectedDomain(domain);
+          setSelectedAddress(addressId);
+          setActiveFolder(AGENT_FOLDER);
+          setCatchAllOnly(false);
+          setActiveFilter("all");
+          setSelectedMessage(null);
+          setMobileView("list");
+          isFirstFetch.current = true;
+          setScrollResetSignal((n) => n + 1);
+        }}
+        onOpenSettings={(target) =>
+          setSettingsTarget({ tab: target?.tab ?? "general", domainId: target?.domainId ?? null })
+        }
+        onToggleSidebar={toggleSidebar}
+        onRefresh={handleToolbarRefresh}
+        onShowShortcuts={() => setShowShortcuts(true)}
+        onInstallApp={!pwa.isStandalone ? () => setShowInstallModal(true) : undefined}
+        onLaunchWizard={() => setShowOnboarding(true)}
+      />
+
+      {/* PWA Desktop / Home Screen Install Modal */}
+      <PwaInstallModal
+        open={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        canNativeInstall={pwa.canNativeInstall}
+        platform={pwa.platform}
+        onNativeInstall={pwa.triggerNativeInstall}
+      />
 
       {/* Keyboard shortcuts help — desktop only (mobile uses compose FAB) */}
       <button
         onClick={() => setShowShortcuts(true)}
-        className="hidden md:flex fixed bottom-4 right-4 z-30 h-8 w-8 rounded-full items-center justify-center transition-all"
+        className="hidden md:flex fixed bottom-4 right-4 z-30 h-8 w-8 rounded-full items-center justify-center transition-all hover:scale-105"
         style={{
-          backgroundColor: "var(--mc-bg-hover)",
+          backgroundColor: "var(--mc-bg-elevated)",
           border: "1px solid var(--mc-border)",
-          color: "var(--mc-text-faint)",
+          color: "var(--mc-text-muted)",
+          boxShadow: "var(--mc-shadow-sm)",
         }}
         title="Keyboard shortcuts (?)"
       >
@@ -1714,54 +2068,55 @@ export function EmailLayout() {
 
       {/* Keyboard shortcuts modal */}
       {showShortcuts && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowShortcuts(false)}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-[2px]"
+          style={{ backgroundColor: "var(--mc-modal-overlay)" }}
+          onClick={() => setShowShortcuts(false)}
+        >
           <div
-            className="w-full max-w-[380px] rounded-2xl shadow-2xl p-5"
-            style={{
-              backgroundColor: "var(--mc-bg)",
-              border: "1px solid var(--mc-border)",
-            }}
+            className="mc-window-sheet w-full max-w-[400px] mx-4 p-5"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-semibold" style={{ color: "var(--mc-text)" }}>Keyboard Shortcuts</h3>
-              <button onClick={() => setShowShortcuts(false)} className="p-1 rounded" style={{ color: "var(--mc-text-faint)" }}>
+              <h3 className="text-[15px] font-semibold tracking-[-0.015em]" style={{ color: "var(--mc-text)" }}>
+                Keyboard Shortcuts
+              </h3>
+              <button
+                onClick={() => setShowShortcuts(false)}
+                className="p-1.5 rounded-lg transition-colors"
+                style={{ color: "var(--mc-text-muted)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <div className="space-y-1.5 text-[13px]">
               {[
+                ["⌘ K", "Quick Switcher"],
+                ["⌘ \\", "Toggle sidebar"],
+                ["/", "Focus search"],
                 ["↑ / ↓ / j / k", "Navigate messages"],
                 ["Enter", "Open message"],
+                ["c", "Compose new"],
+                ["⌘ ↵", "Send message (in compose)"],
+                ["r / Shift+R", "Reply / Reply all"],
+                ["f", "Forward"],
                 ["u", "Toggle read / unread"],
                 ["s", "Toggle star"],
-                ["c", "Compose new"],
-                ["r", "Reply"],
-                ["Shift + R", "Reply all"],
-                ["f", "Forward"],
                 ["a", "Archive"],
                 ["Delete", "Trash"],
-                ["Space", "Scroll reader down"],
-                ["Shift + Space", "Scroll reader up"],
+                ["Space / Shift+Space", "Scroll reader"],
                 ["Esc", "Close / go back"],
                 ["?", "Show this help"],
               ].map(([key, desc]) => (
                 <div key={key} className="flex items-center justify-between py-0.5">
-                  <span style={{ color: "var(--mc-text-muted)" }}>{desc}</span>
-                  <kbd
-                    className="px-2 py-0.5 rounded text-[11px] font-mono"
-                    style={{
-                      backgroundColor: "var(--mc-bg-hover)",
-                      border: "1px solid var(--mc-border)",
-                      color: "var(--mc-text-secondary)",
-                    }}
-                  >
-                    {key}
-                  </kbd>
+                  <span style={{ color: "var(--mc-text-secondary)" }}>{desc}</span>
+                  <kbd className="mc-kbd">{key}</kbd>
                 </div>
               ))}
             </div>
-            <div className="mt-4 pt-3 text-[11px]" style={{ borderTop: "1px solid var(--mc-border)", color: "var(--mc-text-faint)" }}>
+            <div className="mt-4 pt-3 text-[11px]" style={{ borderTop: "1px solid var(--mc-border-subtle)", color: "var(--mc-text-muted)" }}>
               <strong>Swipe gestures:</strong> Swipe right → read/unread · Swipe left → trash / archive / star
             </div>
           </div>

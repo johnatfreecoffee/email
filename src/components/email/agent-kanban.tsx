@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight, Columns3, Loader2, Paperclip, RefreshCw } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
 import { AttachmentChips, type MailAttachment } from "./attachment-chips";
+import { SenderAvatar } from "./avatar";
 
 type Stage = "received" | "working" | "waiting" | "done" | "stuck";
 
@@ -109,10 +110,16 @@ function usedTag(job: AgentJob): string {
   return `${n}/500K`;
 }
 
+function usedPct(job: AgentJob): number {
+  const k = Number(job.used_k);
+  if (!Number.isFinite(k) || k <= 0) return 0;
+  return Math.min(100, Math.round((k / 500) * 100));
+}
+
 function StageDot({ stage }: { stage: Stage }) {
   return (
     <span
-      className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+      className="h-2 w-2 rounded-full flex-shrink-0"
       style={{ backgroundColor: STAGE_TONE[stage].bar }}
       aria-hidden
     />
@@ -123,7 +130,7 @@ function StageChip({ stage }: { stage: Stage }) {
   const tone = STAGE_TONE[stage];
   return (
     <span
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold"
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold"
       style={{ color: tone.fg, backgroundColor: tone.bg }}
     >
       <StageDot stage={stage} />
@@ -135,35 +142,71 @@ function StageChip({ stage }: { stage: Stage }) {
 function JobCard({
   job,
   selected,
-  last,
   onClick,
 }: {
   job: AgentJob;
   selected: boolean;
-  last: boolean;
+  last?: boolean;
   onClick: () => void;
 }) {
   const tone = STAGE_TONE[job.stage] || STAGE_TONE.received;
+  const pct = usedPct(job);
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full min-w-0 text-left px-3 py-2.5 min-h-[44px] md:min-h-0 md:py-2"
+      className="w-full min-w-0 text-left px-3 py-2.5 rounded-[10px] transition-all"
       style={{
-        borderBottom: last ? "none" : "1px solid var(--mc-border-subtle)",
-        backgroundColor: selected ? "var(--mc-accent-bg)" : "transparent",
-        borderLeft: `3px solid ${tone.bar}`,
+        backgroundColor: selected ? "var(--mc-sidebar-selected)" : "var(--mc-bg-elevated)",
+        border: `1px solid ${selected ? "var(--mc-accent)" : "var(--mc-border-subtle)"}`,
+        boxShadow: selected ? "0 1px 4px rgba(0,122,255,0.14)" : "0 1px 2px rgba(0,0,0,0.04)",
       }}
     >
-      <div className="text-[13px] truncate" style={{ color: "var(--mc-text)" }}>
-        {job.base_subject || "(no subject)"}
+      <div className="flex items-start justify-between gap-2">
+        <div
+          className="text-[13px] font-semibold leading-snug line-clamp-2"
+          style={{ color: "var(--mc-text)" }}
+        >
+          {job.base_subject || "(no subject)"}
+        </div>
+        <span
+          className="mt-1 h-2 w-2 rounded-full flex-shrink-0"
+          style={{ backgroundColor: tone.bar }}
+        />
       </div>
-      <div className="mt-0.5 flex items-center gap-2 text-[11px] min-w-0" style={{ color: "var(--mc-text-muted)" }}>
-        <span className="truncate">{agentLabel(job.agent_local)}</span>
-        <span className="tabular-nums flex-shrink-0">{usedTag(job)}</span>
+
+      <div className="mt-2 flex items-center justify-between gap-2 text-[11px] min-w-0">
+        <span
+          className="px-1.5 py-0.5 rounded-md font-medium truncate"
+          style={{
+            backgroundColor: "var(--mc-bg-tertiary)",
+            color: "var(--mc-text-secondary)",
+          }}
+        >
+          {agentLabel(job.agent_local)}
+        </span>
+        <span className="tabular-nums flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
+          {relTime(job.last_reply_at || job.updated_at)}
+        </span>
       </div>
-      <div className="text-[11px] truncate" style={{ color: "var(--mc-text-faint)" }}>
-        {relTime(job.last_reply_at || job.updated_at)}
+
+      {/* Subtle context/token budget bar */}
+      <div className="mt-2 flex items-center gap-2">
+        <div
+          className="flex-1 h-1 rounded-full overflow-hidden"
+          style={{ backgroundColor: "var(--mc-bg-hover)" }}
+        >
+          <div
+            className="h-full rounded-full"
+            style={{
+              width: `${Math.max(4, pct)}%`,
+              backgroundColor: pct > 80 ? "var(--mc-warning)" : tone.bar,
+            }}
+          />
+        </div>
+        <span className="text-[10px] tabular-nums flex-shrink-0" style={{ color: "var(--mc-text-faint)" }}>
+          {usedTag(job)}
+        </span>
       </div>
     </button>
   );
@@ -181,39 +224,49 @@ function ThreadMail({
   const files = Array.isArray(message.attachments) ? message.attachments : [];
   const body = (message.body || message.preview || "").trim();
   const html = (message.body_html || "").trim();
+  const displaySender = message.from_name || message.from || (message.direction === "outbound" ? "Agent" : "Unknown");
   return (
-    <div className="rounded-[10px] min-w-0 overflow-hidden" style={{ backgroundColor: "var(--mc-bg-tertiary)" }}>
+    <div
+      className="rounded-[10px] min-w-0 overflow-hidden"
+      style={{
+        backgroundColor: "var(--mc-bg-tertiary)",
+        border: "1px solid var(--mc-border-subtle)",
+      }}
+    >
       <button
         type="button"
         onClick={onToggle}
-        className="w-full text-left px-3 py-2.5 min-w-0"
+        className="w-full text-left px-3 py-2.5 min-w-0 flex items-center gap-2.5"
       >
-        <div className="flex items-baseline justify-between gap-2 min-w-0">
-          <div className="text-[13px] font-medium truncate" style={{ color: "var(--mc-text)" }}>
-            {message.from_name || message.from || (message.direction === "outbound" ? "Agent" : "Unknown")}
-          </div>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            {files.length > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
-                <Paperclip className="h-3 w-3" />
-                {files.length}
+        <SenderAvatar name={message.from_name} email={message.from || displaySender} size="sm" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline justify-between gap-2 min-w-0">
+            <div className="text-[13px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>
+              {displaySender}
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {files.length > 0 && (
+                <span className="inline-flex items-center gap-0.5 text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+                  <Paperclip className="h-3 w-3" />
+                  {files.length}
+                </span>
+              )}
+              <span className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+                {clock(message.received_at)}
               </span>
-            )}
-            <span className="text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
-              {clock(message.received_at)}
-            </span>
-            {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
-            )}
+              {expanded ? (
+                <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" style={{ color: "var(--mc-text-faint)" }} />
+              )}
+            </div>
           </div>
+          {!expanded && (
+            <div className="text-[12px] mt-0.5 truncate" style={{ color: "var(--mc-text-muted)" }}>
+              {message.preview || message.subject || "(no preview)"}
+            </div>
+          )}
         </div>
-        {!expanded && (
-          <div className="text-[12px] mt-0.5 truncate" style={{ color: "var(--mc-text-muted)" }}>
-            {message.preview || message.subject || "(no preview)"}
-          </div>
-        )}
       </button>
       {expanded && (
         <div className="px-3 pb-3 space-y-2">
@@ -507,34 +560,52 @@ export function AgentKanban({
     const cols = visibleStages;
     if (opts.five) {
       return (
-        <div className="hidden md:grid flex-1 min-h-0 grid-cols-5 gap-2 p-2">
+        <div className="hidden md:grid flex-1 min-h-0 grid-cols-5 gap-3 p-3">
           {cols.map((col) => (
             <div
               key={col.id}
-              className="min-h-0 min-w-0 flex flex-col rounded-[10px] overflow-hidden"
+              className="min-h-0 min-w-0 flex flex-col rounded-[12px] overflow-hidden"
               style={{
                 backgroundColor: "var(--mc-bg-tertiary)",
-                boxShadow: `inset 0 3px 0 ${STAGE_TONE[col.id].bar}`,
+                border: "1px solid var(--mc-border-subtle)",
               }}
             >
               <div
-                className="flex-shrink-0 px-3 py-1.5 text-[11px] font-semibold truncate flex items-center gap-1.5"
-                style={{ color: STAGE_TONE[col.id].fg }}
+                className="flex-shrink-0 px-3 py-2.5 text-[11.5px] font-semibold truncate flex items-center justify-between gap-1.5"
+                style={{
+                  color: "var(--mc-text)",
+                  borderBottom: "1px solid var(--mc-border-subtle)",
+                }}
               >
-                <StageDot stage={col.id} />
-                {col.label}
-                <span className="ml-0.5 tabular-nums opacity-80">{byStage[col.id].length}</span>
+                <span className="flex items-center gap-1.5 truncate">
+                  <StageDot stage={col.id} />
+                  {col.label}
+                </span>
+                <span
+                  className="px-1.5 py-0.5 rounded-full text-[10.5px] font-semibold tabular-nums"
+                  style={{
+                    backgroundColor: STAGE_TONE[col.id].bg,
+                    color: STAGE_TONE[col.id].fg,
+                  }}
+                >
+                  {byStage[col.id].length}
+                </span>
               </div>
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                {byStage[col.id].map((job, i, arr) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    selected={selectedId === job.id}
-                    last={i === arr.length - 1}
-                    onClick={() => setSelectedId(job.id)}
-                  />
-                ))}
+              <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-2">
+                {byStage[col.id].length === 0 ? (
+                  <div className="py-6 text-center text-[11px]" style={{ color: "var(--mc-text-faint)" }}>
+                    Empty
+                  </div>
+                ) : (
+                  byStage[col.id].map((job) => (
+                    <JobCard
+                      key={job.id}
+                      job={job}
+                      selected={selectedId === job.id}
+                      onClick={() => setSelectedId(job.id)}
+                    />
+                  ))
+                )}
               </div>
             </div>
           ))}
@@ -546,26 +617,19 @@ export function AgentKanban({
         {cols.filter((col) => byStage[col.id].length > 0).map((col) => (
           <div key={col.id}>
             <div
-              className="text-[11px] font-semibold px-3 pb-1.5 flex items-center gap-1.5"
+              className="text-[11.5px] font-semibold px-1 pb-2 flex items-center gap-1.5"
               style={{ color: STAGE_TONE[col.id].fg }}
             >
               <StageDot stage={col.id} />
               {col.label}
               <span className="ml-0.5 tabular-nums opacity-80">{byStage[col.id].length}</span>
             </div>
-            <div
-              className="rounded-[10px] overflow-hidden"
-              style={{
-                backgroundColor: "var(--mc-bg-tertiary)",
-                boxShadow: `inset 3px 0 0 ${STAGE_TONE[col.id].bar}`,
-              }}
-            >
-              {byStage[col.id].map((job, i, arr) => (
+            <div className="space-y-2">
+              {byStage[col.id].map((job) => (
                 <JobCard
                   key={job.id}
                   job={job}
                   selected={selectedId === job.id}
-                  last={i === arr.length - 1}
                   onClick={() => setSelectedId(job.id)}
                 />
               ))}

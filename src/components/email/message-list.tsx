@@ -732,12 +732,12 @@ export function MessageList({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Top bar: search + refresh */}
-      <div className="p-3" style={{ borderBottom: "1px solid var(--mc-border)" }}>
+      {/* Mobile top bar: back + search + refresh (desktop uses the unified macOS toolbar) */}
+      <div className="md:hidden p-3" style={{ borderBottom: "1px solid var(--mc-border)" }}>
         <div className="flex items-center gap-2">
           <button
             onClick={onMobileMenuClick}
-            className="md:hidden flex items-center gap-0.5 -ml-1 pr-1 rounded-lg transition-opacity active:opacity-60"
+            className="flex items-center gap-0.5 -ml-1 pr-1 rounded-lg transition-opacity active:opacity-60"
             style={{ color: "var(--mc-accent)" }}
             aria-label="Back to mailboxes"
           >
@@ -745,7 +745,7 @@ export function MessageList({
             <span className="text-[15px] mc-touch-exempt">Mailboxes</span>
           </button>
           <div
-            className="flex-1 flex items-center gap-1.5 rounded-md px-2 h-7"
+            className="flex-1 flex items-center gap-1.5 rounded-lg px-2.5 h-8"
             style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
           >
             <Search className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-muted)" }} />
@@ -762,133 +762,165 @@ export function MessageList({
             onClick={handleRefresh}
             className="p-1.5 rounded-md transition-colors"
             style={{ color: "var(--mc-text-muted)" }}
-            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
             title="Refresh"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
         </div>
-
-        {/* Recipient (address) filter — only when a domain is selected and
-            has at least one registered address. Stays active as the user
-            switches folders within the same domain. */}
-        {domain && (domain.addresses || []).some((a) => a.is_active && !/^[ae]\./i.test(a.address)) && onAddressChange && (
-          <div className="mt-2 relative" data-mc-email-address-dropdown>
-            <button
-              onClick={() => setShowAddressDropdown((v) => !v)}
-              className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors"
-              style={{
-                color: activeAddress ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                backgroundColor: activeAddress ? "var(--mc-accent-bg)" : "var(--mc-bg-hover, rgba(255,255,255,0.04))",
-                border: "1px solid var(--mc-border)",
-              }}
-              title="Filter by recipient on this domain"
-            >
-              <span className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--mc-text-faint)" }}>
-                  Recipient:
-                </span>
-                <span className="truncate">
-                  {activeAddress ? `${activeAddress.address}@${domain.domain}` : "All recipients"}
-                </span>
-              </span>
-              <ChevronDown className="h-3 w-3 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
-            </button>
-
-            {showAddressDropdown && (
-              <div
-                className="absolute left-0 right-0 top-full mt-1 rounded-lg shadow-xl z-30 py-1 max-h-[240px] overflow-y-auto"
-                style={{ backgroundColor: "var(--mc-bg)", border: "1px solid var(--mc-border)" }}
-              >
-                <button
-                  onClick={() => { onAddressChange(null); setShowAddressDropdown(false); }}
-                  className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
-                  style={{
-                    color: !selectedAddress ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                    backgroundColor: !selectedAddress ? "var(--mc-accent-bg)" : "transparent",
-                  }}
-                  onMouseEnter={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
-                  onMouseLeave={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
-                >
-                  <span className="text-[10px] font-bold" style={{ color: "var(--mc-text-faint)" }}>★</span>
-                  All recipients
-                </button>
-                {(domain.addresses || [])
-                  .filter((a) => a.is_active && !/^[ae]\./i.test(a.address))
-                  .map((a) => {
-                    const isActive = a.id === selectedAddress;
-                    return (
-                      <button
-                        key={a.id}
-                        onClick={() => { onAddressChange(a.id); setShowAddressDropdown(false); }}
-                        className="w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2"
-                        style={{
-                          color: isActive ? "var(--mc-accent)" : "var(--mc-text-muted)",
-                          backgroundColor: isActive ? "var(--mc-accent-bg)" : "transparent",
-                        }}
-                        onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
-                        onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
-                      >
-                        <span className="truncate flex-1">
-                          {a.address}<span style={{ color: "var(--mc-text-faint)" }}>@{domain.domain}</span>
-                        </span>
-                        {a.display_name && (
-                          <span className="text-[10px] truncate" style={{ color: "var(--mc-text-faint)" }}>
-                            {a.display_name}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* Quick filter pills */}
-      <div
-        className="flex items-center gap-1.5 px-3 py-2"
-        style={{ borderBottom: "1px solid var(--mc-border, rgba(255,255,255,0.06))" }}
-      >
-        {quickFilters.map((f) => {
-          const isActive = activeFilter === f.id;
-          let count = 0;
-          if (f.id === "unread") count = messages.filter((m) => !m.is_read).length;
-          else if (f.id === "starred") count = messages.filter((m) => m.is_starred).length;
-          else if (f.id === "attachments")
-            count = messages.filter((m) => m.attachments && m.attachments.length > 0).length;
+      {/* Recipient (address) filter — only when a domain is selected and has registered addresses */}
+      {domain && (domain.addresses || []).some((a) => a.is_active && !/^[ae]\./i.test(a.address)) && onAddressChange && (
+        <div
+          className="px-3 py-2 relative"
+          style={{ borderBottom: "1px solid var(--mc-border-subtle)" }}
+          data-mc-email-address-dropdown
+        >
+          <button
+            onClick={() => setShowAddressDropdown((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-[11.5px] transition-colors"
+            style={{
+              color: activeAddress ? "var(--mc-accent)" : "var(--mc-text-muted)",
+              backgroundColor: activeAddress ? "var(--mc-accent-bg)" : "var(--mc-bg-tertiary)",
+              border: "1px solid var(--mc-border-subtle)",
+            }}
+            title="Filter by recipient on this domain"
+          >
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--mc-text-faint)" }}>
+                To:
+              </span>
+              <span className="truncate font-medium">
+                {activeAddress ? `${activeAddress.address}@${domain.domain}` : "All recipients"}
+              </span>
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "var(--mc-text-faint)" }} />
+          </button>
 
-          return (
-            <button
-              key={f.id}
-              onClick={() => onFilterChange ? onFilterChange(f.id) : undefined}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
-                isActive
-                  ? "bg-mc-teal-dim text-mc-teal"
-                  : "text-muted-foreground hover:bg-muted/40"
-              }`}
+          {showAddressDropdown && (
+            <div
+              className="mc-window-sheet absolute left-3 right-3 top-full mt-1 rounded-xl z-30 py-1 max-h-[240px] overflow-y-auto"
             >
-              <f.icon className={`h-3 w-3 ${isActive && f.id === "starred" ? "fill-current" : ""}`} />
-              {f.label}
-              {count > 0 && f.id !== "all" && (
-                <span className="text-[10px] font-semibold tabular-nums opacity-70">{count}</span>
-              )}
-            </button>
-          );
-        })}
+              <button
+                onClick={() => { onAddressChange(null); setShowAddressDropdown(false); }}
+                className="w-full text-left px-3 py-1.5 text-[12px] transition-colors flex items-center gap-2"
+                style={{
+                  color: !selectedAddress ? "var(--mc-accent)" : "var(--mc-text-secondary)",
+                  backgroundColor: !selectedAddress ? "var(--mc-accent-bg)" : "transparent",
+                }}
+                onMouseEnter={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
+                onMouseLeave={(e) => { if (selectedAddress) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
+              >
+                <span className="text-[10px] font-bold" style={{ color: "var(--mc-text-faint)" }}>★</span>
+                All recipients
+              </button>
+              {(domain.addresses || [])
+                .filter((a) => a.is_active && !/^[ae]\./i.test(a.address))
+                .map((a) => {
+                  const isActive = a.id === selectedAddress;
+                  return (
+                    <button
+                      key={a.id}
+                      onClick={() => { onAddressChange(a.id); setShowAddressDropdown(false); }}
+                      className="w-full text-left px-3 py-1.5 text-[12px] transition-colors flex items-center gap-2"
+                      style={{
+                        color: isActive ? "var(--mc-accent)" : "var(--mc-text-secondary)",
+                        backgroundColor: isActive ? "var(--mc-accent-bg)" : "transparent",
+                      }}
+                      onMouseEnter={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--mc-bg-hover)"; }}
+                      onMouseLeave={(e) => { if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent"; }}
+                    >
+                      <span className="truncate flex-1">
+                        {a.address}<span style={{ color: "var(--mc-text-faint)" }}>@{domain.domain}</span>
+                      </span>
+                      {a.display_name && (
+                        <span className="text-[10px] truncate" style={{ color: "var(--mc-text-faint)" }}>
+                          {a.display_name}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+            </div>
+          )}
+        </div>
+      )}
 
-        {/* Include / hide catch-alls toggle — only meaningful when viewing
-            the regular inbox view (not the Catch-All folder itself). */}
+      {/* Compact macOS segmented filter + select bar */}
+      <div
+        className="flex items-center gap-1.5 px-2.5 py-2"
+        style={{ borderBottom: "1px solid var(--mc-border)" }}
+      >
+        {/* Select mode toggle */}
+        <button
+          onClick={() => {
+            if (selectMode) { deselectAll(); } else { setSelectMode(true); }
+          }}
+          className="p-1 rounded-md transition-colors flex-shrink-0"
+          style={{
+            color: selectMode ? "var(--mc-accent)" : "var(--mc-text-faint)",
+            backgroundColor: selectMode ? "var(--mc-accent-bg)" : "transparent",
+          }}
+          title={selectMode ? "Exit select mode" : "Select multiple emails"}
+        >
+          {selectMode ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+        </button>
+
+        {/* Segmented quick filters */}
+        <div
+          className="flex items-center p-0.5 rounded-lg gap-0.5 flex-1 min-w-0"
+          style={{ backgroundColor: "var(--mc-bg-tertiary)" }}
+        >
+          {quickFilters.map((f) => {
+            const isActive = activeFilter === f.id;
+            let count = 0;
+            if (f.id === "unread") count = messages.filter((m) => !m.is_read).length;
+            else if (f.id === "starred") count = messages.filter((m) => m.is_starred).length;
+            else if (f.id === "attachments")
+              count = messages.filter((m) => m.attachments && m.attachments.length > 0).length;
+
+            return (
+              <button
+                key={f.id}
+                onClick={() => onFilterChange ? onFilterChange(f.id) : undefined}
+                className="flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded-[6px] text-[11px] font-medium transition-all min-w-0"
+                style={
+                  isActive
+                    ? {
+                        backgroundColor: "var(--mc-bg-elevated)",
+                        color: "var(--mc-text)",
+                        boxShadow: "0 1px 2px rgba(0, 0, 0, 0.08)",
+                      }
+                    : {
+                        color: "var(--mc-text-muted)",
+                      }
+                }
+              >
+                <f.icon
+                  className={`h-3 w-3 flex-shrink-0 ${isActive && f.id === "starred" ? "fill-current" : ""}`}
+                  style={{ color: isActive && f.id === "starred" ? "var(--mc-star)" : isActive ? "var(--mc-accent)" : undefined }}
+                />
+                <span className="truncate">{f.label}</span>
+                {count > 0 && f.id !== "all" && (
+                  <span className="text-[10px] font-semibold tabular-nums opacity-70 hidden sm:inline">
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Include / hide catch-alls toggle */}
         {activeFolder === "inbox" && !catchAllOnly && onToggleShowCatchAllInInbox && (
           <button
             onClick={() => onToggleShowCatchAllInInbox(!showCatchAllInInbox)}
-            className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all flex-shrink-0 ${
+            className="flex items-center gap-0.5 px-1.5 py-1 rounded-md text-[11px] font-medium transition-all flex-shrink-0"
+            style={
               showCatchAllInInbox
-                ? "text-mc-amber bg-[rgba(255,149,0,0.12)]"
-                : "text-muted-foreground hover:bg-muted/40"
-            }`}
+                ? { color: "var(--mc-warning)", backgroundColor: "var(--mc-warning-bg)" }
+                : { color: "var(--mc-text-faint)" }
+            }
             title={showCatchAllInInbox ? "Catch-alls shown in inbox — click to hide" : "Catch-alls hidden from inbox — click to show"}
           >
             <Shield className="h-3 w-3" />
@@ -897,29 +929,19 @@ export function MessageList({
         )}
       </div>
 
-      {/* Message count + select mode + page size */}
-      <div className="flex items-center justify-between px-3 py-1.5" style={{ borderBottom: selectedIds.size > 0 ? "1px solid var(--mc-border)" : "none" }}>
-        <div className="flex items-center gap-2">
-          {/* Select mode toggle */}
-          <button
-            onClick={() => {
-              if (selectMode) { deselectAll(); } else { setSelectMode(true); }
-            }}
-            className="p-1 rounded transition-colors"
-            style={{ color: selectMode ? "var(--mc-accent)" : "var(--mc-text-faint)" }}
-            title={selectMode ? "Exit select mode" : "Select emails"}
-          >
-            {selectMode ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
-          </button>
-          <span className="text-[10px]" style={{ color: "var(--mc-text-faint)" }}>
-            {selectedIds.size > 0
-              ? `${selectedIds.size} selected`
-              : totalCount === null
-                ? `${filtered.length}${hasMore ? "+" : ""} result${filtered.length !== 1 ? "s" : ""}`
-                : `${totalCount > filtered.length ? `${filtered.length} of ${totalCount}` : filtered.length} email${(totalCount || filtered.length) !== 1 ? "s" : ""}${unreadInView > 0 && activeFilter !== "unread" ? ` · ${unreadInView} unread` : ""}`
-            }
-          </span>
-        </div>
+      {/* Mobile count strip (desktop shows count cleanly in the top toolbar) */}
+      <div
+        className="md:hidden flex items-center justify-between px-3 py-1.5"
+        style={{ borderBottom: selectedIds.size > 0 ? "1px solid var(--mc-border)" : "1px solid var(--mc-border-subtle)" }}
+      >
+        <span className="text-[11px] tabular-nums" style={{ color: "var(--mc-text-faint)" }}>
+          {selectedIds.size > 0
+            ? `${selectedIds.size} selected`
+            : totalCount === null
+              ? `${filtered.length}${hasMore ? "+" : ""} result${filtered.length !== 1 ? "s" : ""}`
+              : `${totalCount > filtered.length ? `${filtered.length} of ${totalCount}` : filtered.length} email${(totalCount || filtered.length) !== 1 ? "s" : ""}${unreadInView > 0 && activeFilter !== "unread" ? ` · ${unreadInView} unread` : ""}`
+          }
+        </span>
       </div>
 
       {/* Bulk action bar — visible when items selected */}
@@ -1122,6 +1144,7 @@ export function MessageList({
             onToggleStar={onToggleStar}
             onToggleRead={onToggleRead}
             onTrash={onTrash}
+            onArchive={onArchive}
             selectedIds={selectedIds}
             onSelectionChange={(ids) => {
               setSelectedIds(ids);

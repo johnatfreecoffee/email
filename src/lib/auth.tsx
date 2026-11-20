@@ -220,16 +220,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   if (!token || !user) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-full max-w-[360px] mx-4">
-          <div className="text-center mb-8">
+      <div
+        className="min-h-screen flex items-center justify-center p-4"
+        style={{
+          backgroundColor: "var(--mc-canvas-bg)",
+          backgroundImage:
+            "radial-gradient(ellipse 65% 45% at 50% 0%, rgba(0, 122, 255, 0.08), transparent 70%)",
+        }}
+      >
+        <div className="mc-window-sheet w-full max-w-[376px] p-7">
+          <div className="text-center mb-6">
             {/* Matches the PWA app icon: white envelope on black */}
             <div
-              className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+              className="inline-flex items-center justify-center w-14 h-14 rounded-[16px] mb-3.5 shadow-sm"
               style={{ backgroundColor: "#000000", border: "1px solid var(--mc-border)" }}
             >
               <svg
-                className="w-8 h-8 text-white"
+                className="w-7 h-7 text-white"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -242,8 +249,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 />
               </svg>
             </div>
-            <h1 className="text-[22px] font-bold text-foreground mb-1">Email</h1>
-            <p className="text-[13px] text-muted-foreground">Sign in to continue</p>
+            <h1 className="text-[20px] font-semibold tracking-[-0.02em] mb-1" style={{ color: "var(--mc-text)" }}>
+              Mail
+            </h1>
+            <p className="text-[13px]" style={{ color: "var(--mc-text-muted)" }}>
+              Sign in to your cloud workspace
+            </p>
           </div>
 
           <form
@@ -251,7 +262,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               e.preventDefault();
               handleLogin();
             }}
-            className="space-y-3"
+            className="space-y-2.5"
           >
             <input
               type="email"
@@ -263,7 +274,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               placeholder="Email"
               autoFocus
               autoComplete="email"
-              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-foreground placeholder-[#6B7280] focus:outline-none focus:border-mc-teal transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-[10px] text-[14px] focus:outline-none transition-all"
+              style={{
+                backgroundColor: "var(--mc-bg-tertiary)",
+                border: "1px solid var(--mc-border)",
+                color: "var(--mc-text)",
+              }}
             />
             <input
               type="password"
@@ -274,13 +290,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               }}
               placeholder="Password"
               autoComplete="current-password"
-              className="w-full px-4 py-3 bg-muted/40 border border-border rounded-xl text-[14px] text-foreground placeholder-[#6B7280] focus:outline-none focus:border-mc-teal transition-colors"
+              className="w-full px-3.5 py-2.5 rounded-[10px] text-[14px] focus:outline-none transition-all"
+              style={{
+                backgroundColor: "var(--mc-bg-tertiary)",
+                border: "1px solid var(--mc-border)",
+                color: "var(--mc-text)",
+              }}
             />
-            {error && <p className="text-[12px] text-mc-red">{error}</p>}
+            {error && (
+              <p className="text-[12px] pt-0.5" style={{ color: "var(--mc-red)" }}>
+                {error}
+              </p>
+            )}
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 rounded-xl bg-mc-teal text-white text-[14px] font-medium hover:brightness-110 transition-all disabled:opacity-50"
+              className="w-full py-2.5 mt-1 rounded-[10px] text-white text-[14px] font-medium hover:brightness-110 active:scale-[0.99] transition-all disabled:opacity-50"
+              style={{ backgroundColor: "var(--mc-accent)" }}
             >
               {loading ? "Signing in..." : "Sign In"}
             </button>

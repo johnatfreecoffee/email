@@ -23,6 +23,7 @@ import type { EmailMessage } from "./email-layout";
 import { useSettings } from "@/lib/settings";
 import { stripRemoteContent } from "./remote-content";
 import { AttachmentChips } from "./attachment-chips";
+import { SenderAvatar } from "./avatar";
 
 // Session-lifetime "load remote content" grants, keyed by message id.
 const revealedRemote = new Set<string>();
@@ -191,13 +192,37 @@ export function MessageReader({
 }: MessageReaderProps) {
   if (!message) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: "var(--mc-text-faint)" }}>
-        <div className="text-center">
-          <Mail className="h-8 w-8 mx-auto mb-3 opacity-30" />
-          <p className="text-[14px]">Select an email to read</p>
-          <p className="text-[12px] mt-1" style={{ color: "var(--mc-text-faint)" }}>
-            Choose from the list on the left
+      <div
+        className="flex items-center justify-center h-full px-6"
+        style={{ backgroundColor: "var(--mc-canvas-bg)", color: "var(--mc-text-faint)" }}
+      >
+        <div className="text-center max-w-[300px]">
+          <div
+            className="h-14 w-14 rounded-2xl mx-auto mb-4 flex items-center justify-center"
+            style={{
+              backgroundColor: "var(--mc-bg-tertiary)",
+              border: "1px solid var(--mc-border-subtle)",
+            }}
+          >
+            <Mail className="h-6 w-6 opacity-50" strokeWidth={1.6} />
+          </div>
+          <p className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--mc-text-secondary)" }}>
+            No Message Selected
           </p>
+          <p className="text-[12.5px] mt-1 leading-relaxed" style={{ color: "var(--mc-text-muted)" }}>
+            Select a conversation from the list, or use a shortcut to jump right in.
+          </p>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11.5px]" style={{ color: "var(--mc-text-muted)" }}>
+            <span className="inline-flex items-center gap-1.5">
+              <kbd className="mc-kbd">C</kbd> Compose
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <kbd className="mc-kbd">⌘K</kbd> Jump
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <kbd className="mc-kbd">J</kbd><kbd className="mc-kbd">K</kbd> Browse
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -352,26 +377,23 @@ function MessageReaderBody({
         <>
       {/* Message header */}
       <div className="px-6 py-4" style={{ borderBottom: "1px solid var(--mc-border)" }}>
-        <div className="flex items-start gap-3">
-          {/* Avatar — flat monogram circle */}
-          <div
-            className="h-10 w-10 rounded-full flex items-center justify-center text-[15px] font-semibold flex-shrink-0 mt-0.5"
-            style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}
-          >
-            {(message.from_name || message.from_address)[0]?.toUpperCase() || "?"}
+        <div className="flex items-start gap-3.5">
+          {/* Deterministic Apple-palette monogram avatar */}
+          <div className="mt-0.5">
+            <SenderAvatar name={message.from_name} email={message.from_address} size="lg" />
           </div>
 
           <div className="flex-1 min-w-0">
             {/* Row 1: sender name (truncates) + date (never shrinks) */}
             <div className="flex items-baseline gap-2">
               <span
-                className="text-[14px] font-semibold truncate min-w-0 flex-1"
+                className="text-[14.5px] font-semibold truncate min-w-0 flex-1 tracking-[-0.01em]"
                 style={{ color: "var(--mc-text)" }}
               >
                 {message.from_name || message.from_address}
               </span>
               <span
-                className="text-[11px] flex-shrink-0 whitespace-nowrap"
+                className="text-[11.5px] flex-shrink-0 whitespace-nowrap tabular-nums"
                 style={{ color: "var(--mc-text-faint)" }}
               >
                 {formatReaderDate(message.received_at)}
@@ -382,14 +404,17 @@ function MessageReaderBody({
               <div className="flex items-center gap-2 mt-1">
                 {message.is_catch_all && (
                   <span
-                    className="text-[10px] font-bold px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: "rgba(255, 149, 0, 0.15)", color: "var(--mc-warning)" }}
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                    style={{ backgroundColor: "var(--mc-warning-bg)", color: "var(--mc-warning)" }}
                   >
                     CATCH-ALL
                   </span>
                 )}
                 {message.direction === "outbound" && (
-                  <span className="text-[10px] font-bold bg-mc-teal-dim text-mc-teal px-1.5 py-0.5 rounded">
+                  <span
+                    className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                    style={{ backgroundColor: "var(--mc-accent-bg)", color: "var(--mc-accent)" }}
+                  >
                     SENT
                   </span>
                 )}
@@ -407,7 +432,7 @@ function MessageReaderBody({
                   To: {toList.map((a) => a.replace(/\s*<.*>$/, "")).join(", ")}
                   {ccList ? ` · Cc: ${ccList.length}` : ""}
                 </span>
-                <span className="flex-shrink-0 text-[11px]" style={{ color: "var(--mc-accent)" }}>
+                <span className="flex-shrink-0 text-[11px] font-medium" style={{ color: "var(--mc-accent)" }}>
                   Details
                 </span>
               </button>
@@ -423,7 +448,7 @@ function MessageReaderBody({
                   </span>
                   <button
                     onClick={() => setShowDetails(false)}
-                    className="flex-shrink-0 text-[11px] transition-colors"
+                    className="flex-shrink-0 text-[11px] font-medium transition-colors"
                     style={{ color: "var(--mc-accent)" }}
                   >
                     Hide
@@ -458,7 +483,7 @@ function MessageReaderBody({
           </div>
         </div>
 
-        <h1 className="text-[16px] font-semibold mt-3" style={{ color: "var(--mc-text)" }}>
+        <h1 className="text-[18px] font-semibold tracking-[-0.015em] leading-snug mt-3.5" style={{ color: "var(--mc-text)" }}>
           {message.subject || "(no subject)"}
         </h1>
       </div>
@@ -786,11 +811,8 @@ function ConversationCard({
         onClick={onToggle}
         className="w-full flex items-start gap-3 px-3.5 py-2.5 text-left"
       >
-        <div
-          className="h-8 w-8 rounded-full flex items-center justify-center text-[13px] font-semibold flex-shrink-0 mt-0.5"
-          style={{ backgroundColor: "var(--mc-bg-tertiary)", color: "var(--mc-text-muted)" }}
-        >
-          {(msg.from_name || msg.from_address)[0]?.toUpperCase() || "?"}
+        <div className="mt-0.5">
+          <SenderAvatar name={msg.from_name} email={msg.from_address} size="md" />
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">

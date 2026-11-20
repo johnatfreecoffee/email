@@ -7,6 +7,7 @@ import {
   resendAPI,
   cloudflareDNS,
   checkAuth,
+  resolveEnv,
 } from "./_shared";
 
 interface CFContext {
@@ -136,12 +137,14 @@ async function pingJunk(env: Env): Promise<Tile> {
 }
 
 export const onRequest = async (context: CFContext) => {
-  const { request, env } = context;
+  const { request } = context;
   const origin = request.headers.get("Origin") || undefined;
   if (request.method === "OPTIONS") return optionsResponse(origin);
-  const authError = await checkAuth(request, env);
+  const authError = await checkAuth(request, context.env);
   if (authError) return authError;
   if (request.method !== "GET") return errorResponse("method", 405, origin);
+
+  const env = await resolveEnv(context.env, true);
 
   const [supabase, migrations, resend, inbound, cloudflare, domain, auth, push, junk, machine, chat, box] =
     await Promise.all([

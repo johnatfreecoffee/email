@@ -1,4 +1,4 @@
-import { Env, supabaseQuery, resendAPI } from "./_shared";
+import { Env, supabaseQuery, resendAPI, resolveEnv } from "./_shared";
 import { agentDisplayName, isAgentLocal, localPartOf } from "./_agent";
 
 const STALE_MS = 120_000;
@@ -65,7 +65,8 @@ async function alreadyHandled(env: Env, messageId: string): Promise<boolean> {
   return r.ok && Array.isArray(r.data) && r.data.length > 0;
 }
 
-async function xaiReply(env: Env, prompt: string): Promise<string | null> {
+async function xaiReply(rawEnv: Env, prompt: string): Promise<string | null> {
+  const env = await resolveEnv(rawEnv);
   const key = (env as Env & { XAI_API_KEY?: string }).XAI_API_KEY;
   if (!key) return null;
   const models = ["grok-3", "grok-2-latest"];

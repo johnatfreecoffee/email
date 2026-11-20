@@ -417,12 +417,17 @@ export function ComposeModal({
   };
 
   // Wire up ⌘S shortcut
+  const sendRef = useRef<(() => void) | null>(null);
+
   saveDraftRef.current = handleSaveDraft;
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveDraftRef.current?.();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        sendRef.current?.();
       }
     };
     window.addEventListener("keydown", handler);
@@ -450,6 +455,7 @@ export function ComposeModal({
   };
 
   const handleSend = async () => {
+    if (sending) return;
     if (!from || !to || !subject) {
       setError("From, To, and Subject are required");
       return;
@@ -500,25 +506,43 @@ export function ComposeModal({
     }
     setSending(false);
   };
+  sendRef.current = handleSend;
 
   return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end md:items-center justify-center">
-      <div className="compose-modal w-full max-w-[640px] bg-card rounded-t-2xl md:rounded-2xl border border-border shadow-2xl flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-[15px] font-semibold text-foreground">
-            {composeMode === "reply" ? "Reply" : composeMode === "reply-all" ? "Reply All" : composeMode === "forward" ? "Forward" : "New Email"}
-          </h2>
+    <div
+      className="fixed inset-0 z-50 flex items-end md:items-center justify-center backdrop-blur-[2px]"
+      style={{ backgroundColor: "var(--mc-modal-overlay)" }}
+    >
+      <div className="compose-modal mc-window-sheet w-full max-w-[660px] rounded-t-2xl md:rounded-[14px] flex flex-col max-h-[90vh] overflow-hidden">
+        {/* macOS Compose Title Bar */}
+        <div
+          className="mc-glass-bar flex items-center justify-between px-4 h-[44px] flex-shrink-0"
+          style={{ borderBottom: "1px solid var(--mc-border-subtle)" }}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-[14px] font-semibold tracking-[-0.015em] truncate" style={{ color: "var(--mc-text)" }}>
+              {composeMode === "reply" ? "Reply" : composeMode === "reply-all" ? "Reply All" : composeMode === "forward" ? "Forward" : "New Message"}
+            </h2>
+            {subject.trim() && (
+              <span className="hidden sm:inline text-[12px] truncate max-w-[260px]" style={{ color: "var(--mc-text-muted)" }}>
+                — {subject.trim()}
+              </span>
+            )}
+          </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted/40"
+            className="p-1.5 rounded-lg transition-colors"
+            style={{ color: "var(--mc-text-muted)" }}
+            onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--mc-bg-hover)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Close (Esc)"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Form */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto" style={{ backgroundColor: "var(--mc-bg-elevated)" }}>
           {/* From */}
           <div className="flex items-center border-b border-border/60 px-4 py-2">
             <span className="text-[12px] text-muted-foreground w-12">From</span>
@@ -682,7 +706,10 @@ export function ComposeModal({
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-border">
+        <div
+          className="mc-glass-bar flex items-center justify-between px-4 py-2.5 flex-shrink-0"
+          style={{ borderTop: "1px solid var(--mc-border-subtle)" }}
+        >
           <div className="flex items-center gap-1">
             <button
               onClick={() => {
@@ -692,7 +719,7 @@ export function ComposeModal({
                 }
                 onClose();
               }}
-              className="text-[13px] text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg hover:bg-muted/40"
+              className="text-[12.5px] text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg hover:bg-muted/40 transition-colors"
             >
               Discard
             </button>
@@ -717,7 +744,7 @@ export function ComposeModal({
             <button
               onClick={handleSaveDraft}
               disabled={savingDraft}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-[13px] transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12.5px] font-medium transition-all ${
                 draftSaved
                   ? "text-mc-green bg-[rgba(52, 199, 89, 0.12)]"
                   : "text-muted-foreground hover:text-foreground bg-muted/30 hover:bg-muted/50"
@@ -726,8 +753,6 @@ export function ComposeModal({
             >
               {savingDraft ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : draftSaved ? (
-                <Save className="h-3.5 w-3.5" />
               ) : (
                 <Save className="h-3.5 w-3.5" />
               )}
@@ -738,14 +763,19 @@ export function ComposeModal({
             <button
               onClick={handleSend}
               disabled={sending || !from}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-mc-teal text-white text-[13px] font-medium hover:brightness-110 disabled:opacity-50 transition-all"
+              className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-white text-[13px] font-medium hover:brightness-110 active:scale-[0.98] disabled:opacity-50 transition-all"
+              style={{ backgroundColor: "var(--mc-accent)" }}
+              title="Send message (⌘↵)"
             >
               {sending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Send className="h-4 w-4" />
+                <Send className="h-3.5 w-3.5" />
               )}
-              Send
+              <span>Send</span>
+              <kbd className="hidden sm:inline text-[10px] font-mono opacity-80 bg-white/15 px-1 py-0.5 rounded">
+                ⌘↵
+              </kbd>
             </button>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { Env, errorResponse, supabaseQuery } from "./_shared";
+import { Env, errorResponse, supabaseQuery, resolveEnv } from "./_shared";
 import { deliverInboundMessage } from "./_inbound-deliver";
 import { getHeader, resolveFrom } from "./_inbound-parse";
 import { resolveThreadId } from "./_thread";
@@ -63,7 +63,8 @@ interface ReceivedEmail {
   }>;
 }
 
-async function resendGet(env: Env, path: string): Promise<any> {
+async function resendGet(rawEnv: Env, path: string): Promise<any> {
+  const env = await resolveEnv(rawEnv);
   const res = await fetch(`https://api.resend.com${path}`, {
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}` },
   });

@@ -1,73 +1,77 @@
-/* Apple Mail-style theme tokens.
+/* Apple macOS Sequoia Mail theme tokens.
    :root = light, .dark = dark overrides (class applied pre-paint by the
    inline script in layout.tsx). Component inline styles consume these
    names directly — every name must stay defined in both themes. */
 :root {
   --mc-bg: #FFFFFF;
   --mc-bg-secondary: #FFFFFF;
-  --mc-bg-tertiary: #F0F0F2;
+  --mc-bg-tertiary: #F2F2F7;
   --mc-bg-elevated: #FFFFFF;
   --mc-bg-hover: rgba(0, 0, 0, 0.045);
   --mc-bg-active: rgba(0, 0, 0, 0.08);
   --mc-card: #FFFFFF;
-  --mc-card-border: rgba(0, 0, 0, 0.1);
+  --mc-card-border: rgba(0, 0, 0, 0.09);
 
-  --mc-text: rgba(0, 0, 0, 0.85);
-  --mc-text-secondary: rgba(0, 0, 0, 0.7);
-  --mc-text-muted: rgba(60, 60, 67, 0.6);
-  --mc-text-faint: rgba(60, 60, 67, 0.4);
-  --mc-text-ghost: rgba(60, 60, 67, 0.25);
+  --mc-text: rgba(0, 0, 0, 0.88);
+  --mc-text-secondary: rgba(0, 0, 0, 0.72);
+  --mc-text-muted: rgba(60, 60, 67, 0.62);
+  --mc-text-faint: rgba(60, 60, 67, 0.42);
+  --mc-text-ghost: rgba(60, 60, 67, 0.24);
 
-  --mc-border: rgba(0, 0, 0, 0.1);
-  --mc-border-subtle: rgba(0, 0, 0, 0.06);
+  --mc-border: rgba(0, 0, 0, 0.09);
+  --mc-border-subtle: rgba(0, 0, 0, 0.055);
 
   --mc-accent: #007AFF;
-  --mc-accent-bg: rgba(0, 122, 255, 0.1);
-  --mc-accent-bg-hover: rgba(0, 122, 255, 0.15);
+  --mc-accent-bg: rgba(0, 122, 255, 0.11);
+  --mc-accent-bg-hover: rgba(0, 122, 255, 0.17);
   --mc-selected-bg: #007AFF;
   --mc-selected-fg: #FFFFFF;
 
-  --mc-success: #34C759;
+  --mc-success: #28CD41;
   --mc-warning: #FF9500;
   --mc-danger: #FF3B30;
   --mc-star: #FF9500;
   --mc-info: #32ADE6;
-  --mc-info-bg: rgba(50, 173, 230, 0.16);
-  --mc-success-bg: rgba(52, 199, 89, 0.16);
-  --mc-warning-bg: rgba(255, 149, 0, 0.16);
-  --mc-danger-bg: rgba(255, 59, 48, 0.16);
+  --mc-info-bg: rgba(50, 173, 230, 0.15);
+  --mc-success-bg: rgba(40, 205, 65, 0.15);
+  --mc-warning-bg: rgba(255, 149, 0, 0.15);
+  --mc-danger-bg: rgba(255, 59, 48, 0.15);
 
-  --mc-header-bg: rgba(243, 243, 247, 0.82);
-  --mc-sidebar-bg: rgba(243, 243, 247, 0.82);
-  --mc-sidebar-solid: #F3F3F7;
-  --mc-sidebar-selected: rgba(0, 0, 0, 0.08);
+  --mc-header-bg: rgba(246, 246, 249, 0.86);
+  --mc-toolbar-bg: rgba(248, 248, 250, 0.84);
+  --mc-sidebar-bg: rgba(242, 242, 247, 0.88);
+  --mc-sidebar-solid: #F2F2F7;
+  --mc-sidebar-selected: rgba(0, 122, 255, 0.12);
+  --mc-sidebar-selected-text: #007AFF;
+  --mc-canvas-bg: #FAFAFC;
 
-  --mc-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
-  --mc-modal-overlay: rgba(0, 0, 0, 0.25);
+  --mc-shadow: 0 12px 36px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+  --mc-window-shadow: 0 24px 64px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.28);
 }
 
 .dark {
-  --mc-bg: #1E1E1E;
-  --mc-bg-secondary: #1E1E1E;
-  --mc-bg-tertiary: #2A2A2C;
-  --mc-bg-elevated: #2D2D2F;
-  --mc-bg-hover: rgba(255, 255, 255, 0.055);
-  --mc-bg-active: rgba(255, 255, 255, 0.09);
-  --mc-card: #2D2D2F;
+  --mc-bg: #1C1C1E;
+  --mc-bg-secondary: #1E1E20;
+  --mc-bg-tertiary: #2A2A2D;
+  --mc-bg-elevated: #28282B;
+  --mc-bg-hover: rgba(255, 255, 255, 0.06);
+  --mc-bg-active: rgba(255, 255, 255, 0.1);
+  --mc-card: #28282B;
   --mc-card-border: rgba(255, 255, 255, 0.1);
 
-  --mc-text: rgba(255, 255, 255, 0.85);
-  --mc-text-secondary: rgba(255, 255, 255, 0.7);
+  --mc-text: rgba(255, 255, 255, 0.9);
+  --mc-text-secondary: rgba(255, 255, 255, 0.74);
   --mc-text-muted: rgba(235, 235, 245, 0.6);
   --mc-text-faint: rgba(235, 235, 245, 0.38);
   --mc-text-ghost: rgba(235, 235, 245, 0.22);
 
-  --mc-border: rgba(255, 255, 255, 0.1);
-  --mc-border-subtle: rgba(255, 255, 255, 0.06);
+  --mc-border: rgba(255, 255, 255, 0.095);
+  --mc-border-subtle: rgba(255, 255, 255, 0.055);
 
   --mc-accent: #0A84FF;
-  --mc-accent-bg: rgba(10, 132, 255, 0.14);
-  --mc-accent-bg-hover: rgba(10, 132, 255, 0.2);
+  --mc-accent-bg: rgba(10, 132, 255, 0.16);
+  --mc-accent-bg-hover: rgba(10, 132, 255, 0.23);
   --mc-selected-bg: #0A84FF;
   --mc-selected-fg: #FFFFFF;
 
@@ -81,11 +85,15 @@
   --mc-warning-bg: rgba(255, 159, 10, 0.18);
   --mc-danger-bg: rgba(255, 69, 58, 0.18);
 
-  --mc-header-bg: rgba(35, 35, 38, 0.75);
-  --mc-sidebar-bg: rgba(35, 35, 38, 0.75);
+  --mc-header-bg: rgba(34, 34, 37, 0.84);
+  --mc-toolbar-bg: rgba(32, 32, 35, 0.84);
+  --mc-sidebar-bg: rgba(35, 35, 38, 0.86);
   --mc-sidebar-solid: #232326;
-  --mc-sidebar-selected: rgba(255, 255, 255, 0.1);
+  --mc-sidebar-selected: rgba(10, 132, 255, 0.2);
+  --mc-sidebar-selected-text: #4DA3FF;
+  --mc-canvas-bg: #1A1A1C;
 
-  --mc-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
-  --mc-modal-overlay: rgba(0, 0, 0, 0.55);
+  --mc-shadow: 0 12px 36px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --mc-window-shadow: 0 28px 72px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --mc-modal-overlay: rgba(0, 0, 0, 0.52);
 }

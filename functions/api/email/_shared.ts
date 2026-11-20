@@ -1,8 +1,11 @@
 // Shared helpers for email API functions
+import { resolveEnv } from "./_runtime-env";
+export { resolveEnv };
 
 export interface Env {
   RESEND_API_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
   VAPID_PUBLIC_KEY?: string;
@@ -124,10 +127,11 @@ export async function supabaseQuery(
 
 // Resend API helper
 export async function resendAPI(
-  env: Env,
+  rawEnv: Env,
   path: string,
   options: { method?: string; body?: unknown } = {}
 ) {
+  const env = await resolveEnv(rawEnv);
   const res = await fetch(`https://api.resend.com${path}`, {
     method: options.method || "GET",
     headers: {
@@ -223,10 +227,11 @@ export async function fetchStorageObject(
 
 // Cloudflare DNS API helper
 export async function cloudflareDNS(
-  env: Env,
+  rawEnv: Env,
   path: string,
   options: { method?: string; body?: unknown } = {}
 ) {
+  const env = await resolveEnv(rawEnv);
   const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
     method: options.method || "GET",
     headers: {
