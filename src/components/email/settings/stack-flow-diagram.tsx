@@ -78,14 +78,29 @@ export function describeActiveAgentEngine({
   const macOnline = !!runtime?.online;
   const boxOnline = !!runtime?.box_online;
   const subOnline = macOnline || boxOnline;
-  const subPlace = macOnline && boxOnline ? "This Mac + Cloud Box" : macOnline ? "This Mac" : boxOnline ? "Cloud Box" : null;
+  const subPlaceLabel =
+    macOnline && boxOnline
+      ? "Mac + Cloud Box"
+      : macOnline
+        ? "This Mac"
+        : boxOnline
+          ? "Cloud Box"
+          : null;
+  const subPlaceProse =
+    macOnline && boxOnline
+      ? "your Mac & Cloud Box"
+      : macOnline
+        ? "your Mac"
+        : boxOnline
+          ? "your Cloud Box"
+          : "your worker";
   const hands = runtime?.hands || "auto";
 
   if (hands === "api") {
     if (xaiConfigured) {
       return {
         mode: "api",
-        label: "API Key Active (xAI Cloud Q&A)",
+        label: "API Key Active (xAI Cloud)",
         summary: "Forced to API Key mode — Cloudflare answers a.* questions directly via xAI.",
         subActive: false,
         apiActive: true,
@@ -103,11 +118,12 @@ export function describeActiveAgentEngine({
   if (hands === "local" || hands === "box") {
     const targetOnline = hands === "local" ? macOnline : boxOnline;
     const targetName = hands === "local" ? "This Mac" : "Cloud Box";
+    const targetProse = hands === "local" ? "your Mac" : "your Cloud Box";
     if (targetOnline) {
       return {
         mode: "subscription",
         label: `Subscription Active (${targetName})`,
-        summary: `Using your Grok subscription via the ${targetName} CLI worker — full coding tools & repo edits.`,
+        summary: `Using your Grok subscription via ${targetProse} CLI worker — full coding tools & repo edits.`,
         subActive: true,
         apiActive: false,
       };
@@ -115,18 +131,18 @@ export function describeActiveAgentEngine({
     return {
       mode: "none",
       label: `Subscription Offline (${targetName})`,
-      summary: `Locked to ${targetName} worker (Grok subscription), currently offline. Start the worker or switch to Auto.`,
+      summary: `Locked to ${targetProse} worker (Grok subscription), currently offline. Start the worker or switch to Auto.`,
       subActive: false,
       apiActive: false,
     };
   }
 
-  // Auto mode (default): Subscription primary when online, API Key fallback when Mac sleeps
+  // Auto mode (default): Subscription primary when online, API Key fallback when offline
   if (subOnline && xaiConfigured) {
     return {
       mode: "hybrid",
-      label: `Subscription Active (${subPlace}) + API Fallback`,
-      summary: `Your Grok subscription on ${subPlace} handles live jobs; xAI API Key answers Q&A automatically when offline.`,
+      label: `Subscription (${subPlaceLabel}) + API Fallback`,
+      summary: `Your Grok subscription on ${subPlaceProse} handles live jobs; xAI API Key answers Q&A automatically when offline.`,
       subActive: true,
       apiActive: true,
     };
@@ -134,8 +150,8 @@ export function describeActiveAgentEngine({
   if (subOnline) {
     return {
       mode: "subscription",
-      label: `Subscription Active (${subPlace})`,
-      summary: `Using your Grok subscription via the ${subPlace} CLI worker — zero per-token API charges.`,
+      label: `Subscription Active (${subPlaceLabel})`,
+      summary: `Using your Grok subscription via ${subPlaceProse} CLI worker — full coding tools & zero API charges.`,
       subActive: true,
       apiActive: false,
     };
@@ -143,7 +159,7 @@ export function describeActiveAgentEngine({
   if (xaiConfigured) {
     return {
       mode: "api",
-      label: "API Key Active (xAI Cloud Q&A)",
+      label: "API Key Active (xAI Cloud)",
       summary: "No subscription worker online right now — xAI API Key is handling Q&A replies from Cloudflare.",
       subActive: false,
       apiActive: true,
@@ -158,32 +174,75 @@ export function describeActiveAgentEngine({
   };
 }
 
-function StatusDot({ ok, optional }: { ok: boolean; optional?: boolean }) {
+function StatusPill({ ok, optional }: { ok: boolean; optional?: boolean }) {
   return (
     <span
-      className="h-2 w-2 rounded-full flex-shrink-0"
+      className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
       style={{
         backgroundColor: ok
+          ? "var(--mc-success-bg)"
+          : optional
+            ? "var(--mc-bg-tertiary)"
+            : "var(--mc-danger-bg)",
+        color: ok
           ? "var(--mc-success)"
           : optional
-            ? "var(--mc-warning, #FF9500)"
-            : "var(--mc-text-faint)",
+            ? "var(--mc-text-muted)"
+            : "var(--mc-red)",
       }}
-    />
+    >
+      <span
+        className="h-1.5 w-1.5 rounded-full"
+        style={{
+          backgroundColor: ok
+            ? "var(--mc-success)"
+            : optional
+              ? "var(--mc-text-faint)"
+              : "var(--mc-red)",
+        }}
+      />
+      {ok ? "Live" : optional ? "Optional" : "Setup"}
+    </span>
   );
 }
 
-function FlowArrowRight({ label }: { label: string }) {
+function FlowStepArrow({ label, bidirectional }: { label: string; bidirectional?: boolean }) {
   return (
-    <div className="flex flex-row sm:flex-col items-center justify-center gap-1 py-1 sm:py-0 px-0.5 flex-shrink-0">
-      <ArrowDown className="h-3.5 w-3.5 sm:hidden" style={{ color: "var(--mc-text-muted)" }} />
-      <ArrowRight className="h-3.5 w-3.5 hidden sm:block" style={{ color: "var(--mc-text-muted)" }} />
+    <div className="flex flex-row sm:flex-col items-center justify-center gap-1 py-1 sm:py-0 px-1 flex-shrink-0 sm:w-[92px]">
+      {bidirectional ? (
+        <ArrowLeftRight className="h-4 w-4 flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
+      ) : (
+        <>
+          <ArrowDown className="h-4 w-4 sm:hidden flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
+          <ArrowRight className="h-4 w-4 hidden sm:block flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
+        </>
+      )}
       <span
-        className="text-[9.5px] font-medium leading-tight text-center max-w-[74px]"
-        style={{ color: "var(--mc-text-faint)" }}
+        className="text-[10px] font-medium leading-tight text-center"
+        style={{ color: "var(--mc-text-muted)" }}
       >
         {label}
       </span>
+    </div>
+  );
+}
+
+function VerticalConnector({ label }: { label: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 px-1">
+      <div className="h-px flex-1" style={{ backgroundColor: "var(--mc-border-subtle)" }} />
+      <div
+        className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-medium max-w-full"
+        style={{
+          backgroundColor: "var(--mc-bg-elevated)",
+          border: "1px solid var(--mc-border-subtle)",
+          color: "var(--mc-text-secondary)",
+        }}
+      >
+        <ArrowDown className="h-3 w-3 flex-shrink-0" style={{ color: "var(--mc-accent)" }} />
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="h-px flex-1" style={{ backgroundColor: "var(--mc-border-subtle)" }} />
     </div>
   );
 }
@@ -228,7 +287,7 @@ export function StackFlowDiagram({
 
   return (
     <div
-      className="rounded-[12px] p-4 space-y-3.5"
+      className="rounded-[12px] p-4 space-y-3 overflow-hidden"
       style={{
         backgroundColor: "var(--mc-bg-tertiary)",
         border: "1px solid var(--mc-border-subtle)",
@@ -236,31 +295,23 @@ export function StackFlowDiagram({
     >
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <div className="text-[13.5px] font-semibold tracking-[-0.015em]" style={{ color: "var(--mc-text)" }}>
             Live Stack Map — How Everything Connects
           </div>
           <div className="text-[11.5px]" style={{ color: "var(--mc-text-muted)" }}>
-            Click any box to configure it. Arrows show how mail &amp; AI agents flow end-to-end.
+            Click any card to configure it. Arrows show how mail &amp; AI agents flow end-to-end.
           </div>
-        </div>
-        <div className="flex items-center gap-2.5 text-[10.5px]" style={{ color: "var(--mc-text-muted)" }}>
-          <span className="inline-flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--mc-success)" }} /> Live
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "var(--mc-accent)" }} /> Active Agent
-          </span>
         </div>
       </div>
 
-      {/* ROW 1: CORE MAIL FLOW */}
+      {/* ROW 1: Domain & DNS  ──DKIM · SPF · MX──▶  Resend */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
         {/* Node 1: Domain + Cloudflare */}
         <button
           type="button"
           onClick={() => onSelectPanel(cf?.ok ? "domain" : "cloudflare")}
-          className="flex-1 min-w-0 text-left rounded-[10px] p-2.5 transition-all"
+          className="flex-1 min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all"
           style={{
             backgroundColor: "var(--mc-bg-elevated)",
             border: `1px solid ${dnsOk ? "rgba(52, 199, 89, 0.35)" : "var(--mc-border-subtle)"}`,
@@ -274,29 +325,29 @@ export function StackFlowDiagram({
               : "var(--mc-border-subtle)";
           }}
         >
-          <div className="flex items-center justify-between gap-1.5">
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 min-w-0 text-[12.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
               <Cloud className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#FF9500" }} />
-              <span className="truncate">Domain &amp; DNS</span>
+              <span className="truncate">1. Domain &amp; DNS</span>
             </span>
-            <StatusDot ok={dnsOk} />
+            <StatusPill ok={dnsOk} />
           </div>
-          <div className="text-[10.5px] mt-1 leading-snug" style={{ color: "var(--mc-text-muted)" }}>
+          <div className="text-[11px] mt-1.5 leading-snug" style={{ color: "var(--mc-text-secondary)" }}>
             {cf?.ok ? "Cloudflare Auto-DNS" : "Manual / Cloudflare"} ·{" "}
             {domainCount > 0 ? `${domainCount} domain${domainCount === 1 ? "" : "s"}` : "No domain yet"}
           </div>
-          <div className="text-[10px] mt-1 font-medium" style={{ color: "var(--mc-text-faint)" }}>
-            Proves legit DKIM &amp; SPF
+          <div className="text-[10.5px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+            Verifies your domain with legit DKIM, SPF &amp; MX records.
           </div>
         </button>
 
-        <FlowArrowRight label="DKIM · SPF · MX" />
+        <FlowStepArrow label="DKIM · SPF · MX" />
 
         {/* Node 2: Resend */}
         <button
           type="button"
           onClick={() => onSelectPanel("mail")}
-          className="flex-1 min-w-0 text-left rounded-[10px] p-2.5 transition-all"
+          className="flex-1 min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all"
           style={{
             backgroundColor: "var(--mc-bg-elevated)",
             border: `1px solid ${resendOk ? "rgba(52, 199, 89, 0.35)" : "var(--mc-border-subtle)"}`,
@@ -310,28 +361,31 @@ export function StackFlowDiagram({
               : "var(--mc-border-subtle)";
           }}
         >
-          <div className="flex items-center justify-between gap-1.5">
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 min-w-0 text-[12.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
               <Mail className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#007AFF" }} />
-              <span className="truncate">Resend</span>
+              <span className="truncate">2. Resend Mail Engine</span>
             </span>
-            <StatusDot ok={resendOk} />
+            <StatusPill ok={resendOk} />
           </div>
-          <div className="text-[10.5px] mt-1 leading-snug" style={{ color: "var(--mc-text-muted)" }}>
-            {resend?.ok ? "Sending live" : "Key needed"} · {inbound?.ok ? "Webhook live" : "No webhook"}
+          <div className="text-[11px] mt-1.5 leading-snug" style={{ color: "var(--mc-text-secondary)" }}>
+            {resend?.ok ? "Sending live" : "Key needed"} · {inbound?.ok ? "Inbound webhook live" : "Webhook needed"}
           </div>
-          <div className="text-[10px] mt-1 font-medium" style={{ color: "var(--mc-text-faint)" }}>
-            Delivers &amp; receives mail
+          <div className="text-[10.5px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+            Delivers outgoing mail &amp; pushes incoming mail to this app.
           </div>
         </button>
+      </div>
 
-        <FlowArrowRight label="Send + Webhook" />
+      <VerticalConnector label="Send API & Inbound Webhook (/api/email/inbound)" />
 
+      {/* ROW 2: Your Mail App  ◀──Stores mail & keys──▶  Supabase */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
         {/* Node 3: Mail App (CF Pages) */}
         <button
           type="button"
           onClick={() => onSelectPanel("signin")}
-          className="flex-1 min-w-0 text-left rounded-[10px] p-2.5 transition-all"
+          className="flex-1 min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all"
           style={{
             backgroundColor: "var(--mc-bg-elevated)",
             border: "1px solid rgba(52, 199, 89, 0.35)",
@@ -343,36 +397,28 @@ export function StackFlowDiagram({
             e.currentTarget.style.borderColor = "rgba(52, 199, 89, 0.35)";
           }}
         >
-          <div className="flex items-center justify-between gap-1.5">
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 min-w-0 text-[12.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
               <Globe className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#32ADE6" }} />
-              <span className="truncate">Your Mail App</span>
+              <span className="truncate">3. Your Mail App</span>
             </span>
-            <StatusDot ok />
+            <StatusPill ok />
           </div>
-          <div className="text-[10.5px] mt-1 leading-snug" style={{ color: "var(--mc-text-muted)" }}>
-            Cloudflare Pages + API
+          <div className="text-[11px] mt-1.5 leading-snug" style={{ color: "var(--mc-text-secondary)" }}>
+            Cloudflare Pages + Serverless Functions
           </div>
-          <div className="text-[10px] mt-1 font-medium" style={{ color: "var(--mc-text-faint)" }}>
-            Inbox UI, rules &amp; routing
+          <div className="text-[10.5px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+            Your inbox UI, spam filter, rules, push alerts &amp; routing.
           </div>
         </button>
 
-        <div className="flex flex-row sm:flex-col items-center justify-center gap-1 py-1 sm:py-0 px-0.5 flex-shrink-0">
-          <ArrowLeftRight className="h-3.5 w-3.5" style={{ color: "var(--mc-text-muted)" }} />
-          <span
-            className="text-[9.5px] font-medium leading-tight text-center max-w-[68px]"
-            style={{ color: "var(--mc-text-faint)" }}
-          >
-            Stores mail
-          </span>
-        </div>
+        <FlowStepArrow label="Stores mail & keys" bidirectional />
 
         {/* Node 4: Supabase */}
         <button
           type="button"
           onClick={() => onSelectPanel("database")}
-          className="flex-1 min-w-0 text-left rounded-[10px] p-2.5 transition-all"
+          className="flex-1 min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all"
           style={{
             backgroundColor: "var(--mc-bg-elevated)",
             border: `1px solid ${dbOk ? "rgba(52, 199, 89, 0.35)" : "var(--mc-border-subtle)"}`,
@@ -386,89 +432,79 @@ export function StackFlowDiagram({
               : "var(--mc-border-subtle)";
           }}
         >
-          <div className="flex items-center justify-between gap-1.5">
-            <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="inline-flex items-center gap-1.5 min-w-0 text-[12.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
               <Database className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#34C759" }} />
-              <span className="truncate">Supabase</span>
+              <span className="truncate">4. Supabase Storage</span>
             </span>
-            <StatusDot ok={dbOk} />
+            <StatusPill ok={dbOk} />
           </div>
-          <div className="text-[10.5px] mt-1 leading-snug" style={{ color: "var(--mc-text-muted)" }}>
-            {dbOk ? "DB + tables ready" : "Run SQL bundle"}
+          <div className="text-[11px] mt-1.5 leading-snug" style={{ color: "var(--mc-text-secondary)" }}>
+            {dbOk ? "Database & tables ready" : "Run 1-click SQL bundle"}
           </div>
-          <div className="text-[10px] mt-1 font-medium" style={{ color: "var(--mc-text-faint)" }}>
-            Mail, keys &amp; allowlist
+          <div className="text-[10.5px] mt-0.5" style={{ color: "var(--mc-text-muted)" }}>
+            Stores emails, threads, attachments, keys &amp; agent allowlist.
           </div>
         </button>
       </div>
 
       {/* BRANCH CONNECTOR TO AI AGENT LAYER */}
-      <div className="flex items-center gap-2 px-1">
-        <div className="h-px flex-1" style={{ backgroundColor: "var(--mc-border-subtle)" }} />
-        <div
-          className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-medium"
-          style={{
-            backgroundColor: "var(--mc-bg-elevated)",
-            border: "1px solid var(--mc-border-subtle)",
-            color: "var(--mc-text-secondary)",
-          }}
-        >
-          <ArrowDown className="h-3 w-3" style={{ color: "var(--mc-accent)" }} />
-          <span>
-            Mail to <code className="font-mono text-[10px]">a.*@yourdomain</code> checks allowlist → routes to AI Agent → replies via Resend
-          </span>
-        </div>
-        <div className="h-px flex-1" style={{ backgroundColor: "var(--mc-border-subtle)" }} />
-      </div>
+      <VerticalConnector
+        label={
+          <>
+            Mail to <code className="font-mono text-[10px]">a.*@yourdomain</code> → allowlist → AI Agent → replies via Resend
+          </>
+        }
+      />
 
-      {/* ROW 2: AI AGENT ENGINE (SUBSCRIPTION vs API KEY) */}
+      {/* ROW 3: AI AGENT ENGINE (SUBSCRIPTION vs API KEY) */}
       <div
-        className="rounded-[10px] p-3 space-y-2.5"
+        className="rounded-[10px] p-3.5 space-y-2.5 overflow-hidden"
         style={{
           backgroundColor: "var(--mc-bg-elevated)",
           border: "1px solid var(--mc-border-subtle)",
         }}
       >
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className="h-6 w-6 rounded-[7px] flex items-center justify-center flex-shrink-0"
+                style={{
+                  backgroundColor:
+                    engine.mode === "none" ? "var(--mc-bg-tertiary)" : "var(--mc-accent-bg)",
+                  color: engine.mode === "none" ? "var(--mc-text-muted)" : "var(--mc-accent)",
+                }}
+              >
+                <Bot className="h-3.5 w-3.5" />
+              </span>
+              <span className="text-[12.5px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                5. AI Agent Connection
+              </span>
+            </div>
             <span
-              className="h-6 w-6 rounded-[7px] flex items-center justify-center flex-shrink-0"
+              className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex-shrink-0"
               style={{
                 backgroundColor:
-                  engine.mode === "none" ? "var(--mc-bg-tertiary)" : "var(--mc-accent-bg)",
-                color: engine.mode === "none" ? "var(--mc-text-muted)" : "var(--mc-accent)",
+                  engine.mode === "none"
+                    ? "var(--mc-bg-tertiary)"
+                    : engine.subActive
+                      ? "var(--mc-success-bg)"
+                      : "var(--mc-accent-bg)",
+                color:
+                  engine.mode === "none"
+                    ? "var(--mc-text-muted)"
+                    : engine.subActive
+                      ? "var(--mc-success)"
+                      : "var(--mc-accent)",
               }}
             >
-              <Bot className="h-3.5 w-3.5" />
+              {engine.label}
             </span>
-            <div className="min-w-0">
-              <div className="text-[12.5px] font-semibold truncate" style={{ color: "var(--mc-text)" }}>
-                AI Agent Connection
-              </div>
-              <div className="text-[11px] truncate" style={{ color: "var(--mc-text-muted)" }}>
-                {engine.summary}
-              </div>
-            </div>
           </div>
-          <span
-            className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex-shrink-0"
-            style={{
-              backgroundColor:
-                engine.mode === "none"
-                  ? "var(--mc-bg-tertiary)"
-                  : engine.subActive
-                    ? "var(--mc-success-bg)"
-                    : "var(--mc-accent-bg)",
-              color:
-                engine.mode === "none"
-                  ? "var(--mc-text-muted)"
-                  : engine.subActive
-                    ? "var(--mc-success)"
-                    : "var(--mc-accent)",
-            }}
-          >
-            {engine.label}
-          </span>
+          <div className="text-[11.5px] leading-snug" style={{ color: "var(--mc-text-muted)" }}>
+            {engine.summary}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -476,7 +512,7 @@ export function StackFlowDiagram({
           <button
             type="button"
             onClick={() => onSelectPanel("hands")}
-            className="text-left rounded-[10px] p-3 transition-all space-y-1.5"
+            className="min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all space-y-1.5"
             style={{
               backgroundColor: "var(--mc-bg-tertiary)",
               border: engine.subActive
@@ -490,34 +526,34 @@ export function StackFlowDiagram({
               if (!engine.subActive) e.currentTarget.style.borderColor = "var(--mc-border-subtle)";
             }}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
-                <CreditCard className="h-3.5 w-3.5" style={{ color: "#34C759" }} />
-                Subscription (Grok CLI)
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <span className="inline-flex items-center gap-1.5 min-w-0 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                <CreditCard className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#34C759" }} />
+                <span className="truncate">Subscription (Grok CLI)</span>
               </span>
               {engine.subActive ? (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: "var(--mc-success-bg)", color: "var(--mc-success)" }}
                 >
                   <CheckCircle2 className="h-3 w-3" /> Active
                 </span>
               ) : (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: "var(--mc-bg-elevated)", color: "var(--mc-text-muted)" }}
                 >
                   <CircleDashed className="h-3 w-3" /> {subOnline ? "Standby" : "Offline"}
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[11px]" style={{ color: "var(--mc-text-secondary)" }}>
+            <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--mc-text-secondary)" }}>
               {runtime?.box_online && !runtime?.online ? (
                 <Server className="h-3 w-3 flex-shrink-0" style={{ color: "#0EA5E9" }} />
               ) : (
                 <Laptop className="h-3 w-3 flex-shrink-0" style={{ color: "#34C759" }} />
               )}
-              <span>{lastSeenText}</span>
+              <span className="truncate">{lastSeenText}</span>
             </div>
             <div className="text-[10.5px] leading-snug" style={{ color: "var(--mc-text-muted)" }}>
               Uses your <strong>Grok subscription</strong> via local Mac or Docker CLI worker. Full repo edits, tools &amp; Kanban — no API key billing.
@@ -528,7 +564,7 @@ export function StackFlowDiagram({
           <button
             type="button"
             onClick={() => onSelectPanel("hands")}
-            className="text-left rounded-[10px] p-3 transition-all space-y-1.5"
+            className="min-w-0 overflow-hidden text-left rounded-[10px] p-3 transition-all space-y-1.5"
             style={{
               backgroundColor: "var(--mc-bg-tertiary)",
               border: engine.apiActive
@@ -542,28 +578,28 @@ export function StackFlowDiagram({
               if (!engine.apiActive) e.currentTarget.style.borderColor = "var(--mc-border-subtle)";
             }}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
-                <KeyRound className="h-3.5 w-3.5" style={{ color: "#007AFF" }} />
-                API Key (xAI Cloud)
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <span className="inline-flex items-center gap-1.5 min-w-0 text-[12px] font-semibold" style={{ color: "var(--mc-text)" }}>
+                <KeyRound className="h-3.5 w-3.5 flex-shrink-0" style={{ color: "#007AFF" }} />
+                <span className="truncate">API Key (xAI Cloud)</span>
               </span>
               {engine.apiActive ? (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: "var(--mc-accent-bg)", color: "var(--mc-accent)" }}
                 >
-                  <Sparkles className="h-3 w-3" /> {engine.mode === "hybrid" ? "Fallback Ready" : "Active"}
+                  <Sparkles className="h-3 w-3" /> {engine.mode === "hybrid" ? "Fallback" : "Active"}
                 </span>
               ) : (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
                   style={{ backgroundColor: "var(--mc-bg-elevated)", color: "var(--mc-text-muted)" }}
                 >
                   <CircleDashed className="h-3 w-3" /> {xaiConfigured ? "Standby" : "Not set"}
                 </span>
               )}
             </div>
-            <div className="text-[11px]" style={{ color: "var(--mc-text-secondary)" }}>
+            <div className="text-[11px] truncate" style={{ color: "var(--mc-text-secondary)" }}>
               {xaiConfigured
                 ? `xAI key connected (${xaiSource === "ui" ? "saved in UI" : "Cloudflare secret"})`
                 : "No XAI_API_KEY configured"}

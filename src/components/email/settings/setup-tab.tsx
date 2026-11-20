@@ -550,7 +550,7 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password
                   key={t.id}
                   type="button"
                   onClick={() => openTile(t.id)}
-                  className="group text-left rounded-[12px] p-3.5 min-w-0 transition-all"
+                  className="group text-left rounded-[12px] p-3.5 min-w-0 overflow-hidden transition-all"
                   style={{
                     backgroundColor: "var(--mc-bg-tertiary)",
                     border: `1px solid ${t.ok ? "rgba(52, 199, 89, 0.30)" : "var(--mc-border-subtle)"}`,
@@ -562,7 +562,7 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password
                     e.currentTarget.style.borderColor = t.ok ? "rgba(52, 199, 89, 0.30)" : "var(--mc-border-subtle)";
                   }}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 min-w-0">
                     <div className="flex items-center gap-2 min-w-0">
                       <span
                         className="h-6 w-6 rounded-[7px] flex items-center justify-center flex-shrink-0"
@@ -574,7 +574,7 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password
                         {meta?.label || t.id}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
+                    <div className="flex items-center flex-shrink-0">
                       {t.ok ? (
                         <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                       ) : (
@@ -588,10 +588,6 @@ NEXT_PUBLIC_OWNER_PASSWORD=choose-a-strong-password
                           {meta?.optional ? "Optional" : "Setup"}
                         </span>
                       )}
-                      <ChevronRight
-                        className="h-3.5 w-3.5 opacity-0 group-hover:opacity-75 transition-opacity"
-                        style={{ color: "var(--mc-text-muted)" }}
-                      />
                     </div>
                   </div>
                   <div className="text-[11.5px] mt-2 break-words leading-snug" style={{ color: "var(--mc-text-muted)" }}>
