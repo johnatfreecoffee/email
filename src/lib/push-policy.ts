@@ -31,11 +31,32 @@ export function pushInitAction(input: {
   supported: boolean;
   permission: Permission;
   hasSubscription: boolean;
-  keyMatches: boolean;
+  /**
+   * true/false when the browser exposed applicationServerKey.
+   * null = Safari hid the key. That is not a mismatch — dropping the
+   * subscription on every launch kills Mac push.
+   */
+  keyMatches: boolean | null;
   /** User turned push off in-app — never silently resubscribe. */
   optedOut: boolean;
 }): InitAction {
   if (!input.supported || input.permission !== "granted" || input.optedOut) return "none";
-  if (!input.hasSubscription || !input.keyMatches) return "resubscribe";
+  if (!input.hasSubscription || input.keyMatches === false) return "resubscribe";
   return "sync";
+}
+
+/**
+ * The open page raises its own macOS banner.
+ * A focused PWA swallows the service-worker banner, so foreground mail
+ * must notify from the page. In the background, web push already did.
+ */
+export function shouldRaisePageNotification(input: {
+  permission: Permission;
+  hidden: boolean;
+  pushOn: boolean;
+}): boolean {
+  if (input.permission !== "granted") return false;
+  if (!input.hidden) return true;
+  if (input.pushOn) return false;
+  return true;
 }

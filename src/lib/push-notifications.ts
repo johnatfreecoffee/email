@@ -49,6 +49,9 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
   }
 }
 
+/** Cached so turning notifications on doesn't wait on the network before subscribe. */
+let cachedServerKey = "";
+
 /** The key the SERVER actually signs with — source of truth. */
 async function fetchServerVapidKey(): Promise<string> {
   try {
@@ -56,11 +59,12 @@ async function fetchServerVapidKey(): Promise<string> {
     if (res.ok) {
       const data = await res.json();
       if (typeof data?.vapidPublicKey === "string" && data.vapidPublicKey) {
-        return data.vapidPublicKey;
+        cachedServerKey = data.vapidPublicKey;
+        return cachedServerKey;
       }
     }
   } catch {}
-  return VAPID_PUBLIC_KEY_FALLBACK;
+  return cachedServerKey || VAPID_PUBLIC_KEY_FALLBACK;
 }
 
 function keysEqual(a: ArrayBuffer | null | undefined, b: Uint8Array): boolean {
@@ -106,16 +110,21 @@ async function saveSubscription(subscription: PushSubscription): Promise<void> {
  * Create (or recreate) the push subscription. `prompt=false` never shows a
  * permission dialog — used for the silent re-subscribe when permission is
  * already granted.
+ *
+ * When prompting, ask BEFORE any other await. Safari and Chrome drop the
+ * Allow dialog if service-worker registration is awaited first.
  */
 export async function subscribeToPush(opts: { prompt?: boolean } = {}): Promise<PushSubscription | null> {
   const prompt = opts.prompt !== false;
   try {
-    const reg = await registerServiceWorker();
-    if (!reg) return null;
+    if (!isPushSupported()) return null;
 
     let permission = Notification.permission;
-    if (permission === "default" && prompt) permission = await Notification.requestPermission();
+    if (permission !== "granted" && prompt) permission = await Notification.requestPermission();
     if (permission !== "granted") return null;
+
+    const reg = await registerServiceWorker();
+    if (!reg) return null;
 
     const serverKey = await fetchServerVapidKey();
     if (!serverKey) return null;
@@ -124,7 +133,9 @@ export async function subscribeToPush(opts: { prompt?: boolean } = {}): Promise<
     // A subscription bound to an OLD key can't be reused — sends 403 forever
     // and re-subscribing with a new key throws. Drop it and start clean.
     const existing = await reg.pushManager.getSubscription();
-    if (existing && keysEqual(existing.options?.applicationServerKey, appServerKey)) {
+    const rawKey = existing?.options?.applicationServerKey;
+    // Missing key (Safari) is not a mismatch. Rotating it drops a live Mac subscription.
+    if (existing && (!rawKey || keysEqual(rawKey, appServerKey))) {
       await saveSubscription(existing);
       return existing;
     }
@@ -217,10 +228,14 @@ async function initPushState() {
   try {
     const reg = await registerServiceWorker();
     const existing = reg ? await reg.pushManager.getSubscription() : null;
-    let keyMatches = true;
+    let keyMatches: boolean | null = true;
     if (existing && permission === "granted") {
       const serverKey = await fetchServerVapidKey();
-      if (serverKey) keyMatches = keysEqual(existing.options?.applicationServerKey, urlBase64ToUint8Array(serverKey));
+      if (serverKey) {
+        const raw = existing.options?.applicationServerKey;
+        // Safari often leaves this null. Treat that as "keep the subscription".
+        keyMatches = raw ? keysEqual(raw, urlBase64ToUint8Array(serverKey)) : null;
+      }
     }
     const action = pushInitAction({
       supported,
@@ -249,25 +264,80 @@ async function initPushState() {
   }
 }
 
-/** Toggle push on/off with user feedback. All consumers stay in sync. */
+function showLocalBanner(title: string, body: string, tag: string) {
+  try {
+    const n = new Notification(title, { body, tag, icon: "/icon-192.png" });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch {
+    /* blocked */
+  }
+}
+
+/**
+ * Toggle push on/off.
+ * Turning on always calls requestPermission() in the click, before any
+ * other await, so the browser Allow dialog can appear. macOS only shows
+ * that dialog while permission is still "default". After Allow or Block,
+ * the system will not ask again.
+ */
 export async function togglePush(): Promise<void> {
   if (pushState.loading) return;
-  setPushState({ loading: true });
+
   if (pushState.enabled) {
+    setPushState({ loading: true });
     const ok = await unsubscribeFromPush();
     if (ok) {
       writeLocal(OPT_OUT_KEY, "1");
-      setPushState({ enabled: false, loading: false });
+      setPushState({ enabled: false, loading: false, permission: currentPermission() });
       toast("Notifications disabled");
     } else {
       setPushState({ loading: false });
       toast("Could not disable notifications");
     }
+    return;
+  }
+
+  if (!isPushSupported()) {
+    toast("Notifications are not supported in this browser");
+    return;
+  }
+
+  // First call in this turn. Anything awaited before this swallows the prompt.
+  const permissionPromise = Notification.requestPermission();
+  setPushState({ loading: true });
+
+  let permission: Permission;
+  try {
+    permission = (await permissionPromise) as Permission;
+  } catch {
+    permission = currentPermission();
+  }
+
+  if (permission !== "granted") {
+    setPushState({
+      enabled: false,
+      loading: false,
+      permission: permission === "denied" ? "denied" : currentPermission(),
+    });
+    toast(
+      permission === "denied"
+        ? "Notifications are blocked. System Settings → Notifications → Email → Allow."
+        : "Allow notifications in the prompt to turn them on."
+    );
+    return;
+  }
+
+  const sub = await subscribeToPush({ prompt: false });
+  if (sub) writeLocal(OPT_OUT_KEY, null);
+  setPushState({ enabled: !!sub, loading: false, permission: "granted" });
+  if (sub) {
+    toast("Notifications enabled");
+    showLocalBanner("Email", "Banners are on. New mail will pop up here.", "email-push-on");
   } else {
-    const sub = await subscribeToPush();
-    if (sub) writeLocal(OPT_OUT_KEY, null);
-    setPushState({ enabled: !!sub, loading: false, permission: currentPermission() });
-    toast(sub ? "Notifications enabled" : "Could not enable notifications — check browser permission");
+    toast("Could not enable notifications — check browser permission");
   }
 }
 

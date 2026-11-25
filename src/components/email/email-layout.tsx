@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { FolderList } from "./folder-list";
 import { usePush, isPushBannerDismissed, dismissPushBanner } from "@/lib/push-notifications";
-import { shouldShowPushBanner } from "@/lib/push-policy";
+import { shouldRaisePageNotification, shouldShowPushBanner } from "@/lib/push-policy";
 import { toast, Toaster } from "@/lib/toast";
 import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
@@ -171,21 +171,21 @@ function composeDraftToMessage(d: any): EmailMessage {
   } as EmailMessage;
 }
 
-/** In-app notice for mail a background check just found. */
+/** In-app notice plus a macOS banner for mail a background check just found. */
 function announceNewMail(inbound: EmailMessage[], pushOn: boolean) {
   const one = inbound.length === 1 ? inbound[0] : null;
   const from = one ? one.from_name || one.from_address : "";
   const title = one ? `New mail from ${from}` : `${inbound.length} new messages`;
   const hidden = typeof document !== "undefined" && document.hidden;
-  if (!hidden) {
-    toast(title, 5000);
-    return;
-  }
-  // Web push already raises an OS alert. Don't stack a second one.
-  if (pushOn) return;
-  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (!hidden) toast(title, 5000);
+
+  const permission =
+    typeof Notification === "undefined"
+      ? "denied"
+      : (Notification.permission as "default" | "granted" | "denied");
+  if (!shouldRaisePageNotification({ permission, hidden, pushOn })) return;
   try {
-    const n = new Notification(one ? from : title, {
+    const n = new Notification(one ? from || "Email" : title, {
       body: one ? one.subject || "New message" : "New mail arrived",
       tag: one ? `email-${one.id}` : "email-inbox",
       icon: "/icon-192.png",

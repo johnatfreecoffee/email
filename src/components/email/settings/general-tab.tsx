@@ -36,7 +36,13 @@ export function GeneralTab() {
       >
         <SettingsRow
           label="Push notifications"
-          description={push.supported ? undefined : "Not supported in this browser"}
+          description={
+            !push.supported
+              ? "Not supported in this browser"
+              : push.permission === "denied"
+                ? "Blocked. System Settings → Notifications → Email → Allow, then flip this on."
+                : "Flipping this on asks macOS to allow banners."
+          }
           control={
             <MCSwitch checked={push.enabled} onCheckedChange={() => push.toggle()} disabled={!push.supported || push.loading} />
           }

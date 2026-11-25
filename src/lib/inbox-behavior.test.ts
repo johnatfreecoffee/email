@@ -3,7 +3,7 @@ import test from "node:test";
 import { applyTransitions, emptyCounts, type CountMsg } from "./unread-buckets";
 import { MutationTracker } from "./mutation-tracker";
 import { LatestRequest, reanchorIndex, stepIndex } from "./list-nav";
-import { pushInitAction, shouldShowPushBanner } from "./push-policy";
+import { pushInitAction, shouldRaisePageNotification, shouldShowPushBanner } from "./push-policy";
 import { tallyUnreadCounts, type UnreadRow } from "../../functions/api/email/unread-counts";
 
 // ---------------- Unread counts: client optimistic == server tally ----------------
@@ -211,7 +211,17 @@ test("granted permission re-subscribes silently instead of re-prompting", () => 
   assert.equal(pushInitAction({ ...g, hasSubscription: false, keyMatches: true }), "resubscribe");
   assert.equal(pushInitAction({ ...g, hasSubscription: true, keyMatches: false }), "resubscribe");
   assert.equal(pushInitAction({ ...g, hasSubscription: true, keyMatches: true }), "sync");
+  assert.equal(pushInitAction({ ...g, hasSubscription: true, keyMatches: null }), "sync", "Safari hides the key");
   assert.equal(pushInitAction({ ...g, hasSubscription: false, keyMatches: true, optedOut: true }), "none");
   assert.equal(pushInitAction({ ...g, permission: "default", hasSubscription: false, keyMatches: true }), "none");
   assert.equal(pushInitAction({ ...g, permission: "denied", hasSubscription: false, keyMatches: true }), "none");
+});
+
+test("focused app raises a Mac banner; background push does not double it", () => {
+  const g = { permission: "granted" as const, hidden: false, pushOn: true };
+  assert.equal(shouldRaisePageNotification(g), true, "focused PWA swallows the push banner");
+  assert.equal(shouldRaisePageNotification({ ...g, hidden: true }), false, "service worker already showed it");
+  assert.equal(shouldRaisePageNotification({ ...g, hidden: true, pushOn: false }), true);
+  assert.equal(shouldRaisePageNotification({ ...g, permission: "default" }), false);
+  assert.equal(shouldRaisePageNotification({ ...g, permission: "denied" }), false);
 });

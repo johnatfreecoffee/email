@@ -28,28 +28,23 @@ self.addEventListener("push", (event) => {
   }
 
   const isEmail = data.type === "email";
-
+  const title = data.title || "Email";
+  const tag = isEmail ? `email-${data.messageId || Date.now()}` : `email-app-${Date.now()}`;
+  // macOS Safari rejects actions / vibrate / renotify / requireInteraction.
+  // A rejected showNotification drops the banner and can kill the subscription.
+  // requireInteraction also forces a sticky alert instead of a small banner.
   const options = {
-    body: data.body,
+    body: data.body || "",
     icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    vibrate: [200, 100, 200],
-    tag: isEmail ? `email-${data.messageId || Date.now()}` : `email-app-${Date.now()}`,
-    renotify: true,
-    requireInteraction: true,
-    data: data,
-    actions: isEmail
-      ? [
-          { action: "read", title: "Read" },
-          { action: "dismiss", title: "Dismiss" },
-        ]
-      : [
-          { action: "open", title: "Open" },
-          { action: "dismiss", title: "Dismiss" },
-        ],
+    tag,
+    data,
   };
 
-  event.waitUntil(self.registration.showNotification(data.title, options));
+  event.waitUntil(
+    self.registration.showNotification(title, options).catch(() =>
+      self.registration.showNotification(title, { body: options.body, tag })
+    )
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
