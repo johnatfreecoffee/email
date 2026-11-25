@@ -67,6 +67,22 @@ export interface JunkSettings {
 export interface PrivacySettings {
   blockRemoteContent: boolean;
 }
+/** How often the open app asks the server for new mail. 0 = only when you come back or hit refresh. */
+export const CHECK_INTERVALS = [
+  { value: 15, label: "Every 15 seconds" },
+  { value: 30, label: "Every 30 seconds" },
+  { value: 60, label: "Every minute" },
+  { value: 300, label: "Every 5 minutes" },
+  { value: 900, label: "Every 15 minutes" },
+  { value: 0, label: "Manually" },
+] as const;
+
+export type CheckIntervalSeconds = (typeof CHECK_INTERVALS)[number]["value"];
+
+export function normalizeCheckInterval(v: unknown, fallback: CheckIntervalSeconds = 30): CheckIntervalSeconds {
+  return CHECK_INTERVALS.some((o) => o.value === v) ? (v as CheckIntervalSeconds) : fallback;
+}
+
 export interface NotificationsSettings {
   /** Play an in-app alert tone when new mail arrives while the app is open. */
   soundOnNewEmail: boolean;
@@ -74,6 +90,8 @@ export interface NotificationsSettings {
   sound: NotificationSoundName;
   /** When false, catch-all mail does not trigger a push notification. */
   pushCatchAll: boolean;
+  /** Seconds between background checks while the app is open. 0 = manual. */
+  checkIntervalSeconds: CheckIntervalSeconds;
 }
 export interface SignaturesSettings {
   byAddressId: Record<string, { html: string; enabled: boolean }>;
@@ -105,7 +123,7 @@ export const SETTINGS_DEFAULTS: EmailSettings = {
   junk: { llmAssist: true, threshold: 0.7 },
   privacy: { blockRemoteContent: false },
   signatures: { byAddressId: {} },
-  notifications: { soundOnNewEmail: true, sound: "chime", pushCatchAll: true },
+  notifications: { soundOnNewEmail: true, sound: "chime", pushCatchAll: true, checkIntervalSeconds: 30 },
 };
 
 const SETTINGS_KEYS = Object.keys(SETTINGS_DEFAULTS) as Array<keyof EmailSettings>;
@@ -198,6 +216,7 @@ function normalize<K extends keyof EmailSettings>(key: K, raw: unknown): EmailSe
         soundOnNewEmail: bool(r.soundOnNewEmail, true),
         sound: isValidNotificationSound(r.sound) ? r.sound : "chime",
         pushCatchAll: bool(r.pushCatchAll, true),
+        checkIntervalSeconds: normalizeCheckInterval(r.checkIntervalSeconds),
       };
       return out as EmailSettings[K];
     }

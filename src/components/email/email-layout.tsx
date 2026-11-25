@@ -17,7 +17,7 @@ import {
 import { FolderList } from "./folder-list";
 import { usePush, isPushBannerDismissed, dismissPushBanner } from "@/lib/push-notifications";
 import { shouldShowPushBanner } from "@/lib/push-policy";
-import { Toaster } from "@/lib/toast";
+import { toast, Toaster } from "@/lib/toast";
 import { MessageList } from "./message-list";
 import { MessageReader } from "./message-reader";
 import { ComposeModal } from "./compose-modal";
@@ -169,6 +169,34 @@ function composeDraftToMessage(d: any): EmailMessage {
     received_at: d.updated_at,
     attachments: [],
   } as EmailMessage;
+}
+
+/** In-app notice for mail a background check just found. */
+function announceNewMail(inbound: EmailMessage[], pushOn: boolean) {
+  const one = inbound.length === 1 ? inbound[0] : null;
+  const from = one ? one.from_name || one.from_address : "";
+  const title = one ? `New mail from ${from}` : `${inbound.length} new messages`;
+  const hidden = typeof document !== "undefined" && document.hidden;
+  if (!hidden) {
+    toast(title, 5000);
+    return;
+  }
+  // Web push already raises an OS alert. Don't stack a second one.
+  if (pushOn) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try {
+    const n = new Notification(one ? from : title, {
+      body: one ? one.subject || "New message" : "New mail arrived",
+      tag: one ? `email-${one.id}` : "email-inbox",
+      icon: "/icon-192.png",
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  } catch {
+    /* notification blocked */
+  }
 }
 
 export function EmailLayout() {
@@ -472,15 +500,17 @@ export function EmailLayout() {
             ...pendingNewRef.current.map((m) => m.id),
           ]);
           const fresh = rows.filter((m) => !known.has(m.id));
-          // New-mail chime — only for genuinely new inbound, non-spam mail
-          // (never our own sent copies or junk). Fires whether the arrivals
-          // land in place or buffer behind the "N new" chip.
-          if (
-            fresh.length > 0 &&
-            notifSoundRef.current.soundOnNewEmail &&
-            fresh.some((m) => m.direction === "inbound" && !m.is_spam && m.folder !== AGENT_FOLDER)
-          ) {
-            playNotificationSound(notifSoundRef.current.sound);
+          // New-mail chime + in-app notice — only genuinely new inbound,
+          // non-spam mail (never our own sent copies or junk). Fires whether
+          // the arrivals land in place or buffer behind the "N new" chip.
+          const inbound = fresh.filter(
+            (m) => m.direction === "inbound" && !m.is_spam && m.folder !== AGENT_FOLDER
+          );
+          if (inbound.length > 0) {
+            if (notifSoundRef.current.soundOnNewEmail) {
+              playNotificationSound(notifSoundRef.current.sound);
+            }
+            announceNewMail(inbound, pushEnabledRef.current);
           }
           const byId = new Map(rows.map((m) => [m.id, m]));
           setMessages((prev) => {
@@ -618,6 +648,9 @@ export function EmailLayout() {
   // poll callback reads the latest setting without being torn down/rebuilt.
   const notifSoundRef = useRef(settings.notifications);
   useEffect(() => { notifSoundRef.current = settings.notifications; }, [settings.notifications]);
+  // Filled once usePush runs further down. Poll reads it so a background
+  // check doesn't also pop an OS alert when web push already will.
+  const pushEnabledRef = useRef(false);
 
   const mergeFullMessage = useCallback((id: string, data: EmailMessage) => {
     setMessages((prev) =>
@@ -1013,40 +1046,72 @@ export function EmailLayout() {
     if (domains.length > 0) fetchUnreadCounts();
   }, [domains.length, fetchUnreadCounts]);
 
-  // Poll for new messages every 30 seconds — skip if mobile reader is open
-  const isMobileReaderOpen = useRef(false);
+  // Background check while the app is open (including behind other windows).
+  // Coming back to the app checks immediately. Interval 0 = manual only.
+  const fetchUnreadRef = useRef(fetchUnreadCounts);
+  useEffect(() => { fetchUnreadRef.current = fetchUnreadCounts; }, [fetchUnreadCounts]);
+
+  const checkEverySeconds = settings.notifications.checkIntervalSeconds;
   useEffect(() => {
-    isMobileReaderOpen.current = mobileView === "reader";
-  }, [mobileView]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let soon: ReturnType<typeof setTimeout> | null = null;
+    let stopped = false;
+    let blurred = false;
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!document.hidden && !isMobileReaderOpen.current) {
-        loadPage("poll");
-      }
-    }, 30000);
-
-    // Refresh unread counts every 60 seconds (background reconciliation)
-    const unreadInterval = setInterval(() => {
-      if (!document.hidden && !isMobileReaderOpen.current) {
-        fetchUnreadCounts();
-      }
-    }, 60000);
-
-    const handleVisibility = () => {
-      if (!document.hidden && !isMobileReaderOpen.current) {
-        loadPage("poll");
-        fetchUnreadCounts();
-      }
+    const check = () => {
+      loadPageRef.current("poll");
+      fetchUnreadRef.current();
     };
-    document.addEventListener("visibilitychange", handleVisibility);
+
+    const arm = () => {
+      if (stopped || checkEverySeconds <= 0) return;
+      timer = setTimeout(() => {
+        check();
+        arm();
+      }, checkEverySeconds * 1000);
+    };
+
+    const soonCheck = () => {
+      if (soon) clearTimeout(soon);
+      soon = setTimeout(() => {
+        soon = null;
+        if (stopped) return;
+        check();
+        if (timer) clearTimeout(timer);
+        arm();
+      }, 200);
+    };
+
+    arm();
+
+    const onVis = () => {
+      if (!document.hidden) soonCheck();
+    };
+    const onBlur = () => { blurred = true; };
+    const onFocus = () => {
+      if (!blurred) return;
+      blurred = false;
+      soonCheck();
+    };
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) soonCheck();
+    };
+
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
 
     return () => {
-      clearInterval(interval);
-      clearInterval(unreadInterval);
-      document.removeEventListener("visibilitychange", handleVisibility);
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (soon) clearTimeout(soon);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
     };
-  }, [loadPage, fetchUnreadCounts]);
+  }, [checkEverySeconds]);
 
   const unreadCount = messages.filter((m) => !m.is_read).length;
 
@@ -1368,6 +1433,7 @@ export function EmailLayout() {
   // Push prompt banner — same shared store as the footer bell and Settings,
   // so enabling anywhere updates everywhere instantly.
   const push = usePush();
+  useEffect(() => { pushEnabledRef.current = push.enabled; }, [push.enabled]);
   const pwa = usePwaInstall();
   const [showInstallModal, setShowInstallModal] = useState(false);
   // Starts "dismissed" so nothing flashes before localStorage is read.

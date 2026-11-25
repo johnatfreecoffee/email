@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { usePush } from "@/lib/push-notifications";
 import { apiFetch } from "@/lib/auth";
-import { useSettings } from "@/lib/settings";
+import { CHECK_INTERVALS, normalizeCheckInterval, useSettings } from "@/lib/settings";
 import { NOTIFICATION_SOUNDS, playNotificationSound } from "@/lib/notification-sound";
 import { SettingsSection, SettingsRow, MCSwitch, SelectRow } from "./controls";
 
@@ -128,15 +128,22 @@ export function GeneralTab() {
         />
       </SettingsSection>
 
-      <SettingsSection title="Mailbox behavior">
+      <SettingsSection
+        title="Checking for mail"
+        footnote="Runs while the app is open, including in the background. Switching back to the app checks right away. Unread counts update on the same timer."
+      >
         <SettingsRow
-          label="Check for new messages"
-          control={<span className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>Every 30 seconds while open</span>}
-        />
-        <SettingsRow
-          label="Recount unread"
+          label="Check for new mail"
           last
-          control={<span className="text-[12px]" style={{ color: "var(--mc-text-muted)" }}>Every minute</span>}
+          control={
+            <SelectRow
+              options={CHECK_INTERVALS.map((o) => ({ value: String(o.value), label: o.label }))}
+              value={String(notif.checkIntervalSeconds)}
+              onChange={(next) =>
+                updateSetting("notifications", { checkIntervalSeconds: normalizeCheckInterval(Number(next)) })
+              }
+            />
+          }
         />
       </SettingsSection>
     </div>
