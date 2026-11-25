@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { apiFetch } from "@/lib/auth";
-import { usePush } from "@/lib/push-notifications";
+import { sendTestPush, usePush } from "@/lib/push-notifications";
 import type { SettingsTab } from "@/lib/settings";
 import type { EmailDomain } from "../email-layout";
 import { DomainSetupCard, type CloudflareZoneOption } from "../domain-setup";
@@ -338,13 +338,7 @@ export function SetupTab({
 
   async function handleTestPush() {
     setPushTestMsg(null);
-    try {
-      const res = await apiFetch("/api/email/push-test", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      setPushTestMsg(res.ok ? "Test notification sent!" : data.error || "Could not send test push");
-    } catch {
-      setPushTestMsg("Network error sending test push");
-    }
+    setPushTestMsg(await sendTestPush());
   }
 
   const generatedEnvText = useMemo(() => {

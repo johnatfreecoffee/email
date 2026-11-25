@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePush } from "@/lib/push-notifications";
-import { apiFetch } from "@/lib/auth";
+import { sendTestPush, usePush } from "@/lib/push-notifications";
 import { CHECK_INTERVALS, normalizeCheckInterval, useSettings } from "@/lib/settings";
 import { NOTIFICATION_SOUNDS, playNotificationSound } from "@/lib/notification-sound";
 import { SettingsSection, SettingsRow, MCSwitch, SelectRow } from "./controls";
@@ -18,13 +17,7 @@ export function GeneralTab() {
   const sendTest = async () => {
     setTesting(true);
     setTestResult(null);
-    try {
-      const res = await apiFetch("/api/email/push-test", { method: "POST" });
-      const data = await res.json();
-      setTestResult(data.success ? "Sent — check your notifications." : `Failed: ${data.error || "unknown error"}`);
-    } catch (e) {
-      setTestResult(`Error: ${(e as Error).message}`);
-    }
+    setTestResult(await sendTestPush());
     setTesting(false);
   };
 
@@ -41,7 +34,7 @@ export function GeneralTab() {
               ? "Not supported in this browser"
               : push.permission === "denied"
                 ? "Blocked. System Settings → Notifications → Email → Allow, then flip this on."
-                : "Flipping this on asks macOS to allow banners."
+                : "Send Test asks macOS to allow Email, then shows a banner."
           }
           control={
             <MCSwitch checked={push.enabled} onCheckedChange={() => push.toggle()} disabled={!push.supported || push.loading} />

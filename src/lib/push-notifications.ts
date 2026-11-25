@@ -264,24 +264,67 @@ async function initPushState() {
   }
 }
 
-function showLocalBanner(title: string, body: string, tag: string) {
+/**
+ * Show a banner in this click, before any await.
+ * On an installed Mac PWA, Chrome already has site permission, but macOS
+ * still has to allow the Email app. That system prompt only appears if a
+ * document notification is created during the click. A service-worker push
+ * does not ask, and macOS then drops the banner.
+ */
+export function showMacNotificationNow(title: string, body: string, tag: string): boolean {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return false;
   try {
     const n = new Notification(title, { body, tag, icon: "/icon-192.png" });
     n.onclick = () => {
       window.focus();
       n.close();
     };
+    return true;
   } catch {
-    /* blocked */
+    return false;
+  }
+}
+
+/** Send Test. Call straight from the click so the Mac prompt can appear. */
+export async function sendTestPush(): Promise<string> {
+  const now = typeof Notification === "undefined" ? "denied" : Notification.permission;
+  if (now === "granted") {
+    showMacNotificationNow("Email", "Test notification", `email-test-${Date.now()}`);
+  }
+  let permission = now as Permission;
+  if (permission === "default") {
+    try {
+      permission = (await Notification.requestPermission()) as Permission;
+    } catch {
+      permission = currentPermission();
+    }
+    if (permission === "granted") {
+      showMacNotificationNow("Email", "Test notification", `email-test-${Date.now()}`);
+    }
+  }
+  if (permission === "denied") {
+    return "Blocked. System Settings → Notifications → Email → Allow.";
+  }
+  if (permission !== "granted") {
+    return "Allow the prompt to turn notifications on.";
+  }
+  try {
+    const push = await apiFetch("/api/email/push-test", { method: "POST" });
+    const data = await push.json().catch(() => ({}));
+    if (!data.success) {
+      return "Asked this Mac to show a banner. No device is registered for background push yet.";
+    }
+    return "Asked this Mac to show a banner. Allow Email if macOS asks.";
+  } catch (e) {
+    return `Asked this Mac to show a banner. Background push failed: ${(e as Error).message}`;
   }
 }
 
 /**
  * Toggle push on/off.
- * Turning on always calls requestPermission() in the click, before any
- * other await, so the browser Allow dialog can appear. macOS only shows
- * that dialog while permission is still "default". After Allow or Block,
- * the system will not ask again.
+ * Turning on creates a notification in the click. That is what makes macOS
+ * show the Allow dialog for the installed Email app. Chrome's site
+ * permission is often already granted, so requestPermission() alone is silent.
  */
 export async function togglePush(): Promise<void> {
   if (pushState.loading) return;
@@ -305,8 +348,16 @@ export async function togglePush(): Promise<void> {
     return;
   }
 
-  // First call in this turn. Anything awaited before this swallows the prompt.
-  const permissionPromise = Notification.requestPermission();
+  // Site permission is often already granted, so requestPermission() shows
+  // nothing. Creating a notification in this same click is what makes macOS
+  // ask to allow the Email app.
+  const alreadyGranted = Notification.permission === "granted";
+  if (alreadyGranted) {
+    showMacNotificationNow("Email", "Allow Email if macOS asks. New mail will pop up here.", `email-push-on-${Date.now()}`);
+  }
+  const permissionPromise = alreadyGranted
+    ? Promise.resolve(Notification.permission)
+    : Notification.requestPermission();
   setPushState({ loading: true });
 
   let permission: Permission;
@@ -335,7 +386,9 @@ export async function togglePush(): Promise<void> {
   setPushState({ enabled: !!sub, loading: false, permission: "granted" });
   if (sub) {
     toast("Notifications enabled");
-    showLocalBanner("Email", "Banners are on. New mail will pop up here.", "email-push-on");
+    if (!alreadyGranted) {
+      showMacNotificationNow("Email", "Banners are on. New mail will pop up here.", `email-push-on-${Date.now()}`);
+    }
   } else {
     toast("Could not enable notifications — check browser permission");
   }
